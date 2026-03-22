@@ -43,6 +43,10 @@ A structured registration platform for de.NBI and ELIXIR-DE bioinformatics servi
 
     Each submission gets a scoped key for future programmatic updates — read or read+write scope.
 
+- :material-image: **Service logo upload**
+
+    Attach a PNG, JPEG, or SVG logo to any service registration — via the web form, the edit form, or the REST API. Images are automatically sanitised (EXIF stripped, SVG scripts removed) before storage.
+
 </div>
 
 ---

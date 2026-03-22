@@ -159,3 +159,14 @@ owl_url = "https://edamontology.org/EDAM_stable.owl"
 #
 # Example: setting url_prefix = "backstage" means the admin lives at /backstage/
 url_prefix = "admin-denbi"
+
+
+# -----------------------------------------------------------------------------
+# [uploads] — File upload limits and policies
+# -----------------------------------------------------------------------------
+[uploads]
+
+# Maximum allowed size in bytes for service logo uploads.
+# Default: 10 MB. Set lower to tighten limits, higher to allow larger files.
+# After changing, restart the web container: docker compose restart web
+logo_max_bytes = 10_485_760

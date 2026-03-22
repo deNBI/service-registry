@@ -11,6 +11,8 @@ ruff==0.9.1                   # Linter + formatter
 mypy==1.14.1
 django-stubs==5.1.1
 pip-audit==2.9.0              # Dependency vulnerability scanner
+vulture==2.14                 # Dead code detection
+bandit==1.8.3                 # Security linting (SAST)
 
 # Documentation
 mkdocs==1.6.1

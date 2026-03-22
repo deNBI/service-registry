@@ -147,6 +147,33 @@ Domain-specific URL fields enforce a prefix match in addition to the HTTPS requi
 and databases. If your service or the data formats it uses are listed in FAIRsharing,
 linking here helps with discoverability and FAIR compliance metadata.
 
+### Logo Upload (Section B)
+
+You can optionally upload a logo for your service. This field is not required.
+
+| Property | Value |
+|---|---|
+| Accepted formats | PNG, JPEG, SVG |
+| Maximum size | 10 MB |
+| Required | No |
+
+**How to upload:**
+
+1. In Section B, click the logo upload field
+2. Select a PNG, JPEG, or SVG file from your computer
+3. The logo is validated automatically on form submission
+
+**What happens to uploaded logos:**
+
+- JPEG and PNG files are re-encoded to strip any embedded EXIF metadata
+- SVG files are sanitised to remove scripts, event handlers, and external links
+- The original filename is discarded — a unique identifier is assigned internally
+- The logo appears in the admin view and is accessible via the API (`logo_url` field)
+
+To replace a logo, simply upload a new one when editing your submission. Previous logos are retained on disk but replaced for display purposes.
+
+---
+
 ### Outreach and Survey fields (Section F)
 
 | Field                    | What it means                                                                                                                                                 |

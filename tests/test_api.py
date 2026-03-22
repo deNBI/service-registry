@@ -878,3 +878,106 @@ class TestBioToolsRecordAccessControl:
         resp = staff_client.get("/api/v1/biotools/")
         assert resp.status_code == 200
         assert len(resp.json()["results"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Logo upload tests
+# ---------------------------------------------------------------------------
+
+
+def _make_png_bytes():
+    """Minimal 1×1 white PNG for use as a test logo."""
+    from PIL import Image
+    import io
+
+    buf = io.BytesIO()
+    Image.new("RGB", (1, 1), color=(255, 255, 255)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@pytest.mark.django_db
+class TestLogoUpload:
+    def test_logo_url_is_null_when_no_logo(self, api_client):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.get(f"/api/v1/submissions/{sub.id}/")
+        assert resp.status_code == 200
+        assert resp.json()["logo_url"] is None
+
+    def test_logo_url_is_absolute_when_logo_set(self, api_client, tmp_path, settings):
+        settings.MEDIA_ROOT = tmp_path
+        sub = ServiceSubmissionFactory(biotools_url="")
+        # Manually set a fake logo path
+        from django.core.files.base import ContentFile
+
+        sub.logo.save("logos/test.png", ContentFile(_make_png_bytes()), save=True)
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.get(f"/api/v1/submissions/{sub.id}/")
+        assert resp.status_code == 200
+        logo_url = resp.json()["logo_url"]
+        assert logo_url is not None
+        assert logo_url.startswith("http")
+        assert "/media/" in logo_url
+
+    def test_upload_valid_png_via_api(self, api_client, tmp_path, settings):
+        settings.MEDIA_ROOT = tmp_path
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        logo = SimpleUploadedFile(
+            "logo.png", _make_png_bytes(), content_type="image/png"
+        )
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.id}/",
+            {"logo": logo},
+            format="multipart",
+        )
+        assert resp.status_code == 200
+        assert resp.json()["logo_url"] is not None
+
+    def test_upload_invalid_file_returns_400(self, api_client):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        bad_file = SimpleUploadedFile(
+            "logo.png", b"not an image", content_type="image/png"
+        )
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.id}/",
+            {"logo": bad_file},
+            format="multipart",
+        )
+        assert resp.status_code == 400
+
+    def test_upload_oversized_file_returns_400(self, api_client, settings):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        settings.LOGO_MAX_BYTES = 5  # Tiny limit for this test
+        sub = ServiceSubmissionFactory(biotools_url="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        big_file = SimpleUploadedFile(
+            "logo.png", _make_png_bytes(), content_type="image/png"
+        )
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.id}/",
+            {"logo": big_file},
+            format="multipart",
+        )
+        assert resp.status_code == 400
+
+    def test_logo_field_not_in_read_response(self, api_client):
+        """The write-only 'logo' field must not appear in API responses."""
+        sub = ServiceSubmissionFactory(biotools_url="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.get(f"/api/v1/submissions/{sub.id}/")
+        # 'logo' is write_only; 'logo_url' is the read field
+        assert "logo" not in resp.json() or resp.json().get("logo") is None
+        assert "logo_url" in resp.json()

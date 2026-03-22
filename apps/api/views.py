@@ -20,6 +20,7 @@ import logging
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from rest_framework import filters, mixins, status, viewsets
 from rest_framework.authentication import TokenAuthentication
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
@@ -85,6 +86,9 @@ class SubmissionViewSet(
     Authorization: ApiKey <your-key>
     ```
     """
+
+    # Accept JSON (default) and multipart/form-data (for logo file uploads)
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     queryset = (
         ServiceSubmission.objects.select_related("service_center", "biotoolsrecord")

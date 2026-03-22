@@ -153,7 +153,19 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         "status",
         "status_actions",
         "key_management_panel",
+        "logo_preview",
     )
+
+    @admin.display(description="Logo preview")
+    def logo_preview(self, obj):
+        if obj.logo:
+            return format_html(
+                '<img src="{}" style="max-height:120px;max-width:300px;'
+                "border:1px solid var(--border-color);"
+                'border-radius:4px;padding:4px;" alt="Service logo">',
+                obj.logo.url,
+            )
+        return "—"
 
     fieldsets = (
         (
@@ -192,6 +204,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     "user_knowledge_required",
                     ("edam_topics", "edam_operations"),
                     "publications_pmids",
+                    ("logo", "logo_preview"),
                 ),
             },
         ),

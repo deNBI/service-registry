@@ -114,6 +114,19 @@ class SubmissionForm(forms.ModelForm):
       - Email confirmation validated on blur
     """
 
+    # Logo upload field (optional)
+    logo = forms.FileField(
+        label=_("Service logo"),
+        required=False,
+        help_text=_("Optional. PNG, JPEG, or SVG. Maximum 10 MB."),
+        widget=forms.FileInput(
+            attrs={
+                "class": "form-control",
+                "accept": ".png,.jpg,.jpeg,.svg,image/png,image/jpeg,image/svg+xml",
+            }
+        ),
+    )
+
     # Email confirmation field (not stored — form-only)
     internal_contact_email_confirm = forms.EmailField(
         label=_("Confirm internal contact email"),
@@ -406,6 +419,14 @@ class SubmissionForm(forms.ModelForm):
         if value and not value.startswith("https://"):
             raise ValidationError(_("URL must use https://."))
         return value
+
+    def clean_logo(self):
+        f = self.cleaned_data.get("logo")
+        if not f:
+            return f  # Optional — None/empty is valid
+        from .logo_utils import validate_and_process_logo
+
+        return validate_and_process_logo(f)
 
     def clean_data_protection_consent(self) -> bool:
         value = self.cleaned_data.get("data_protection_consent")

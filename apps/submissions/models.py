@@ -33,6 +33,16 @@ from apps.registry.models import PrincipalInvestigator, ServiceCategory, Service
 # ---------------------------------------------------------------------------
 
 
+def _logo_upload_to(instance, filename: str) -> str:
+    """
+    Generate a UUID-based storage path for logo uploads.
+    The original filename is discarded — only the extension is reused after
+    logo_utils.py has already validated and normalised it.
+    """
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
+    return f"logos/{uuid.uuid4()}.{ext}"
+
+
 def _sanitise_text(value: str) -> str:
     """
     Sanitise free-text input:
@@ -382,6 +392,17 @@ class ServiceSubmission(models.Model):
     comments = models.TextField(
         blank=True,
         help_text="Any additional comments for the de.NBI administration office.",
+    )
+
+    # -- Logo --
+    logo = models.FileField(
+        upload_to=_logo_upload_to,
+        null=True,
+        blank=True,
+        help_text=(
+            "Optional service logo (PNG, JPEG, or SVG). "
+            "Max 10 MB. Old logo files are retained on disk when replaced."
+        ),
     )
 
     # -- Section G: Consent --

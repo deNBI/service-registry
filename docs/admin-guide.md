@@ -27,6 +27,7 @@ The list shows: service name, submitter, status badge, service centre, ELIXIR-DE
 The detail view shows all form sections A–G plus:
 - Submission metadata (ID, timestamps, IP — IP visible only to superusers)
 - EDAM Topics and EDAM Operations annotations selected by the submitter
+- **Logo** — inline preview and upload field (see [Service Logos](#service-logos))
 - **bio.tools Record** section (if a bio.tools URL was entered) — see [bio.tools Records](#biotools-records)
 - API key management section at the bottom
 
@@ -100,6 +101,46 @@ Both interfaces support soft-delete: `DELETE` via the API (or setting `is_active
 
 - Add new category types as needed.
 - `is_active = False` hides from the form.
+
+---
+
+## Service Logos
+
+Submitters can optionally upload a logo for their service during registration or when editing their submission. Logos are also uploadable directly from the admin detail view.
+
+### Accepted formats and limits
+
+| Property | Value |
+|---|---|
+| Formats | PNG, JPEG, SVG |
+| Maximum size | 10 MB (configurable — see [`[uploads]` in configuration](configuration.md#uploads)) |
+| Storage | `mediafiles/logos/<uuid>.<ext>` inside the container |
+| Served at | `/media/logos/<uuid>.<ext>` — via Gunicorn (nginx proxy_passes everything) |
+
+### Security processing
+
+Every upload goes through automatic validation before being stored:
+
+- **Magic bytes** — the file type is detected from its binary header, not its extension or MIME type
+- **JPEG / PNG** — re-encoded via Pillow to strip EXIF metadata and verify file integrity
+- **SVG** — parsed with Python's stdlib XML parser (safe on Python 3.12+/Expat 2.7.1, which blocks XXE and entity-expansion attacks), then scrubbed of `<script>` elements, `on*` event-handler attributes, and non-fragment external `href` values
+- **Filename** — original filename is discarded; a UUID is assigned before storage
+
+### Admin usage
+
+Open a submission's detail view. The **B — Service Master Data** section shows:
+
+- **Logo** — file upload widget to add or replace the current logo
+- **Logo preview** — inline image display of the currently stored logo (or "—" if none)
+
+!!! note "Old logos are retained"
+    When a submitter or admin uploads a replacement logo, the previous file remains on disk. No automatic cleanup is performed. If disk space becomes a concern, orphaned logo files can be removed manually or via a future management command.
+
+!!! info "Production persistence"
+    Logo files are stored in the `media_data` Docker volume (mounted at `/app/mediafiles`).
+    Without a persistent volume or bind mount, logos are lost when the container is replaced.
+    See [Deployment → Uploaded Media](deployment.md#uploaded-media-service-logos) for volume
+    configuration, bind-mount instructions, and backup procedures.
 
 ---
 

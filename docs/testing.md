@@ -43,6 +43,7 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `PASSWORD_HASHERS` | MD5 | Fast hashing in tests |
 | `RATELIMIT_ENABLE` | `False` | No throttle blocking mid-suite |
 | `DEFAULT_THROTTLE_CLASSES` | `[]` | No DRF throttling |
+| `MEDIA_ROOT` | `tempfile.mkdtemp()` | File uploads go to a temp dir — never accumulate in the project tree |
 
 ---
 
@@ -51,13 +52,17 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | File | What it covers |
 |---|---|
 | `test_models.py` | `ServiceSubmission`, `SubmissionAPIKey` validation, sanitisation, sensitive fields |
-| `test_views.py` | Registration form, update flow, session handling, health endpoints |
-| `test_forms.py` | `SubmissionForm` required fields, cross-field rules, URL validation |
-| `test_api.py` | All REST endpoints — auth, permissions, response shape, error envelopes |
+| `test_views.py` | Registration form, update flow, session handling, logo upload via views, health endpoints |
+| `test_forms.py` | `SubmissionForm` required fields, cross-field rules, URL validation, logo `clean_logo()` |
+| `test_api.py` | All REST endpoints — auth, permissions, response shape, error envelopes, logo upload via API |
 | `test_security.py` | API key auth, logging scrubber, CSRF, request ID middleware |
 | `test_tasks.py` | Celery email notification and cleanup tasks |
 | `test_biotools.py` | bio.tools client (HTTP mocks), sync logic, tasks, signals, views |
 | `test_management_commands.py` | `sync_edam`, `sync_biotools` management commands, template tags, context processor |
+| `test_logo_utils.py` | `validate_and_process_logo()` — magic bytes, size limits, EXIF stripping, SVG sanitisation, XML attack prevention (XXE/billion-laughs), path traversal |
+| `test_template_tags.py` | `linkify_description` filter — named links, bare URLs, paragraph/line breaks, XSS escaping |
+
+Total: **387 tests** (enforced ≥ 80% coverage threshold).
 
 ---
 
@@ -184,7 +189,8 @@ Current coverage by module (approximate):
 | `biotools/` | ~90% |
 | `submissions/models.py` | ~95% |
 | `submissions/forms.py` | ~88% |
-| `submissions/views.py` | ~72% |
+| `submissions/logo_utils.py` | ~91% |
+| `submissions/views.py` | ~83% |
 | `submissions/admin.py` | ~39% (admin UI is hard to test) |
 | `edam/management/commands/sync_edam.py` | ~91% |
 

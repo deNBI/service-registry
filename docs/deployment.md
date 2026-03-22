@@ -81,6 +81,7 @@ make superuser
 | PostgreSQL | External managed instance — not a Docker container |
 | Nginx + TLS | Host-managed — terminates HTTPS, proxies to Gunicorn on port 8000 |
 | `config/site.toml` | Bind-mounted from `/data/denbi-service-registry/config/site.toml` — rebranding requires no image rebuild |
+| `mediafiles/` (uploaded logos) | Named Docker volume `media_data` mounted at `/app/mediafiles` — must persist across container restarts and image upgrades |
 
 ### Step 1 — Configure environment
 
@@ -282,11 +283,55 @@ docker compose logs web --tail 50
 
 ---
 
-## Logo
+## Uploaded Media (Service Logos)
 
-To display your organisation logo in the navbar:
+Submitters can upload a logo image (PNG, JPEG, or SVG) with each service registration.
+Uploaded files are stored under `mediafiles/logos/<uuid>.<ext>` inside the container and
+served by Gunicorn via Django's `django.views.static.serve` — the host Nginx simply
+proxies all requests through, so no special Nginx `location /media/` block is needed.
 
-1. Place your logo file at `static/img/logo.png` (or `.svg`, `.jpg`)
+### Persistent storage in production
+
+Uploaded logos are stored in a named Docker volume (`media_data`) that is mounted at
+`/app/mediafiles` in both the `web`, `worker`, and `beat` containers. The volume is
+declared in `docker-compose.prod.yml`:
+
+```yaml
+volumes:
+  media_data:
+```
+
+This keeps logos alive across container restarts and image upgrades. **Without a
+persistent volume or bind mount, logos are lost whenever the container is replaced.**
+
+### Binding to a host path (Ansible)
+
+To store logos on the host filesystem (recommended for backups), replace the named
+volume with a bind mount in your Ansible Compose template:
+
+```yaml
+# web / worker / beat service
+volumes:
+  - /data/denbi-service-registry/media:/app/mediafiles
+
+# Remove the named volume declaration entirely when using a bind mount
+```
+
+### Verifying media serving
+
+```bash
+# Check a logo URL returned by the API
+curl -I https://service-registry.bi.denbi.de/media/logos/<uuid>.png
+# → HTTP/1.1 200 OK  (or 404 if the file doesn't exist)
+```
+
+---
+
+## Navbar Logo (Branding)
+
+To display your organisation's logo in the site navbar:
+
+1. Place your organisation logo file at `static/img/logo.png` (or `.svg`, `.jpg`)
 2. Rebuild static files: `make collectstatic`
 
 Or set `LOGO_URL` in `.env` to point to any image URL:
@@ -316,6 +361,25 @@ docker compose exec db pg_dump -U denbi denbi_registry > backup_$(date +%Y%m%d).
 docker compose exec -T db psql -U denbi denbi_registry < backup_20260306.sql
 ```
 
+### Media files (uploaded logos)
+
+If using a bind mount (`/data/denbi-service-registry/media`), include the directory in
+your standard host backup. If using a named Docker volume, export it before an upgrade:
+
+```bash
+# Export named volume to a tar archive
+docker run --rm \
+  -v denbi_service_registry_media_data:/data \
+  -v $(pwd):/backup \
+  alpine tar czf /backup/media_backup_$(date +%Y%m%d).tar.gz -C /data .
+
+# Restore
+docker run --rm \
+  -v denbi_service_registry_media_data:/data \
+  -v $(pwd):/backup \
+  alpine tar xzf /backup/media_backup_20260322.tar.gz -C /data
+```
+
 ### Redis
 
 Redis holds only transient Celery queue data and does not need persistent backup.
@@ -335,6 +399,7 @@ Redis holds only transient Celery queue data and does not need persistent backup
 - [ ] `pip-audit` passes: `make audit`
 - [ ] Health checks passing: `curl https://service-registry.bi.denbi.de/health/ready/`
 - [ ] Test email notification by submitting a test form
+- [ ] `media_data` volume or bind mount confirmed persistent (upload a logo and redeploy — verify it survives)
 
 ---
 

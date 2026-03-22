@@ -37,7 +37,8 @@ services:
     environment:
     ports:
       - "0.0.0.0:8000:8000"
-    volumes: []    # No bind-mount — static files are baked into the image
+    volumes:
+      - media_data:/app/mediafiles  # Persist uploaded logos across deployments
     restart: always
 
   worker:
@@ -67,3 +68,5 @@ services:
 
 volumes:
   celery_beat:
+  media_data:       # Uploaded logos — bind-mount to a host path via your Ansible template
+                    # e.g. /data/denbi-service-registry/media:/app/mediafiles
