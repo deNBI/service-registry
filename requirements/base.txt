@@ -29,7 +29,7 @@ django-cors-headers==4.9.0    # CORS header management
 bleach==6.3.0
 
 # File upload processing
-Pillow==11.1.0        # JPEG/PNG re-encoding and EXIF stripping
+Pillow==12.1.1        # JPEG/PNG re-encoding and EXIF stripping
 
 # Utilities
 python-json-logger==4.0.0     # Structured JSON logging
