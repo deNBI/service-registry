@@ -52,9 +52,10 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | File | What it covers |
 |---|---|
 | `test_models.py` | `ServiceSubmission`, `SubmissionAPIKey` validation, sanitisation, sensitive fields |
-| `test_views.py` | Registration form, update flow, session handling, logo upload via views, health endpoints |
+| `test_views.py` | Registration form, update flow, session handling, logo upload via views, deprecation via edit form, health endpoints |
 | `test_forms.py` | `SubmissionForm` required fields, cross-field rules, URL validation, logo `clean_logo()` |
-| `test_api.py` | All REST endpoints — auth, permissions, response shape, error envelopes, logo upload via API |
+| `test_api.py` | All REST endpoints — auth, permissions, response shape, error envelopes, logo upload, `?status=deprecated` filter |
+| `test_admin.py` | Admin bulk actions (deprecate/undeprecate), change-view buttons, CSV/JSON export completeness |
 | `test_security.py` | API key auth, logging scrubber, CSRF, request ID middleware |
 | `test_tasks.py` | Celery email notification and cleanup tasks |
 | `test_biotools.py` | bio.tools client (HTTP mocks), sync logic, tasks, signals, views |
@@ -62,7 +63,7 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_logo_utils.py` | `validate_and_process_logo()` — magic bytes, size limits, EXIF stripping, SVG sanitisation, XML attack prevention (XXE/billion-laughs), path traversal |
 | `test_template_tags.py` | `linkify_description` filter — named links, bare URLs, paragraph/line breaks, XSS escaping |
 
-Total: **387 tests** (enforced ≥ 80% coverage threshold).
+Total: **~413 tests** (enforced ≥ 80% coverage threshold).
 
 ---
 

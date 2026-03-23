@@ -412,6 +412,42 @@ class TestEditView:
         sub.refresh_from_db()
         assert not sub.logo  # logo was not saved
 
+    def test_owner_can_deprecate_service(self, client):
+        """Posting _deprecate sets status=deprecated and redirects."""
+        sub = ServiceSubmissionFactory(status="approved")
+        self._setup_edit_session(client, sub)
+        resp = client.post(reverse("submissions:edit"), {"_deprecate": "1"})
+        assert resp.status_code == 302
+        sub.refresh_from_db()
+        assert sub.status == "deprecated"
+
+    def test_deprecate_is_idempotent(self, client):
+        """Posting _deprecate on an already-deprecated service is harmless."""
+        sub = ServiceSubmissionFactory(status="deprecated")
+        self._setup_edit_session(client, sub)
+        resp = client.post(reverse("submissions:edit"), {"_deprecate": "1"})
+        assert resp.status_code == 302
+        sub.refresh_from_db()
+        assert sub.status == "deprecated"
+
+    def test_deprecated_badge_shown_when_deprecated(self, client):
+        """GET edit page for a deprecated service shows the badge, not the danger zone."""
+        sub = ServiceSubmissionFactory(status="deprecated")
+        self._setup_edit_session(client, sub)
+        resp = client.get(reverse("submissions:edit"))
+        assert resp.status_code == 200
+        content = resp.content.decode()
+        assert "Deprecated" in content
+        assert "Deprecate this service" not in content
+
+    def test_deprecate_button_shown_when_not_deprecated(self, client):
+        """GET edit page for an active service shows the danger zone deprecate button."""
+        sub = ServiceSubmissionFactory(status="approved")
+        self._setup_edit_session(client, sub)
+        resp = client.get(reverse("submissions:edit"))
+        assert resp.status_code == 200
+        assert b"Deprecate this service" in resp.content
+
 
 # ===========================================================================
 # Health endpoints

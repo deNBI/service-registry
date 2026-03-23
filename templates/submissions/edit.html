@@ -93,7 +93,54 @@
           <a href="mailto:{{ CONTACT_EMAIL }}" class="small">{{ CONTACT_EMAIL }}</a>
         </div>
       </div>
+
+      {% if submission.status == 'deprecated' %}
+      <div class="card mt-3 border-secondary">
+        <div class="card-body py-2 px-3">
+          <span class="badge bg-secondary">Deprecated</span>
+          <p class="small text-muted mt-1 mb-0">This service is marked as deprecated. Contact the registry team to reverse this.</p>
+        </div>
+      </div>
+      {% else %}
+      <div class="card mt-3 border-danger">
+        <div class="card-header text-danger py-2 px-3 small fw-semibold">Danger Zone</div>
+        <div class="card-body py-2 px-3">
+          <p class="small text-muted mb-2">Mark this service as deprecated if it is no longer active. Only the registry team can reverse this.</p>
+          <button type="button" class="btn btn-outline-danger btn-sm w-100"
+                  data-bs-toggle="modal" data-bs-target="#deprecateModal">
+            Deprecate this service
+          </button>
+        </div>
+      </div>
+      {% endif %}
     </div>
   </div>
 </div>
+
+<!-- Deprecate confirmation modal -->
+{% if submission.status != 'deprecated' %}
+<div class="modal fade" id="deprecateModal" tabindex="-1" aria-labelledby="deprecateModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="deprecateModalLabel">Deprecate this service?</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>You are about to mark <strong>{{ submission.service_name }}</strong> as deprecated.</p>
+        <p class="text-muted small mb-0">This signals that the service is no longer active. Only registry admins can reverse this action.</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <form method="post" action="{% url 'submissions:edit' %}">
+          {% csrf_token %}
+          <button type="submit" name="_deprecate" value="1" class="btn btn-danger">
+            Yes, deprecate this service
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
 {% endblock %}

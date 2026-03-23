@@ -368,6 +368,16 @@ class TestSubmissionList:
         for item in resp.json()["results"]:
             assert item["status"] == "approved"
 
+    def test_list_filtered_by_deprecated_status(self, staff_client):
+        ServiceSubmissionFactory(status="deprecated")
+        ServiceSubmissionFactory(status="approved")
+        resp = staff_client.get("/api/v1/submissions/?status=deprecated")
+        assert resp.status_code == 200
+        results = resp.json()["results"]
+        assert len(results) >= 1
+        for item in results:
+            assert item["status"] == "deprecated"
+
     def test_list_excludes_internal_contact_email(self, staff_client):
         ServiceSubmissionFactory(internal_contact_email="secret@example.com")
         resp = staff_client.get("/api/v1/submissions/")

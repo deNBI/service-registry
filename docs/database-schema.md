@@ -32,7 +32,7 @@ The core domain model. One row per registered service.
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
 | `id` | UUID | PK | Auto-generated (`uuid4`), never changes |
-| `status` | varchar(20) | NOT NULL | `draft` / `submitted` / `under_review` / `approved` / `rejected` |
+| `status` | varchar(20) | NOT NULL | `draft` / `submitted` / `under_review` / `approved` / `rejected` / `deprecated` |
 | `submitted_at` | timestamptz | NOT NULL | Set on creation (`auto_now_add`) |
 | `updated_at` | timestamptz | NOT NULL | Updated on every save (`auto_now`) |
 | `submission_ip` | inet | nullable | Source IP stored for abuse investigation only |

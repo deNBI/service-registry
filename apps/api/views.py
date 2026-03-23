@@ -245,7 +245,7 @@ class SubmissionViewSet(
             "Returns a paginated list of all service submissions.\n\n"
             "Requires admin `Authorization: Token <admin-token>` header.\n\n"
             "**Filters:**\n"
-            "- `?status=submitted|under_review|approved|rejected`\n"
+            "- `?status=submitted|under_review|approved|rejected|deprecated`\n"
             "- `?service_center=<short_name>`\n"
             "- `?year_established=<year>`\n"
             "- `?register_as_elixir=true|false`\n"

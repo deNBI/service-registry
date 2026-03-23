@@ -118,6 +118,7 @@ class SubmissionStatus(models.TextChoices):
     UNDER_REVIEW = "under_review", _("Under Review")
     APPROVED = "approved", _("Approved")
     REJECTED = "rejected", _("Rejected")
+    DEPRECATED = "deprecated", _("Deprecated")
 
 
 class KpiMonitoring(models.TextChoices):
@@ -146,7 +147,7 @@ class ServiceSubmission(models.Model):
     The full form maps to sections A–G. All required fields raise
     ValidationError if blank on clean(). The status lifecycle is:
 
-        draft → submitted → under_review → approved / rejected
+        draft → submitted → under_review → approved / rejected / deprecated
 
     Sensitive internal fields (internal_contact_email, submission_ip,
     user_agent_hash) are never serialised in API responses.
@@ -489,7 +490,7 @@ class ServiceSubmission(models.Model):
             value = getattr(self, field, "")
             if value:
                 setattr(self, field, _sanitise_text(value))
-        super().save(*args, **kwargs)
+        super().save(**kwargs)
 
 
 # ---------------------------------------------------------------------------

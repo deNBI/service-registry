@@ -22,7 +22,7 @@ from django.views import View
 from django_ratelimit.decorators import ratelimit
 
 from .forms import SubmissionForm, UpdateKeyForm
-from .models import ServiceSubmission, SubmissionAPIKey
+from .models import ServiceSubmission, SubmissionAPIKey, SubmissionStatus
 from .tasks import send_submission_notification, send_update_notification
 
 logger = logging.getLogger(__name__)
@@ -253,6 +253,21 @@ class EditView(View):
             messages.error(
                 request, "Your session has expired. Please enter your API key again."
             )
+            return redirect("submissions:update")
+
+        # Handle deprecation request (separate action, not a form save)
+        if "_deprecate" in request.POST:
+            if submission.status != SubmissionStatus.DEPRECATED:
+                submission.status = SubmissionStatus.DEPRECATED
+                submission.save(update_fields=["status"])
+                send_submission_notification.delay(
+                    str(submission.id), event="status_changed"
+                )
+                logger.info(
+                    "Submission deprecated by owner",
+                    extra={"submission_id": str(submission.id)},
+                )
+            messages.success(request, "Your service has been marked as deprecated.")
             return redirect("submissions:update")
 
         form = SubmissionForm(request.POST, request.FILES, instance=submission)
