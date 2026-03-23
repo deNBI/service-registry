@@ -61,6 +61,7 @@ The core domain model. One row per registered service.
 | `toolbox_name` | varchar(200) | Required when `is_toolbox=True` |
 | `user_knowledge_required` | text | Optional prerequisites for users |
 | `publications_pmids` | text | Comma-separated PMIDs or DOIs; max 50 entries |
+| `logo` | varchar (file path) | nullable; stored as `logos/<uuid4>.<ext>` under `MEDIA_ROOT`; original filename discarded; accepted types: PNG, JPEG, SVG; max 10 MB (configurable) |
 
 M2M relations (via junction tables):
 

@@ -111,6 +111,10 @@ publications_pmids:
   help: "Please list publication(s) connected to the service (DOIs or PMIDs)."
   tooltip: "Enter PubMed IDs (digits only) or DOIs (e.g. 10.1000/xyz123), separated by commas. Up to 50 entries. For ELIXIR impact assessment, PMIDs are required."
 
+logo:
+  help: "Optional service logo. Accepted formats: PNG, JPEG, SVG. Maximum 10 MB."
+  tooltip: "Upload a logo to represent your service."
+
 # ── Section C — Responsibilities ─────────────────────────────────────────────
 
 responsible_pis:

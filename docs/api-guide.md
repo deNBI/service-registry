@@ -147,6 +147,50 @@ Full `PUT` is not supported — use `PATCH`.
 
 ---
 
+### Upload or update a service logo
+
+Service logos can be attached to a submission at registration time or added/replaced later via `PATCH`.
+
+**On `POST` (new registration):**
+
+```bash
+curl -X POST https://service-registry.bi.denbi.de/api/v1/submissions/ \
+  -H "Authorization: ApiKey <your-key>" \
+  -F "service_name=MyTool" \
+  -F "logo=@service-logo.png"
+```
+
+**On `PATCH` (update existing submission):**
+
+```bash
+curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
+  -H "Authorization: ApiKey <your-key>" \
+  -F "logo=@service-logo.svg"
+```
+
+!!! note "Use `multipart/form-data` for logo uploads"
+    When uploading a logo, send the request as `multipart/form-data` (`-F` flags in curl) instead of `application/json`. You can mix file and text fields in the same request. JSON-only requests (`Content-Type: application/json`) cannot carry file data.
+
+**Logo field behaviour:**
+
+| Field | Direction | Type | Notes |
+|-------|-----------|------|-------|
+| `logo` | write-only | file | Accepted in `multipart/form-data` requests only. Omit to leave the existing logo unchanged. |
+| `logo_url` | read-only | string \| null | Absolute URL to the stored logo file, or `null` if no logo has been uploaded. Returned in all submission responses. |
+
+**Accepted formats:** PNG, JPEG, SVG — max 10 MB (configurable via `logo_max_bytes` in `config/site.toml`).
+
+**Security processing applied automatically:**
+
+- Magic-byte type detection (file extension and MIME header are never trusted)
+- JPEG/PNG: re-encoded via Pillow to strip EXIF metadata and verify integrity
+- SVG: parsed with Python's stdlib XML parser (safe on Python 3.12+/Expat 2.7.1, which blocks XXE and entity-expansion attacks), then scrubbed of `<script>` elements, `on*` event-handler attributes, and non-fragment external URLs
+- Original filename is discarded; the file is stored under a UUID path (`media/logos/<uuid4>.<ext>`)
+
+Old logos are **not deleted** when a logo is replaced — previous files remain on disk.
+
+---
+
 ### Reference data {#reference-data-categories-service-centres-pis}
 
 All reference data endpoints require an admin Token. All three resources support
@@ -290,6 +334,11 @@ curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
   -H "Authorization: ApiKey <your-key>" \
   -H "Content-Type: application/json" \
   -d '{"website_url": "https://new-url.example.com"}'
+
+# Upload or replace a logo (ApiKey, write scope — multipart/form-data)
+curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
+  -H "Authorization: ApiKey <your-key>" \
+  -F "logo=@service-logo.png"
 
 # Browse EDAM topics (public)
 curl "https://service-registry.bi.denbi.de/api/v1/edam/?branch=topic&q=proteomics"

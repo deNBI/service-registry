@@ -110,6 +110,17 @@ url_prefix = "admin-denbi"
 
 Overridden by `ADMIN_URL_PREFIX` in `.env`. Changes the URL of the Django admin interface (`/<prefix>/`). Obfuscates the admin URL to reduce automated scanning noise — not a security boundary on its own.
 
+### `[uploads]`
+
+```toml
+[uploads]
+logo_max_bytes = 10_485_760
+```
+
+| Key | Default | Description |
+|---|---|---|
+| `logo_max_bytes` | `10485760` (10 MB) | Maximum allowed size in bytes for service logo uploads. Reduce to tighten limits. Requires a web container restart after changing. |
+
 ---
 
 ## Secrets and connection strings

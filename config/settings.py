@@ -49,6 +49,7 @@ _sc_links = _sc.get("links", {})
 _sc_api = _sc.get("api", {})
 _sc_edam = _sc.get("edam", {})
 _sc_admin = _sc.get("admin", {})
+_sc_uploads = _sc.get("uploads", {})
 
 
 def env(key, default=None, required=False):
@@ -194,6 +195,12 @@ STATICFILES_DIRS = [BASE_DIR / "static"]  # project-level static files
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "mediafiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# ---------------------------------------------------------------------------
+# Uploads
+# ---------------------------------------------------------------------------
+# Maximum logo file size in bytes. Configurable in config/site.toml [uploads].
+LOGO_MAX_BYTES: int = _sc_uploads.get("logo_max_bytes", 10 * 1024 * 1024)
 
 # ---------------------------------------------------------------------------
 # Security headers

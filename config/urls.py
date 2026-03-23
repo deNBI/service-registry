@@ -5,7 +5,8 @@ de.NBI Service Registry — Root URL Configuration
 
 from django.conf import settings
 from django.contrib import admin
-from django.urls import include, path
+from django.urls import include, path, re_path
+from django.views.static import serve as _serve_media
 
 from drf_spectacular.views import (
     SpectacularAPIView,
@@ -46,8 +47,16 @@ urlpatterns = [
     path("health/", include("apps.submissions.health_urls")),
 ]
 
-# Serve media files in development
-if settings.DEBUG:
-    from django.conf.urls.static import static
-
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+# Serve uploaded media files (logos, etc.) through Gunicorn.
+# In development: Django handles requests directly.
+# In production: nginx on the upstream VM proxy_passes all traffic to Gunicorn,
+#   including /media/ — no special nginx location block is needed.
+# Trade-off: file serving goes through Python rather than the filesystem directly;
+#   acceptable for infrequent, small logo requests.
+urlpatterns += [
+    re_path(
+        r"^media/(?P<path>.*)$",
+        _serve_media,
+        kwargs={"document_root": settings.MEDIA_ROOT},
+    ),
+]

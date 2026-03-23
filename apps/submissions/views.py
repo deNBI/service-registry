@@ -84,7 +84,7 @@ class RegisterView(View):
         return render(request, self.template_name, {"form": form})
 
     def post(self, request: HttpRequest) -> HttpResponse:
-        form = SubmissionForm(request.POST)
+        form = SubmissionForm(request.POST, request.FILES)
 
         if not form.is_valid():
             return render(request, self.template_name, {"form": form}, status=422)
@@ -255,7 +255,7 @@ class EditView(View):
             )
             return redirect("submissions:update")
 
-        form = SubmissionForm(request.POST, instance=submission)
+        form = SubmissionForm(request.POST, request.FILES, instance=submission)
 
         if not form.is_valid():
             return render(
@@ -315,8 +315,11 @@ def validate_field(request: HttpRequest) -> HttpResponse:
     if not field_name:
         return HttpResponse(status=400)
 
-    # Create form with only this field's data to trigger its validation
-    form = SubmissionForm(request.POST)
+    # Create form with only this field's data to trigger its validation.
+    # request.FILES is included for correctness, but note that HTMX inline
+    # validation cannot carry file data (browsers don't serialise file inputs
+    # in XHR requests), so FileField validation via this endpoint is a no-op.
+    form = SubmissionForm(request.POST, request.FILES)
     form.is_valid()  # Populates form.errors
 
     field = form.fields.get(field_name)

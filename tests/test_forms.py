@@ -3,10 +3,13 @@ Form Tests
 ==========
 Tests for SubmissionForm and UpdateKeyForm validation logic.
 Covers required fields, cross-field rules, URL scheme enforcement,
-email confirmation matching, and conditional field visibility.
+email confirmation matching, conditional field visibility, and logo upload.
 """
 
+import io
+
 import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
 
 from tests.factories import PIFactory, ServiceCategoryFactory, ServiceCenterFactory
 
@@ -950,3 +953,64 @@ class TestSectionDescriptionsYAML:
         assert content.count("<p>") >= 2, (
             "Expected at least two <p> elements for two paragraphs."
         )
+
+
+# ===========================================================================
+# Logo field — form-level clean_logo() validation
+# ===========================================================================
+
+
+def _make_png_bytes() -> bytes:
+    from PIL import Image
+
+    buf = io.BytesIO()
+    img = Image.new("RGB", (1, 1), color=(255, 255, 255))
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@pytest.mark.django_db
+class TestLogoFormField:
+    """Tests for SubmissionForm.clean_logo() — the form-level logo validation hook."""
+
+    def test_no_logo_is_valid(self):
+        """Logo is optional — form without a logo field must still be valid."""
+        from apps.submissions.forms import SubmissionForm
+
+        form = SubmissionForm(_base_form_data(), files={})
+        assert form.is_valid(), form.errors
+
+    def test_valid_png_accepted_by_clean_logo(self):
+        """A valid PNG uploaded via the form must pass clean_logo() successfully."""
+        from apps.submissions.forms import SubmissionForm
+        from django.core.files.uploadedfile import InMemoryUploadedFile
+
+        logo = SimpleUploadedFile(
+            "logo.png", _make_png_bytes(), content_type="image/png"
+        )
+        form = SubmissionForm(_base_form_data(), files={"logo": logo})
+        assert form.is_valid(), form.errors
+        assert isinstance(form.cleaned_data["logo"], InMemoryUploadedFile)
+
+    def test_invalid_file_rejected_by_clean_logo(self):
+        """A file with invalid/unsupported content must cause a form validation error."""
+        from apps.submissions.forms import SubmissionForm
+
+        bad_logo = SimpleUploadedFile(
+            "logo.png", b"not an image at all", content_type="image/png"
+        )
+        form = SubmissionForm(_base_form_data(), files={"logo": bad_logo})
+        assert not form.is_valid()
+        assert "logo" in form.errors
+
+    def test_oversized_file_rejected_by_clean_logo(self, settings):
+        """A file exceeding LOGO_MAX_BYTES must be rejected at the form level."""
+        from apps.submissions.forms import SubmissionForm
+
+        settings.LOGO_MAX_BYTES = 10  # 10 bytes — any real PNG exceeds this
+        too_big = SimpleUploadedFile(
+            "logo.png", _make_png_bytes(), content_type="image/png"
+        )
+        form = SubmissionForm(_base_form_data(), files={"logo": too_big})
+        assert not form.is_valid()
+        assert "logo" in form.errors

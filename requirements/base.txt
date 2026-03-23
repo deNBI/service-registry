@@ -28,6 +28,9 @@ django-cors-headers==4.9.0    # CORS header management
 # HTML sanitisation (XSS prevention on free-text inputs)
 bleach==6.3.0
 
+# File upload processing
+Pillow==12.1.1        # JPEG/PNG re-encoding and EXIF stripping
+
 # Utilities
 python-json-logger==4.0.0     # Structured JSON logging
 django-extensions==4.1        # Shell plus, show_urls, etc.
