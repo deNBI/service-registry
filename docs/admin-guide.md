@@ -39,14 +39,47 @@ The detail view shows all form sections A–G plus:
 - **Submitter notification** — sent directly to the `internal_contact_email` of the submission with a plain-language status update ("Your service has been approved / was not approved at this time"). This is separate from the admin email so the submitter receives a clear, action-oriented message rather than the full internal report.
 
 **Bulk:** Select submissions in the list view, then choose an action from the dropdown:
-- Approve selected submissions
-- Reject selected submissions
-- Mark selected as Under Review
+
+| Action | Result |
+|--------|--------|
+| Approve selected | Sets status → `Approved` |
+| Reject selected | Sets status → `Rejected` |
+| Mark selected as Under Review | Sets status → `Under Review` |
+| Deprecate selected | Sets status → `Deprecated` |
+| Undeprecate selected | Sets status → `Submitted` (returns to review queue) |
+
+All transitions fire the standard admin + submitter email notifications via Celery.
+
+**Individual (change view):** Open a submission — the "Change Status" panel shows buttons for all transitions including **Deprecate** and **Undeprecate**. The current status is highlighted and its button is disabled.
+
+!!! note "Deprecation is owner-reversible only by admins"
+    Service owners can mark their own service as deprecated via the edit form. Only admins can reverse a deprecation (via bulk action or the change view button), which resets status to `Submitted` for re-review.
+
+### Filtering by Status
+
+The list view sidebar filters by **status**, making it easy to find submissions in a specific state:
+`Draft` · `Submitted` · `Under Review` · `Approved` · `Rejected` · `Deprecated`
+
+Combine status with the category, service centre, or date filters to narrow down exports.
 
 ### Exporting Submissions
 
 Select submissions → choose **Export selected as CSV** or **Export selected as JSON**.
-Exported files contain public fields only (no internal contact emails).
+
+Both formats include all submission fields:
+
+| Category | Fields included |
+|----------|----------------|
+| Identity | `id`, `status`, `submitted_at`, `updated_at` |
+| Submitter | `submitter_first_name/last_name/affiliation`, `host_institute`, `public_contact_email`, `internal_contact_name/email` |
+| Service | `service_name`, `service_description`, `year_established`, `is_toolbox`, `toolbox_name`, `user_knowledge_required`, `publications_pmids` |
+| Relations | `service_categories`, `responsible_pis` (semicolons in CSV, arrays in JSON) |
+| EDAM | `edam_topics`, `edam_operations` — label + URI (semicolons in CSV, objects in JSON) |
+| Links | `website_url`, `terms_of_use_url`, `license`, `github_url`, `biotools_url`, `fairsharing_url`, `other_registry_url` |
+| KPIs | `kpi_monitoring`, `kpi_start_year` |
+| Discovery | `keywords_uncited`, `keywords_seo`, `register_as_elixir`, `outreach_consent`, `survey_participation`, `comments` |
+| Logo | `logo_url` — absolute URL, or empty if no logo uploaded |
+| bio.tools | `biotools_id`, `biotools_name`, `biotools_edam_topic_uris`, `biotools_edam_operation_uris` — empty if no bio.tools record |
 
 ---
 

@@ -93,7 +93,7 @@ curl https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
 
 | Parameter            | Example                       | Description                      |
 | -------------------- | ----------------------------- | -------------------------------- |
-| `status`             | `?status=approved`            | Filter by status                 |
+| `status`             | `?status=approved`            | Filter by status (`draft`, `submitted`, `under_review`, `approved`, `rejected`, `deprecated`) |
 | `service_center`     | `?service_center=BioinfoProt` | Filter by centre short name      |
 | `year_established`   | `?year_established=2021`      | Filter by year                   |
 | `register_as_elixir` | `?register_as_elixir=true`    | Filter by ELIXIR flag            |

@@ -199,8 +199,19 @@ Your submission moves through these states:
 | **Under Review** | Actively being reviewed by the service coordination team.                                             |
 | **Approved**     | Your service has been accepted and will appear in the de.NBI services catalogue.                      |
 | **Rejected**     | The submission was not accepted. You will receive an email explaining why. You may edit and resubmit. |
+| **Deprecated**   | The service is no longer active. You can mark your own service as deprecated via the edit form (see below). Only the registry team can reverse this. |
 
 If you edit a submission that was already **Approved**, the status resets to **Submitted** and the administration office is notified to re-review your changes.
+
+### Deprecating Your Service
+
+If your service is no longer active, you can mark it as deprecated directly from the edit form:
+
+1. Log in with your API key via the Update / Edit page (`/update/`).
+2. Scroll to the **Danger Zone** card in the right sidebar.
+3. Click **Deprecate this service** and confirm in the dialog.
+
+The status will be set to **Deprecated** and the registry team will be notified. Only registry admins can reverse a deprecation — contact [servicecoordination@denbi.de](mailto:servicecoordination@denbi.de) if you need to reactivate a deprecated service.
 
 ---
 

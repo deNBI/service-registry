@@ -34,4 +34,5 @@ status_messages:
   approved: "Your service has been approved and is now registered in the de.NBI Service Registry. Thank you for your submission."
   rejected: "Your service registration was not approved at this time. If you have questions, please contact us."
   under_review: "Your submission is currently under review. We will notify you once a decision has been made."
+  deprecated: "Your service has been marked as deprecated and is no longer listed as active in the de.NBI Service Registry. If you believe this is an error or wish to reactivate your service, please contact us."
   default: "If you have questions about your submission, please contact us."
