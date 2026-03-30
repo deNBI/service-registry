@@ -19,8 +19,8 @@ Everything you need to go from a fresh clone to a running local stack.
 ### 2. Clone and configure
 
 ```bash
-git clone https://github.com/deNBI/denbi_service_registry
-cd denbi_service_registry
+git clone https://github.com/denbi/service-registry
+cd service-registry
 cp .env.example .env
 ```
 
@@ -235,6 +235,7 @@ All third-party CSS and JavaScript is downloaded once and committed to `static/`
 | Bootstrap | 5.3.3 | `static/css/bootstrap.min.css`, `static/js/bootstrap.bundle.min.js` | All pages |
 | HTMX | 1.9.12 | `static/js/htmx.min.js` | bio.tools prefill |
 | Tom-Select | 2.3.1 | `static/css/tom-select.bootstrap5.min.css`, `static/js/tom-select.complete.min.js` | EDAM multi-select widget |
+| ALTCHA | 2.3.0 | `static/js/altcha.min.js` | Registration and edit forms (CAPTCHA widget) |
 | swagger-ui-dist | 5.18.2 | `static/swagger-ui/` (4 files) | `/api/docs/` |
 | ReDoc | 2.2.0 | `static/redoc/bundles/redoc.standalone.js` | `/api/redoc/` |
 | de.NBI favicon | — | `static/img/favicon.ico` | All pages, admin |
@@ -285,6 +286,17 @@ All third-party CSS and JavaScript is downloaded once and committed to `static/`
     curl -sSfL https://cdn.jsdelivr.net/npm/redoc@${VERSION}/bundles/redoc.standalone.js \
         -o static/redoc/bundles/redoc.standalone.js
     ```
+
+=== "ALTCHA"
+
+    ```bash
+    VERSION=2.3.0
+    curl -sSfL https://cdn.jsdelivr.net/gh/altcha-org/altcha@v${VERSION}/dist/altcha.min.js \
+        -o static/js/altcha.min.js
+    ```
+
+    The version comment at the top of the downloaded file confirms which release was
+    fetched.  Update the version entry in the inventory table above when upgrading.
 
 ### Can I use an external URL instead of vendoring?
 

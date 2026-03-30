@@ -23,6 +23,7 @@ from rest_framework.test import APIClient
 
 from tests.factories import (
     APIKeyFactory,
+    BioToolsFunctionFactory,
     BioToolsRecordFactory,
     PIFactory,
     ServiceCategoryFactory,
@@ -94,7 +95,6 @@ def _valid_payload():
         "license": "apache2",
         "kpi_monitoring": "planned",
         "kpi_start_year": "2021",
-        "outreach_consent": True,
         "survey_participation": True,
         "data_protection_consent": True,
     }
@@ -244,6 +244,35 @@ class TestSubmissionRetrieve:
             "user_agent_hash",
         ):
             assert field not in data
+
+    def test_retrieve_biotoolsrecord_is_null_when_no_record(self, api_client):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.get(f"/api/v1/submissions/{sub.pk}/")
+        assert resp.status_code == 200
+        assert resp.json()["biotoolsrecord"] is None
+
+    def test_retrieve_biotoolsrecord_contains_functions_when_synced(self, api_client):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        bt = BioToolsRecordFactory(submission=sub, biotools_id="synced")
+        BioToolsFunctionFactory(
+            record=bt,
+            position=0,
+            operations=[
+                {"uri": "http://edamontology.org/operation_0004", "term": "Operation"}
+            ],
+        )
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.get(f"/api/v1/submissions/{sub.pk}/")
+        assert resp.status_code == 200
+        bt_data = resp.json()["biotoolsrecord"]
+        assert bt_data is not None
+        assert bt_data["biotools_id"] == "synced"
+        functions = bt_data["functions"]
+        assert len(functions) == 1
+        assert functions[0]["operations"][0]["uri"] == "http://edamontology.org/operation_0004"
 
 
 # ===========================================================================
@@ -888,6 +917,31 @@ class TestBioToolsRecordAccessControl:
         resp = staff_client.get("/api/v1/biotools/")
         assert resp.status_code == 200
         assert len(resp.json()["results"]) == 2
+
+    def test_retrieve_response_shape(self, api_client):
+        """Response includes expected fields including nested functions."""
+        record = BioToolsRecordFactory(
+            submission__status="approved",
+            biotools_id="shapetool",
+            edam_topic_uris=["http://edamontology.org/topic_0091"],
+        )
+        BioToolsFunctionFactory(
+            record=record,
+            position=0,
+            operations=[
+                {"uri": "http://edamontology.org/operation_0004", "term": "Operation"}
+            ],
+        )
+        resp = api_client.get(f"/api/v1/biotools/{record.biotools_id}/")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["biotools_id"] == "shapetool"
+        assert "functions" in data
+        assert len(data["functions"]) == 1
+        assert data["functions"][0]["operations"][0]["uri"] == "http://edamontology.org/operation_0004"
+        assert "edam_topic_uris" in data
+        assert "edam_topics_resolved" in data
+        assert "last_synced_at" in data
 
 
 # ---------------------------------------------------------------------------

@@ -117,7 +117,6 @@ class TestRegisterView:
             "kpi_start_year": "2022",
             "keywords_uncited": "",
             "keywords_seo": "",
-            "outreach_consent": "True",
             "survey_participation": "True",
             "comments": "",
             "data_protection_consent": "True",
@@ -205,7 +204,6 @@ class TestRegisterView:
             "kpi_start_year": "2023",
             "keywords_uncited": "",
             "keywords_seo": "",
-            "outreach_consent": "True",
             "survey_participation": "True",
             "comments": "",
             "data_protection_consent": "True",
@@ -265,7 +263,6 @@ class TestRegisterView:
             "kpi_start_year": "2023",
             "keywords_uncited": "",
             "keywords_seo": "",
-            "outreach_consent": "True",
             "survey_participation": "True",
             "comments": "",
             "data_protection_consent": "True",
@@ -369,7 +366,6 @@ class TestEditView:
             "kpi_start_year": sub.kpi_start_year or "",
             "keywords_uncited": sub.keywords_uncited or "",
             "keywords_seo": sub.keywords_seo or "",
-            "outreach_consent": str(sub.outreach_consent),
             "survey_participation": str(sub.survey_participation),
             "comments": sub.comments or "",
             "data_protection_consent": str(sub.data_protection_consent),
@@ -447,6 +443,421 @@ class TestEditView:
         resp = client.get(reverse("submissions:edit"))
         assert resp.status_code == 200
         assert b"Deprecate this service" in resp.content
+
+
+# ===========================================================================
+# ALTCHA challenge endpoint
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestAltchaChallengeView:
+    def test_get_returns_200_with_json(self, client):
+        """GET /captcha/ must return a JSON challenge object."""
+        from django.test import override_settings
+
+        with override_settings(ALTCHA_HMAC_KEY="test-hmac-key-for-challenge"):
+            resp = client.get(reverse("submissions:altcha_challenge"))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["algorithm"] == "SHA-256"
+        assert "challenge" in data
+        assert "salt" in data
+        assert "signature" in data
+
+    def test_get_challenge_includes_expiry_in_salt(self, client):
+        """Challenge salt must include an expiry parameter."""
+        from django.test import override_settings
+
+        with override_settings(ALTCHA_HMAC_KEY="test-hmac-key-for-expiry"):
+            resp = client.get(reverse("submissions:altcha_challenge"))
+        assert resp.status_code == 200
+        salt = resp.json()["salt"]
+        assert "expires=" in salt
+
+    def test_get_returns_503_when_key_not_configured(self, client):
+        """GET /captcha/ must return 503 when ALTCHA_HMAC_KEY is empty."""
+        from django.test import override_settings
+
+        with override_settings(ALTCHA_HMAC_KEY=""):
+            resp = client.get(reverse("submissions:altcha_challenge"))
+        assert resp.status_code == 503
+
+    def test_post_returns_405(self, client):
+        """POST to /captcha/ must be rejected with 405 Method Not Allowed."""
+        from django.test import override_settings
+
+        with override_settings(ALTCHA_HMAC_KEY="test-hmac-key"):
+            resp = client.post(reverse("submissions:altcha_challenge"))
+        assert resp.status_code == 405
+
+    def test_response_includes_max_number(self, client):
+        """GET /captcha/ JSON must include maxNumber so the widget knows the search space."""
+        from django.test import override_settings
+
+        with override_settings(ALTCHA_HMAC_KEY="test-hmac-key-maxnumber"):
+            resp = client.get(reverse("submissions:altcha_challenge"))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "maxNumber" in data
+        assert isinstance(data["maxNumber"], int)
+        assert data["maxNumber"] > 0
+
+    def test_response_has_no_store_cache_control(self, client):
+        """GET /captcha/ must set Cache-Control: no-store to prevent proxy caching."""
+        from django.test import override_settings
+
+        with override_settings(ALTCHA_HMAC_KEY="test-hmac-key-cache"):
+            resp = client.get(reverse("submissions:altcha_challenge"))
+        assert resp.status_code == 200
+        assert "no-store" in resp["Cache-Control"]
+
+
+@pytest.mark.django_db
+class TestAltchaVerification:
+    """Tests for the ALTCHA verification guard on form submission endpoints."""
+
+    def _valid_register_data(self):
+        from tests.factories import PIFactory, ServiceCategoryFactory, ServiceCenterFactory
+        from django.utils import timezone
+
+        cat = ServiceCategoryFactory()
+        center = ServiceCenterFactory()
+        pi = PIFactory()
+        return {
+            "date_of_entry": timezone.now().date().isoformat(),
+            "submitter_first_name": "ALTCHA",
+            "submitter_last_name": "Tester",
+            "submitter_affiliation": "Test Institute",
+            "register_as_elixir": "False",
+            "service_name": "ALTCHA Verified Service",
+            "service_description": "A sufficiently long description for the ALTCHA test service.",
+            "year_established": 2023,
+            "service_categories": [cat.pk],
+            "is_toolbox": "False",
+            "toolbox_name": "",
+            "user_knowledge_required": "",
+            "publications_pmids": "12345678",
+            "responsible_pis": [pi.pk],
+            "associated_partner_note": "",
+            "host_institute": "ALTCHA Institute",
+            "service_center": center.pk,
+            "public_contact_email": "altcha@test.com",
+            "internal_contact_name": "ALTCHA Contact",
+            "internal_contact_email": "altcha-int@test.com",
+            "internal_contact_email_confirm": "altcha-int@test.com",
+            "website_url": "https://altcha-example.com",
+            "terms_of_use_url": "https://altcha-example.com/tos",
+            "license": "mit",
+            "github_url": "",
+            "biotools_url": "",
+            "fairsharing_url": "",
+            "other_registry_url": "",
+            "kpi_monitoring": "yes",
+            "kpi_start_year": "2023",
+            "keywords_uncited": "",
+            "keywords_seo": "",
+            "survey_participation": "True",
+            "comments": "",
+            "data_protection_consent": "True",
+        }
+
+    def test_register_post_without_altcha_field_returns_400_when_key_configured(
+        self, client
+    ):
+        """POST to /register/ without altcha payload returns 400 when HMAC key is set."""
+        from django.test import override_settings
+
+        data = self._valid_register_data()
+        with override_settings(ALTCHA_HMAC_KEY="test-hmac-key"):
+            resp = client.post(reverse("submissions:register"), data=data)
+        assert resp.status_code == 400
+
+    def test_register_post_with_invalid_altcha_returns_400(self, client):
+        """POST to /register/ with a malformed altcha value returns 400."""
+        from django.test import override_settings
+
+        data = self._valid_register_data()
+        data["altcha"] = "not-valid-base64-json"
+        with override_settings(ALTCHA_HMAC_KEY="test-hmac-key"):
+            resp = client.post(reverse("submissions:register"), data=data)
+        assert resp.status_code == 400
+
+    def test_register_post_bypassed_when_no_hmac_key(self, client):
+        """POST to /register/ proceeds normally when ALTCHA_HMAC_KEY is empty."""
+        from django.test import override_settings
+
+        data = self._valid_register_data()
+        # No altcha field — but key is empty so verification is bypassed
+        with override_settings(ALTCHA_HMAC_KEY=""):
+            resp = client.post(reverse("submissions:register"), data=data)
+        assert resp.status_code == 302
+
+    def test_register_post_with_valid_solved_altcha_succeeds(self, client):
+        """POST to /register/ with a correctly solved challenge is accepted."""
+        import base64
+        import json
+        from django.test import override_settings
+        from altcha import ChallengeOptions, create_challenge, solve_challenge
+
+        hmac_key = "test-hmac-key-solve"
+        options = ChallengeOptions(hmac_key=hmac_key, max_number=1000)
+        challenge = create_challenge(options)
+        solution = solve_challenge(
+            challenge.challenge, challenge.salt, challenge.algorithm, 1000
+        )
+        payload = {
+            "algorithm": challenge.algorithm,
+            "challenge": challenge.challenge,
+            "number": solution.number,
+            "salt": challenge.salt,
+            "signature": challenge.signature,
+        }
+        altcha_value = base64.b64encode(json.dumps(payload).encode()).decode()
+
+        data = self._valid_register_data()
+        data["altcha"] = altcha_value
+        with override_settings(ALTCHA_HMAC_KEY=hmac_key):
+            resp = client.post(reverse("submissions:register"), data=data)
+        assert resp.status_code == 302
+
+    def _edit_submission_data(self, sub):
+        """Build a minimal valid POST payload for the edit view from a submission."""
+        return {
+            "date_of_entry": sub.date_of_entry.isoformat(),
+            "submitter_first_name": sub.submitter_first_name,
+            "submitter_last_name": sub.submitter_last_name,
+            "submitter_affiliation": sub.submitter_affiliation,
+            "register_as_elixir": str(sub.register_as_elixir),
+            "service_name": sub.service_name,
+            "service_description": sub.service_description,
+            "year_established": sub.year_established,
+            "service_categories": [c.pk for c in sub.service_categories.all()],
+            "is_toolbox": str(sub.is_toolbox),
+            "toolbox_name": sub.toolbox_name or "",
+            "user_knowledge_required": sub.user_knowledge_required or "",
+            "publications_pmids": sub.publications_pmids or "",
+            "responsible_pis": [p.pk for p in sub.responsible_pis.all()],
+            "associated_partner_note": sub.associated_partner_note or "",
+            "host_institute": sub.host_institute,
+            "service_center": sub.service_center.pk,
+            "public_contact_email": sub.public_contact_email,
+            "internal_contact_name": sub.internal_contact_name,
+            "internal_contact_email": sub.internal_contact_email,
+            "internal_contact_email_confirm": sub.internal_contact_email,
+            "website_url": sub.website_url,
+            "terms_of_use_url": sub.terms_of_use_url,
+            "license": sub.license,
+            "github_url": sub.github_url or "",
+            "biotools_url": sub.biotools_url or "",
+            "fairsharing_url": sub.fairsharing_url or "",
+            "other_registry_url": sub.other_registry_url or "",
+            "kpi_monitoring": sub.kpi_monitoring,
+            "kpi_start_year": sub.kpi_start_year or "",
+            "keywords_uncited": sub.keywords_uncited or "",
+            "keywords_seo": sub.keywords_seo or "",
+            "survey_participation": str(sub.survey_participation),
+            "comments": sub.comments or "",
+            "data_protection_consent": str(sub.data_protection_consent),
+        }
+
+    def _setup_edit_altcha_session(self, client, sub):
+        key_obj, _ = APIKeyFactory.create_with_plaintext(submission=sub)
+        session = client.session
+        session["edit_key_id"] = str(key_obj.pk)
+        session["edit_submission_id"] = str(sub.pk)
+        session.save()
+
+    def test_edit_post_without_altcha_returns_400_when_key_configured(self, client):
+        """POST to /update/edit/ without altcha payload returns 400 when HMAC key is set."""
+        from django.test import override_settings
+
+        sub = ServiceSubmissionFactory()
+        self._setup_edit_altcha_session(client, sub)
+        data = self._edit_submission_data(sub)
+        with override_settings(ALTCHA_HMAC_KEY="test-hmac-key"):
+            resp = client.post(reverse("submissions:edit"), data=data)
+        assert resp.status_code == 400
+        assert b"CAPTCHA" in resp.content
+
+    def test_edit_post_with_invalid_altcha_returns_400(self, client):
+        """POST to /update/edit/ with a malformed altcha value returns 400."""
+        from django.test import override_settings
+
+        sub = ServiceSubmissionFactory()
+        self._setup_edit_altcha_session(client, sub)
+        data = self._edit_submission_data(sub)
+        data["altcha"] = "not-valid-base64-json"
+        with override_settings(ALTCHA_HMAC_KEY="test-hmac-key"):
+            resp = client.post(reverse("submissions:edit"), data=data)
+        assert resp.status_code == 400
+        assert b"CAPTCHA" in resp.content
+
+    def test_edit_post_bypassed_when_no_hmac_key(self, client):
+        """POST to /update/edit/ proceeds normally when ALTCHA_HMAC_KEY is empty."""
+        from django.test import override_settings
+
+        sub = ServiceSubmissionFactory()
+        self._setup_edit_altcha_session(client, sub)
+        data = self._edit_submission_data(sub)
+        with override_settings(ALTCHA_HMAC_KEY=""):
+            resp = client.post(reverse("submissions:edit"), data=data)
+        assert resp.status_code == 302
+
+    def test_edit_post_with_valid_solved_altcha_succeeds(self, client):
+        """POST to /update/edit/ with a correctly solved challenge is accepted."""
+        import base64
+        import json
+        from django.test import override_settings
+        from altcha import ChallengeOptions, create_challenge, solve_challenge
+
+        sub = ServiceSubmissionFactory()
+        self._setup_edit_altcha_session(client, sub)
+
+        hmac_key = "test-hmac-key-edit-solve"
+        options = ChallengeOptions(hmac_key=hmac_key, max_number=1000)
+        challenge = create_challenge(options)
+        solution = solve_challenge(
+            challenge.challenge, challenge.salt, challenge.algorithm, 1000
+        )
+        payload = {
+            "algorithm": challenge.algorithm,
+            "challenge": challenge.challenge,
+            "number": solution.number,
+            "salt": challenge.salt,
+            "signature": challenge.signature,
+        }
+        altcha_value = base64.b64encode(json.dumps(payload).encode()).decode()
+
+        data = self._edit_submission_data(sub)
+        data["altcha"] = altcha_value
+        with override_settings(ALTCHA_HMAC_KEY=hmac_key):
+            resp = client.post(reverse("submissions:edit"), data=data)
+        assert resp.status_code == 302
+
+    def test_register_captcha_failure_shows_error_message(self, client):
+        """A CAPTCHA failure on /register/ must include the error text in the response."""
+        from django.test import override_settings
+
+        data = self._valid_register_data()
+        with override_settings(ALTCHA_HMAC_KEY="test-hmac-key"):
+            resp = client.post(reverse("submissions:register"), data=data)
+        assert resp.status_code == 400
+        assert b"CAPTCHA" in resp.content
+
+    def test_register_post_with_expired_altcha_returns_400(self, client):
+        """POST to /register/ with an expired ALTCHA challenge must be rejected."""
+        import base64
+        import datetime
+        import json
+        from django.test import override_settings
+        from altcha import ChallengeOptions, create_challenge, solve_challenge
+
+        hmac_key = "test-hmac-key-expired"
+        options = ChallengeOptions(
+            hmac_key=hmac_key,
+            max_number=100,
+            expires=datetime.datetime.now(datetime.timezone.utc)
+            - datetime.timedelta(minutes=5),
+        )
+        challenge = create_challenge(options)
+        solution = solve_challenge(
+            challenge.challenge, challenge.salt, challenge.algorithm, 100
+        )
+        payload = {
+            "algorithm": challenge.algorithm,
+            "challenge": challenge.challenge,
+            "number": solution.number,
+            "salt": challenge.salt,
+            "signature": challenge.signature,
+        }
+        altcha_value = base64.b64encode(json.dumps(payload).encode()).decode()
+
+        data = self._valid_register_data()
+        data["altcha"] = altcha_value
+        with override_settings(ALTCHA_HMAC_KEY=hmac_key):
+            resp = client.post(reverse("submissions:register"), data=data)
+        assert resp.status_code == 400
+        assert b"CAPTCHA" in resp.content
+
+    def test_edit_post_with_expired_altcha_returns_400(self, client):
+        """POST to /update/edit/ with an expired ALTCHA challenge must be rejected."""
+        import base64
+        import datetime
+        import json
+        from django.test import override_settings
+        from altcha import ChallengeOptions, create_challenge, solve_challenge
+
+        sub = ServiceSubmissionFactory()
+        self._setup_edit_altcha_session(client, sub)
+
+        hmac_key = "test-hmac-key-edit-expired"
+        options = ChallengeOptions(
+            hmac_key=hmac_key,
+            max_number=100,
+            expires=datetime.datetime.now(datetime.timezone.utc)
+            - datetime.timedelta(minutes=5),
+        )
+        challenge = create_challenge(options)
+        solution = solve_challenge(
+            challenge.challenge, challenge.salt, challenge.algorithm, 100
+        )
+        payload = {
+            "algorithm": challenge.algorithm,
+            "challenge": challenge.challenge,
+            "number": solution.number,
+            "salt": challenge.salt,
+            "signature": challenge.signature,
+        }
+        altcha_value = base64.b64encode(json.dumps(payload).encode()).decode()
+
+        data = self._edit_submission_data(sub)
+        data["altcha"] = altcha_value
+        with override_settings(ALTCHA_HMAC_KEY=hmac_key):
+            resp = client.post(reverse("submissions:edit"), data=data)
+        assert resp.status_code == 400
+        assert b"CAPTCHA" in resp.content
+
+    def test_register_get_shows_widget_when_altcha_enabled(self, client):
+        """GET /register/ must render the altcha-widget element when ALTCHA is configured."""
+        from django.test import override_settings
+
+        with override_settings(ALTCHA_HMAC_KEY="test-hmac-key"):
+            resp = client.get(reverse("submissions:register"))
+        assert resp.status_code == 200
+        # Check for the opening HTML tag, not just the string (which also appears in JS)
+        assert b"<altcha-widget" in resp.content
+
+    def test_register_get_hides_widget_when_altcha_disabled(self, client):
+        """GET /register/ must not render the altcha-widget element when ALTCHA is not configured."""
+        from django.test import override_settings
+
+        with override_settings(ALTCHA_HMAC_KEY=""):
+            resp = client.get(reverse("submissions:register"))
+        assert resp.status_code == 200
+        assert b"<altcha-widget" not in resp.content
+
+    def test_edit_get_shows_widget_when_altcha_enabled(self, client):
+        """GET /update/edit/ must render the altcha-widget element when ALTCHA is configured."""
+        from django.test import override_settings
+
+        sub = ServiceSubmissionFactory()
+        self._setup_edit_altcha_session(client, sub)
+        with override_settings(ALTCHA_HMAC_KEY="test-hmac-key"):
+            resp = client.get(reverse("submissions:edit"))
+        assert resp.status_code == 200
+        assert b"<altcha-widget" in resp.content
+
+    def test_edit_get_hides_widget_when_altcha_disabled(self, client):
+        """GET /update/edit/ must not render the altcha-widget element when ALTCHA is not configured."""
+        from django.test import override_settings
+
+        sub = ServiceSubmissionFactory()
+        self._setup_edit_altcha_session(client, sub)
+        with override_settings(ALTCHA_HMAC_KEY=""):
+            resp = client.get(reverse("submissions:edit"))
+        assert resp.status_code == 200
+        assert b"<altcha-widget" not in resp.content
 
 
 # ===========================================================================

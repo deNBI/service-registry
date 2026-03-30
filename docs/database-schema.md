@@ -115,7 +115,6 @@ All URL fields must use `https://`. Domain-specific validators are applied on sa
 |---|---|---|
 | `keywords_uncited` | text | Keywords to detect tool mentions without formal citation |
 | `keywords_seo` | text | SEO keywords for the catalogue listing |
-| `outreach_consent` | boolean | Consent for de.NBI to use this service in social media |
 | `survey_participation` | boolean | Willingness to participate in de.NBI user surveys; default `true` |
 | `comments` | text | Optional notes for the administration office |
 

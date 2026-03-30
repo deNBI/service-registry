@@ -201,9 +201,14 @@ CSRF_COOKIE_SECURE=true         # Mark CSRF cookie as HTTPS-only
 ### Admin brute-force protection
 
 ```bash
-AXES_FAILURE_LIMIT=5            # Failed login attempts before lockout
-AXES_COOLOFF_MINUTES=30         # Lockout duration in minutes
+AXES_FAILURE_LIMIT=5                    # Failed login attempts before lockout
+AXES_COOLOFF_MINUTES=30                 # Lockout duration in minutes
+AXES_RESET_ON_SUCCESS=false             # Keep access attempts after successful login (for audit)
+AXES_ENABLE_ACCESS_FAILURE_LOG=true     # Record every failed login event
 ```
+
+- `AXES_RESET_ON_SUCCESS=false` ensures the `axes_accessattempt` table retains failure state until timeout/cleanup.
+- `AXES_ENABLE_ACCESS_FAILURE_LOG=true` ensures a full event trail in `axes_accessfailurelog`.
 
 ### Rate limiting
 
@@ -213,7 +218,40 @@ Format: `<count>/<period>` where period is `s` / `m` / `h` / `d`.
 RATE_LIMIT_SUBMIT=10/h          # Registration form submissions
 RATE_LIMIT_UPDATE=20/h          # Submission update form
 RATE_LIMIT_API=60/m             # REST API create endpoint
+RATE_LIMIT_CHALLENGE=60/h       # ALTCHA challenge generation endpoint (GET /captcha/)
 ```
+
+### ALTCHA CAPTCHA
+
+ALTCHA is a self-hosted, privacy-respecting proof-of-work CAPTCHA that protects
+the registration and edit forms from automated submissions.  No external service
+is contacted at runtime — the JS widget is vendored in `static/js/altcha.min.js`
+and challenge generation/verification happens entirely inside Django.
+
+```bash
+ALTCHA_HMAC_KEY=                # Secret key for signing challenges (required in production)
+```
+
+| Variable          | Default | Description                                                                                                            |
+| ----------------- | ------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `ALTCHA_HMAC_KEY` | `""`    | HMAC-SHA256 key used to sign and verify challenges. When empty, ALTCHA is bypassed — safe for local development only. |
+
+Generate a strong key with:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+> **Production requirement:** `ALTCHA_HMAC_KEY` must be set to a non-empty secret before deploying publicly.
+> Leaving it empty disables CAPTCHA protection entirely.
+
+**How it works at runtime:**
+
+- The browser widget fetches a fresh challenge from `GET /captcha/` when the form is submitted.
+- Challenges are signed with `ALTCHA_HMAC_KEY`, expire after **10 minutes**, and carry `Cache-Control: no-store` so proxies cannot cache and re-serve them.
+- The widget performs a SHA-256 proof-of-work in a Web Worker (search space up to 100 000) then posts the solution with the form.
+- Django verifies the HMAC signature and expiry before accepting the submission. An expired or tampered challenge is rejected with HTTP 400.
+- The widget and all verification logic run entirely in your infrastructure — no external service is contacted.
 
 ### Email (SMTP credentials)
 

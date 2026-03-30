@@ -264,9 +264,6 @@ class SubmissionForm(forms.ModelForm):
                 attrs={"class": "form-control", "rows": 2}
             ),
             "keywords_seo": forms.Textarea(attrs={"class": "form-control", "rows": 2}),
-            "outreach_consent": forms.RadioSelect(
-                choices=[(True, "Yes"), (False, "No")]
-            ),
             "survey_participation": forms.RadioSelect(
                 choices=[(True, "Yes"), (False, "No")]
             ),
@@ -310,7 +307,6 @@ class SubmissionForm(forms.ModelForm):
             "kpi_start_year": _("Year KPI monitoring started"),
             "keywords_uncited": _("Keywords to identify usage without proper citation"),
             "keywords_seo": _("SEO-relevant keywords"),
-            "outreach_consent": _("Outreach consent – social media showcasing"),
             "survey_participation": _("User survey participation"),
             "comments": _("Any Comments"),
             "data_protection_consent": _(
@@ -356,11 +352,13 @@ class SubmissionForm(forms.ModelForm):
                 "internal_contact_email_confirm"
             ].initial = self.instance.internal_contact_email
 
-        # Apply YAML-driven help text and tooltip attributes
+        # Apply YAML-driven help text, tooltip, and label attributes
         for field_name, field_obj in self.fields.items():
             texts = _FORM_TEXTS.get(field_name, {})
             if texts.get("help"):
                 field_obj.help_text = texts["help"]
+            if texts.get("label"):
+                field_obj.label = texts["label"]
             field_obj.tooltip = texts.get("tooltip", "")
 
         # Expose section descriptions for template rendering

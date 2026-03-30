@@ -61,7 +61,6 @@ def _base_form_data(overrides=None):
         # Section F
         "keywords_uncited": "",
         "keywords_seo": "",
-        "outreach_consent": True,
         "survey_participation": True,
         "comments": "",
         # Section G
@@ -290,10 +289,11 @@ class TestFormTextsYAML:
     _NON_FIELD_KEYS = {"sections"}
 
     def test_every_entry_has_required_keys(self):
-        """Each field entry must have exactly 'help' and 'tooltip' keys."""
+        """Each field entry must have 'help' and 'tooltip' keys; 'label' is optional."""
         from apps.submissions.forms import _FORM_TEXTS
 
         required_keys = {"help", "tooltip"}
+        allowed_keys = {"help", "tooltip", "label"}
         for field_name, entry in _FORM_TEXTS.items():
             if field_name in self._NON_FIELD_KEYS:
                 continue
@@ -310,10 +310,10 @@ class TestFormTextsYAML:
                 f"'{field_name}' is missing required key(s): {missing}.\n"
                 f"Fix: add the missing key(s) under '{field_name}:' in form_texts.yaml."
             )
-            extra = set(entry.keys()) - required_keys
+            extra = set(entry.keys()) - allowed_keys
             assert not extra, (
                 f"'{field_name}' has unexpected key(s): {extra}.\n"
-                f"Only 'help' and 'tooltip' are allowed."
+                f"Only 'help', 'tooltip', and 'label' are allowed."
             )
 
     def test_all_values_are_strings(self):

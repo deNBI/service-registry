@@ -24,6 +24,7 @@ django-ipware==7.0.1          # IP address resolution for django-axes (required 
 django-csp==4.0               # Content Security Policy headers
 django-ratelimit==4.1.0       # Per-view rate limiting
 django-cors-headers==4.9.0    # CORS header management
+altcha==1.0.0                 # CAPTCHA — self-hosted proof-of-work challenge generation and verification
 
 # HTML sanitisation (XSS prevention on free-text inputs)
 bleach==6.3.0

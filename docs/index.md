@@ -56,8 +56,8 @@ A structured registration platform for de.NBI and ELIXIR-DE bioinformatics servi
 === ":material-laptop: Development"
 
     ```bash
-    git clone https://github.com/deNBI/denbi_service_registry
-    cd denbi_service_registry
+    git clone https://github.com/denbi/service-registry
+    cd service-registry
     cp .env.example .env      # set SECRET_KEY, DB_PASSWORD, REDIS_PASSWORD
     make build                # builds images + starts stack + runs migrations
     make superuser
