@@ -32,7 +32,7 @@ The core domain model. One row per registered service.
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
 | `id` | UUID | PK | Auto-generated (`uuid4`), never changes |
-| `status` | varchar(20) | NOT NULL | `draft` / `submitted` / `under_review` / `approved` / `rejected` |
+| `status` | varchar(20) | NOT NULL | `draft` / `submitted` / `under_review` / `approved` / `rejected` / `deprecated` |
 | `submitted_at` | timestamptz | NOT NULL | Set on creation (`auto_now_add`) |
 | `updated_at` | timestamptz | NOT NULL | Updated on every save (`auto_now`) |
 | `submission_ip` | inet | nullable | Source IP stored for abuse investigation only |
@@ -61,6 +61,7 @@ The core domain model. One row per registered service.
 | `toolbox_name` | varchar(200) | Required when `is_toolbox=True` |
 | `user_knowledge_required` | text | Optional prerequisites for users |
 | `publications_pmids` | text | Comma-separated PMIDs or DOIs; max 50 entries |
+| `logo` | varchar (file path) | nullable; stored as `logos/<uuid4>.<ext>` under `MEDIA_ROOT`; original filename discarded; accepted types: PNG, JPEG, SVG; max 10 MB (configurable) |
 
 M2M relations (via junction tables):
 
@@ -114,7 +115,6 @@ All URL fields must use `https://`. Domain-specific validators are applied on sa
 |---|---|---|
 | `keywords_uncited` | text | Keywords to detect tool mentions without formal citation |
 | `keywords_seo` | text | SEO keywords for the catalogue listing |
-| `outreach_consent` | boolean | Consent for de.NBI to use this service in social media |
 | `survey_participation` | boolean | Willingness to participate in de.NBI user surveys; default `true` |
 | `comments` | text | Optional notes for the administration office |
 

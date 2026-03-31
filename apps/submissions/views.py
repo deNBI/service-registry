@@ -11,18 +11,21 @@ Views:
   - validate_field : HTMX endpoint for per-field inline validation
 """
 
+import base64
+import datetime
+import json
 import logging
 
 from django.conf import settings
 from django.contrib import messages
-from django.http import HttpRequest, HttpResponse
+from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils.decorators import method_decorator
 from django.views import View
 from django_ratelimit.decorators import ratelimit
 
 from .forms import SubmissionForm, UpdateKeyForm
-from .models import ServiceSubmission, SubmissionAPIKey
+from .models import ServiceSubmission, SubmissionAPIKey, SubmissionStatus
 from .tasks import send_submission_notification, send_update_notification
 
 logger = logging.getLogger(__name__)
@@ -59,6 +62,70 @@ def _hash_user_agent(request: HttpRequest) -> str:
     return hashlib.sha256(ua.encode("utf-8")).hexdigest()
 
 
+def _verify_altcha(request: HttpRequest) -> bool:
+    """
+    Verify the ALTCHA proof-of-work payload submitted with the form.
+
+    The widget writes a Base64-encoded JSON string into a hidden field named
+    ``altcha``.  This function decodes it and calls ``altcha.verify_solution``
+    with expiry checking enabled.
+
+    Returns True (bypassed) when ``ALTCHA_HMAC_KEY`` is not configured — this
+    keeps local development and tests working without any extra setup.
+    """
+    hmac_key = settings.ALTCHA_HMAC_KEY
+    if not hmac_key:
+        return True  # ALTCHA disabled — no key configured
+
+    from altcha import verify_solution
+
+    payload_b64 = request.POST.get("altcha", "")
+    if not payload_b64:
+        return False
+    try:
+        payload = json.loads(base64.b64decode(payload_b64))
+    except Exception:
+        return False
+    ok, _ = verify_solution(payload, hmac_key, check_expires=True)
+    return ok
+
+
+# ---------------------------------------------------------------------------
+# AltchaChallengeView — serve fresh proof-of-work challenges
+# ---------------------------------------------------------------------------
+
+
+@method_decorator(
+    ratelimit(key="ip", rate=settings.RATE_LIMIT_CHALLENGE, method="GET", block=True),
+    name="dispatch",
+)
+class AltchaChallengeView(View):
+    """
+    GET /captcha/
+
+    Returns a fresh ALTCHA challenge as JSON.  The challenge is signed with
+    ``ALTCHA_HMAC_KEY`` and expires after 10 minutes.  The browser widget
+    fetches this endpoint automatically when the user focuses the form.
+    """
+
+    def get(self, request: HttpRequest) -> JsonResponse:
+        if not settings.ALTCHA_HMAC_KEY:
+            return JsonResponse({"detail": "ALTCHA not configured"}, status=503)
+
+        from altcha import ChallengeOptions, create_challenge
+
+        options = ChallengeOptions(
+            hmac_key=settings.ALTCHA_HMAC_KEY,
+            max_number=100_000,
+            expires=datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(minutes=10),
+        )
+        challenge = create_challenge(options)
+        response = JsonResponse(challenge.to_dict())
+        response["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        return response
+
+
 # ---------------------------------------------------------------------------
 # RegisterView — new submission
 # ---------------------------------------------------------------------------
@@ -79,15 +146,23 @@ class RegisterView(View):
 
     template_name = "submissions/register.html"
 
+    def _context(self, form):
+        return {"form": form, "altcha_enabled": bool(settings.ALTCHA_HMAC_KEY)}
+
     def get(self, request: HttpRequest) -> HttpResponse:
         form = SubmissionForm()
-        return render(request, self.template_name, {"form": form})
+        return render(request, self.template_name, self._context(form))
 
     def post(self, request: HttpRequest) -> HttpResponse:
-        form = SubmissionForm(request.POST)
+        if not _verify_altcha(request):
+            form = SubmissionForm(request.POST, request.FILES)
+            form.add_error(None, "CAPTCHA verification failed. Please try again.")
+            return render(request, self.template_name, self._context(form), status=400)
+
+        form = SubmissionForm(request.POST, request.FILES)
 
         if not form.is_valid():
-            return render(request, self.template_name, {"form": form}, status=422)
+            return render(request, self.template_name, self._context(form), status=422)
 
         # Save submission
         submission: ServiceSubmission = form.save(commit=False)
@@ -229,6 +304,13 @@ class EditView(View):
         except SubmissionAPIKey.DoesNotExist:
             return None
 
+    def _context(self, form, submission):
+        return {
+            "form": form,
+            "submission": submission,
+            "altcha_enabled": bool(settings.ALTCHA_HMAC_KEY),
+        }
+
     def get(self, request: HttpRequest) -> HttpResponse:
         submission = self._get_submission(request)
         if not submission:
@@ -238,14 +320,7 @@ class EditView(View):
             return redirect("submissions:update")
 
         form = SubmissionForm(instance=submission)
-        return render(
-            request,
-            self.template_name,
-            {
-                "form": form,
-                "submission": submission,
-            },
-        )
+        return render(request, self.template_name, self._context(form, submission))
 
     def post(self, request: HttpRequest) -> HttpResponse:
         submission = self._get_submission(request)
@@ -255,16 +330,38 @@ class EditView(View):
             )
             return redirect("submissions:update")
 
-        form = SubmissionForm(request.POST, instance=submission)
+        # Handle deprecation request (separate action, not a form save)
+        if "_deprecate" in request.POST:
+            if submission.status != SubmissionStatus.DEPRECATED:
+                submission.status = SubmissionStatus.DEPRECATED
+                submission.save(update_fields=["status"])
+                send_submission_notification.delay(
+                    str(submission.id), event="status_changed"
+                )
+                logger.info(
+                    "Submission deprecated by owner",
+                    extra={"submission_id": str(submission.id)},
+                )
+            messages.success(request, "Your service has been marked as deprecated.")
+            return redirect("submissions:update")
+
+        if not _verify_altcha(request):
+            form = SubmissionForm(request.POST, request.FILES, instance=submission)
+            form.add_error(None, "CAPTCHA verification failed. Please try again.")
+            return render(
+                request,
+                self.template_name,
+                self._context(form, submission),
+                status=400,
+            )
+
+        form = SubmissionForm(request.POST, request.FILES, instance=submission)
 
         if not form.is_valid():
             return render(
                 request,
                 self.template_name,
-                {
-                    "form": form,
-                    "submission": submission,
-                },
+                self._context(form, submission),
                 status=422,
             )
 
@@ -315,8 +412,11 @@ def validate_field(request: HttpRequest) -> HttpResponse:
     if not field_name:
         return HttpResponse(status=400)
 
-    # Create form with only this field's data to trigger its validation
-    form = SubmissionForm(request.POST)
+    # Create form with only this field's data to trigger its validation.
+    # request.FILES is included for correctness, but note that HTMX inline
+    # validation cannot carry file data (browsers don't serialise file inputs
+    # in XHR requests), so FileField validation via this endpoint is a no-op.
+    form = SubmissionForm(request.POST, request.FILES)
     form.is_valid()  # Populates form.errors
 
     field = form.fields.get(field_name)

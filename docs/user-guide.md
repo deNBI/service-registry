@@ -147,6 +147,33 @@ Domain-specific URL fields enforce a prefix match in addition to the HTTPS requi
 and databases. If your service or the data formats it uses are listed in FAIRsharing,
 linking here helps with discoverability and FAIR compliance metadata.
 
+### Logo Upload (Section B)
+
+You can optionally upload a logo for your service. This field is not required.
+
+| Property | Value |
+|---|---|
+| Accepted formats | PNG, JPEG, SVG |
+| Maximum size | 10 MB |
+| Required | No |
+
+**How to upload:**
+
+1. In Section B, click the logo upload field
+2. Select a PNG, JPEG, or SVG file from your computer
+3. The logo is validated automatically on form submission
+
+**What happens to uploaded logos:**
+
+- JPEG and PNG files are re-encoded to strip any embedded EXIF metadata
+- SVG files are sanitised to remove scripts, event handlers, and external links
+- The original filename is discarded — a unique identifier is assigned internally
+- The logo appears in the admin view and is accessible via the API (`logo_url` field)
+
+To replace a logo, simply upload a new one when editing your submission. Previous logos are retained on disk but replaced for display purposes.
+
+---
+
 ### Outreach and Survey fields (Section F)
 
 | Field                    | What it means                                                                                                                                                 |
@@ -172,8 +199,19 @@ Your submission moves through these states:
 | **Under Review** | Actively being reviewed by the service coordination team.                                             |
 | **Approved**     | Your service has been accepted and will appear in the de.NBI services catalogue.                      |
 | **Rejected**     | The submission was not accepted. You will receive an email explaining why. You may edit and resubmit. |
+| **Deprecated**   | The service is no longer active. You can mark your own service as deprecated via the edit form (see below). Only the registry team can reverse this. |
 
 If you edit a submission that was already **Approved**, the status resets to **Submitted** and the administration office is notified to re-review your changes.
+
+### Deprecating Your Service
+
+If your service is no longer active, you can mark it as deprecated directly from the edit form:
+
+1. Log in with your API key via the Update / Edit page (`/update/`).
+2. Scroll to the **Danger Zone** card in the right sidebar.
+3. Click **Deprecate this service** and confirm in the dialog.
+
+The status will be set to **Deprecated** and the registry team will be notified. Only registry admins can reverse a deprecation — contact [servicecoordination@denbi.de](mailto:servicecoordination@denbi.de) if you need to reactivate a deprecated service.
 
 ---
 

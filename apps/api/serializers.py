@@ -145,6 +145,15 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
     # bio.tools nested summary (read-only; updated by sync task)
     biotoolsrecord = serializers.SerializerMethodField()
 
+    # Logo: write accepts a file upload; read returns an absolute URL or null
+    logo = serializers.FileField(
+        required=False,
+        allow_null=True,
+        allow_empty_file=False,
+        write_only=True,
+    )
+    logo_url = serializers.SerializerMethodField()
+
     links = serializers.SerializerMethodField()
 
     class Meta:
@@ -196,10 +205,12 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
             # Section E
             "kpi_monitoring",
             "kpi_start_year",
+            # Logo
+            "logo",
+            "logo_url",
             # Section F
             "keywords_uncited",
             "keywords_seo",
-            "outreach_consent",
             "survey_participation",
             "comments",
             # Section G — write-only; must be True to create/update
@@ -214,6 +225,19 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
             # Never echo consent back in responses — it is always True for valid records
             "data_protection_consent": {"write_only": True},
         }
+
+    def get_logo_url(self, obj) -> str | None:
+        if not obj.logo:
+            return None
+        request = self.context.get("request")
+        return request.build_absolute_uri(obj.logo.url) if request else obj.logo.url
+
+    def validate_logo(self, value):
+        if value is None:
+            return value
+        from apps.submissions.logo_utils import validate_and_process_logo
+
+        return validate_and_process_logo(value)
 
     def get_edam_topics(self, obj) -> list:
         from apps.api.serializers import (

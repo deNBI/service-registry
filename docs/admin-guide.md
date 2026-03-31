@@ -27,6 +27,7 @@ The list shows: service name, submitter, status badge, service centre, ELIXIR-DE
 The detail view shows all form sections A–G plus:
 - Submission metadata (ID, timestamps, IP — IP visible only to superusers)
 - EDAM Topics and EDAM Operations annotations selected by the submitter
+- **Logo** — inline preview and upload field (see [Service Logos](#service-logos))
 - **bio.tools Record** section (if a bio.tools URL was entered) — see [bio.tools Records](#biotools-records)
 - API key management section at the bottom
 
@@ -38,14 +39,47 @@ The detail view shows all form sections A–G plus:
 - **Submitter notification** — sent directly to the `internal_contact_email` of the submission with a plain-language status update ("Your service has been approved / was not approved at this time"). This is separate from the admin email so the submitter receives a clear, action-oriented message rather than the full internal report.
 
 **Bulk:** Select submissions in the list view, then choose an action from the dropdown:
-- Approve selected submissions
-- Reject selected submissions
-- Mark selected as Under Review
+
+| Action | Result |
+|--------|--------|
+| Approve selected | Sets status → `Approved` |
+| Reject selected | Sets status → `Rejected` |
+| Mark selected as Under Review | Sets status → `Under Review` |
+| Deprecate selected | Sets status → `Deprecated` |
+| Undeprecate selected | Sets status → `Submitted` (returns to review queue) |
+
+All transitions fire the standard admin + submitter email notifications via Celery.
+
+**Individual (change view):** Open a submission — the "Change Status" panel shows buttons for all transitions including **Deprecate** and **Undeprecate**. The current status is highlighted and its button is disabled.
+
+!!! note "Deprecation is owner-reversible only by admins"
+    Service owners can mark their own service as deprecated via the edit form. Only admins can reverse a deprecation (via bulk action or the change view button), which resets status to `Submitted` for re-review.
+
+### Filtering by Status
+
+The list view sidebar filters by **status**, making it easy to find submissions in a specific state:
+`Draft` · `Submitted` · `Under Review` · `Approved` · `Rejected` · `Deprecated`
+
+Combine status with the category, service centre, or date filters to narrow down exports.
 
 ### Exporting Submissions
 
 Select submissions → choose **Export selected as CSV** or **Export selected as JSON**.
-Exported files contain public fields only (no internal contact emails).
+
+Both formats include all submission fields:
+
+| Category | Fields included |
+|----------|----------------|
+| Identity | `id`, `status`, `submitted_at`, `updated_at` |
+| Submitter | `submitter_first_name/last_name/affiliation`, `host_institute`, `public_contact_email`, `internal_contact_name/email` |
+| Service | `service_name`, `service_description`, `year_established`, `is_toolbox`, `toolbox_name`, `user_knowledge_required`, `publications_pmids` |
+| Relations | `service_categories`, `responsible_pis` (semicolons in CSV, arrays in JSON) |
+| EDAM | `edam_topics`, `edam_operations` — label + URI (semicolons in CSV, objects in JSON) |
+| Links | `website_url`, `terms_of_use_url`, `license`, `github_url`, `biotools_url`, `fairsharing_url`, `other_registry_url` |
+| KPIs | `kpi_monitoring`, `kpi_start_year` |
+| Discovery | `keywords_uncited`, `keywords_seo`, `register_as_elixir`, `survey_participation`, `comments` |
+| Logo | `logo_url` — absolute URL, or empty if no logo uploaded |
+| bio.tools | `biotools_id`, `biotools_name`, `biotools_edam_topic_uris`, `biotools_edam_operation_uris` — empty if no bio.tools record |
 
 ---
 
@@ -100,6 +134,46 @@ Both interfaces support soft-delete: `DELETE` via the API (or setting `is_active
 
 - Add new category types as needed.
 - `is_active = False` hides from the form.
+
+---
+
+## Service Logos
+
+Submitters can optionally upload a logo for their service during registration or when editing their submission. Logos are also uploadable directly from the admin detail view.
+
+### Accepted formats and limits
+
+| Property | Value |
+|---|---|
+| Formats | PNG, JPEG, SVG |
+| Maximum size | 10 MB (configurable — see [`[uploads]` in configuration](configuration.md#uploads)) |
+| Storage | `mediafiles/logos/<uuid>.<ext>` inside the container |
+| Served at | `/media/logos/<uuid>.<ext>` — via Gunicorn (nginx proxy_passes everything) |
+
+### Security processing
+
+Every upload goes through automatic validation before being stored:
+
+- **Magic bytes** — the file type is detected from its binary header, not its extension or MIME type
+- **JPEG / PNG** — re-encoded via Pillow to strip EXIF metadata and verify file integrity
+- **SVG** — parsed with Python's stdlib XML parser (safe on Python 3.12+/Expat 2.7.1, which blocks XXE and entity-expansion attacks), then scrubbed of `<script>` elements, `on*` event-handler attributes, and non-fragment external `href` values
+- **Filename** — original filename is discarded; a UUID is assigned before storage
+
+### Admin usage
+
+Open a submission's detail view. The **B — Service Master Data** section shows:
+
+- **Logo** — file upload widget to add or replace the current logo
+- **Logo preview** — inline image display of the currently stored logo (or "—" if none)
+
+!!! note "Old logos are retained"
+    When a submitter or admin uploads a replacement logo, the previous file remains on disk. No automatic cleanup is performed. If disk space becomes a concern, orphaned logo files can be removed manually or via a future management command.
+
+!!! info "Production persistence"
+    Logo files are stored in the `media_data` Docker volume (mounted at `/app/mediafiles`).
+    Without a persistent volume or bind mount, logos are lost when the container is replaced.
+    See [Deployment → Uploaded Media](deployment.md#uploaded-media-service-logos) for volume
+    configuration, bind-mount instructions, and backup procedures.
 
 ---
 
@@ -386,16 +460,12 @@ docker compose exec web python manage.py sync_biotools \
 
 ### Stale Draft Cleanup {#stale-drafts}
 
-Submissions left in `draft` status (saved but never submitted) are automatically purged
-by the `cleanup_stale_drafts` Celery beat task, which runs daily at **03:00 UTC**.
+The `cleanup_stale_drafts` Celery beat task runs daily and removes Django session
+records that expired more than **24 hours** ago.  This keeps the session table from
+accumulating rows left behind by users who opened the form but never submitted.
 
-The default retention period is **30 days** — drafts older than 30 days are deleted permanently.
-
-To change the retention period, edit `STALE_DRAFT_DAYS` in `config/settings.py`:
-
-```python
-STALE_DRAFT_DAYS = 30  # days; set to 0 to disable automatic cleanup
-```
+The task does not delete `ServiceSubmission` records — only the underlying Django
+`Session` rows that the browser draft auto-save feature writes to.
 
 To trigger cleanup manually:
 
@@ -511,6 +581,56 @@ docker compose exec worker celery -A config inspect ping
 ```
 
 The `worker` container reports a Docker health status based on `celery inspect ping`. The `beat` container has no inspection API so its healthcheck is disabled — liveness is inferred from the process staying up.
+
+---
+
+## ALTCHA CAPTCHA
+
+The registration and edit forms are protected by [ALTCHA](https://altcha.org/) — a
+self-hosted, privacy-respecting proof-of-work CAPTCHA.  The browser widget is served
+from `static/js/altcha.min.js` (no CDN, no third-party requests) and the challenge
+endpoint is `GET /captcha/`.
+
+### How it works
+
+1. When the form loads, the widget automatically fetches a signed challenge from `/captcha/`.
+2. The browser solves a small SHA-256 proof-of-work puzzle (invisible to the user).
+3. On submit, the solved payload is included in the form POST as the `altcha` field.
+4. The server verifies the signature and expiry before processing the form.
+
+No user interaction is required — ALTCHA runs silently in the background.
+
+### Setting the HMAC key
+
+`ALTCHA_HMAC_KEY` in `.env` is the secret used to sign and verify challenges.
+
+Generate a strong key:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Then set it in `.env`:
+
+```bash
+ALTCHA_HMAC_KEY=<your-generated-key>
+```
+
+Restart the web service to apply: `docker compose restart web`
+
+!!! warning "Required in production"
+    When `ALTCHA_HMAC_KEY` is empty, ALTCHA verification is **bypassed entirely** — safe
+    for local development but must be configured before deploying publicly.
+
+### Rotating the ALTCHA HMAC key
+
+1. Generate a new key: `python -c "import secrets; print(secrets.token_hex(32))"`
+2. Update `ALTCHA_HMAC_KEY` in `.env`.
+3. Restart the web service: `docker compose restart web`
+
+Any challenges signed with the old key will immediately become invalid.  Users who
+opened the form before the rotation will see a CAPTCHA failure on submit — they need
+to reload the page to fetch a new challenge signed with the new key.
 
 ---
 

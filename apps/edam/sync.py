@@ -10,7 +10,7 @@ Core sync logic shared by:
 import os
 import re
 import urllib.request
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET  # nosec B405 — Python 3.12 bundles Expat 2.7.1 which fixes XXE/billion-laughs
 from collections import defaultdict
 
 RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
@@ -99,7 +99,7 @@ def run_sync(
             req = urllib.request.Request(
                 url, headers={"User-Agent": "denbi-registry/1.0 sync_edam"}
             )
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=120) as resp:  # nosec B310
                 raw_bytes = resp.read()
         else:
             with open(url, "rb") as f:
@@ -120,9 +120,9 @@ def run_sync(
     edam_version = ""
     ontology_el = root.find(_tag(OWL, "Ontology"))
     if ontology_el is not None:
-        version_el = ontology_el.find(_tag(OWL, "versionInfo")) or ontology_el.find(
-            f"{{{RDFS}}}comment"
-        )
+        version_el = ontology_el.find(_tag(OWL, "versionInfo"))
+        if version_el is None:
+            version_el = ontology_el.find(f"{{{RDFS}}}comment")
         edam_version = _text(version_el)
         if not edam_version:
             version_iri = ontology_el.get(_tag(RDF, "about"), "")

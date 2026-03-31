@@ -19,8 +19,8 @@ Everything you need to go from a fresh clone to a running local stack.
 ### 2. Clone and configure
 
 ```bash
-git clone https://github.com/deNBI/denbi_service_registry
-cd denbi_service_registry
+git clone https://github.com/denbi/service-registry
+cd service-registry
 cp .env.example .env
 ```
 
@@ -148,6 +148,8 @@ make typecheck     # mypy
 | `make lint-fix` | Auto-fix ruff lint and formatting issues |
 | `make audit` | `pip-audit` against production requirements |
 | `make typecheck` | Run mypy type checker |
+| `make dead-code` | `vulture` dead-code detection (unused functions, variables) |
+| `make security` | `bandit` SAST security scan (medium + high severity) |
 
 **Documentation**
 
@@ -233,6 +235,7 @@ All third-party CSS and JavaScript is downloaded once and committed to `static/`
 | Bootstrap | 5.3.3 | `static/css/bootstrap.min.css`, `static/js/bootstrap.bundle.min.js` | All pages |
 | HTMX | 1.9.12 | `static/js/htmx.min.js` | bio.tools prefill |
 | Tom-Select | 2.3.1 | `static/css/tom-select.bootstrap5.min.css`, `static/js/tom-select.complete.min.js` | EDAM multi-select widget |
+| ALTCHA | 2.3.0 | `static/js/altcha.min.js` | Registration and edit forms (CAPTCHA widget) |
 | swagger-ui-dist | 5.18.2 | `static/swagger-ui/` (4 files) | `/api/docs/` |
 | ReDoc | 2.2.0 | `static/redoc/bundles/redoc.standalone.js` | `/api/redoc/` |
 | de.NBI favicon | — | `static/img/favicon.ico` | All pages, admin |
@@ -283,6 +286,17 @@ All third-party CSS and JavaScript is downloaded once and committed to `static/`
     curl -sSfL https://cdn.jsdelivr.net/npm/redoc@${VERSION}/bundles/redoc.standalone.js \
         -o static/redoc/bundles/redoc.standalone.js
     ```
+
+=== "ALTCHA"
+
+    ```bash
+    VERSION=2.3.0
+    curl -sSfL https://cdn.jsdelivr.net/gh/altcha-org/altcha@v${VERSION}/dist/altcha.min.js \
+        -o static/js/altcha.min.js
+    ```
+
+    The version comment at the top of the downloaded file confirms which release was
+    fetched.  Update the version entry in the inventory table above when upgrading.
 
 ### Can I use an external URL instead of vendoring?
 
@@ -336,6 +350,70 @@ The filter is unit-tested in `tests/test_template_tags.py` (`TestLinkifyDescript
 Add a new test there whenever you extend the filter's behaviour.
 Integration tests that render `form_body.html` or `register.html` with patched YAML
 data live in `tests/test_forms.py` (`TestSectionDescriptionsYAML`).
+
+**Styling:**
+
+`.section-description` is styled in `static/css/registry.css` as a light tinted callout
+box — subtle `rgba(0,0,0,0.03)` background with rounded corners and muted text — to
+visually distinguish it from form input labels and fields. If you change the style, keep
+the distinction clear: the description is contextual guidance, not an actionable form
+element.
+
+---
+
+## Logo upload security pipeline
+
+Uploaded service logos pass through `apps/submissions/logo_utils.py` before being
+stored. Understanding this module is useful when modifying file upload handling.
+
+### Entry point
+
+```python
+from apps.submissions.logo_utils import validate_and_process_logo
+
+result = validate_and_process_logo(file_obj)  # → InMemoryUploadedFile
+```
+
+### Processing steps (in order)
+
+| Step | What happens |
+|------|-------------|
+| Size check | Raises `ValidationError` if file exceeds `settings.LOGO_MAX_BYTES` (configurable in `site.toml`) |
+| Magic-byte detection | Reads first bytes to determine type — never trusts file extension or MIME header |
+| JPEG / PNG | Re-encoded via Pillow: strips EXIF metadata, verifies image integrity |
+| SVG | Parsed by stdlib `xml.etree.ElementTree` (safe on Python 3.12+/Expat 2.7.1, which blocks XXE and entity-expansion attacks), then scrubbed of `<script>` elements, `on*` event-handler attributes, non-fragment `href`/`src` URLs |
+| UUID filename | Original filename is discarded; `_logo_upload_to()` in `models.py` assigns `logos/<uuid4>.<ext>` |
+
+### Known limitation
+
+CSS-based side-channels in SVG (e.g. `url()` inside `<style>` tags) are not fully
+mitigated. If stricter guarantees are needed, reject SVG entirely or render to raster
+via `cairosvg` before storage.
+
+### Adding a new allowed format
+
+1. Add magic-byte detection to `_sniff_type()` — return a new type string
+2. Add a processing function (strip metadata, verify integrity)
+3. Add the new branch to `validate_and_process_logo()`
+4. Add tests to `tests/test_logo_utils.py`
+
+### Media files in development
+
+In development (`docker-compose.yml`), the project root is bind-mounted as
+`.:/app`. Uploaded files land in `mediafiles/logos/` inside the container,
+which maps to `<project-root>/mediafiles/` on your host. The directory is
+listed in `.gitignore` — do not commit uploaded logos.
+
+### Media files in tests
+
+`config/settings_test.py` overrides `MEDIA_ROOT` to a temporary directory
+(`tempfile.mkdtemp()`), so test file uploads never touch the project's
+`mediafiles/` directory. The temp directory is cleaned up by the OS after
+the test process exits. Tests that assert on specific file URLs should use
+the `settings` + `tmp_path` fixtures to set a deterministic `MEDIA_ROOT`
+(see `tests/test_api.py → TestLogoUpload` for the pattern).
+
+---
 
 ### Available simple tags
 

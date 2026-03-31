@@ -114,6 +114,19 @@ class SubmissionForm(forms.ModelForm):
       - Email confirmation validated on blur
     """
 
+    # Logo upload field (optional)
+    logo = forms.FileField(
+        label=_("Service logo"),
+        required=False,
+        help_text=_("Optional. PNG, JPEG, or SVG. Maximum 10 MB."),
+        widget=forms.FileInput(
+            attrs={
+                "class": "form-control",
+                "accept": ".png,.jpg,.jpeg,.svg,image/png,image/jpeg,image/svg+xml",
+            }
+        ),
+    )
+
     # Email confirmation field (not stored — form-only)
     internal_contact_email_confirm = forms.EmailField(
         label=_("Confirm internal contact email"),
@@ -251,9 +264,6 @@ class SubmissionForm(forms.ModelForm):
                 attrs={"class": "form-control", "rows": 2}
             ),
             "keywords_seo": forms.Textarea(attrs={"class": "form-control", "rows": 2}),
-            "outreach_consent": forms.RadioSelect(
-                choices=[(True, "Yes"), (False, "No")]
-            ),
             "survey_participation": forms.RadioSelect(
                 choices=[(True, "Yes"), (False, "No")]
             ),
@@ -297,7 +307,6 @@ class SubmissionForm(forms.ModelForm):
             "kpi_start_year": _("Year KPI monitoring started"),
             "keywords_uncited": _("Keywords to identify usage without proper citation"),
             "keywords_seo": _("SEO-relevant keywords"),
-            "outreach_consent": _("Outreach consent – social media showcasing"),
             "survey_participation": _("User survey participation"),
             "comments": _("Any Comments"),
             "data_protection_consent": _(
@@ -343,12 +352,14 @@ class SubmissionForm(forms.ModelForm):
                 "internal_contact_email_confirm"
             ].initial = self.instance.internal_contact_email
 
-        # Apply YAML-driven help text and tooltip attributes
+        # Apply YAML-driven help text, tooltip, and label attributes
         for field_name, field_obj in self.fields.items():
             texts = _FORM_TEXTS.get(field_name, {})
             if texts.get("help"):
                 field_obj.help_text = texts["help"]
-            field_obj.tooltip = texts.get("tooltip", "")
+            if texts.get("label"):
+                field_obj.label = texts["label"]
+            field_obj.tooltip = texts.get("tooltip", "").strip()
 
         # Expose section descriptions for template rendering
         self.section_texts = _FORM_TEXTS.get("sections", {})
@@ -406,6 +417,14 @@ class SubmissionForm(forms.ModelForm):
         if value and not value.startswith("https://"):
             raise ValidationError(_("URL must use https://."))
         return value
+
+    def clean_logo(self):
+        f = self.cleaned_data.get("logo")
+        if not f:
+            return f  # Optional — None/empty is valid
+        from .logo_utils import validate_and_process_logo
+
+        return validate_and_process_logo(f)
 
     def clean_data_protection_consent(self) -> bool:
         value = self.cleaned_data.get("data_protection_consent")

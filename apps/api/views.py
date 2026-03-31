@@ -20,6 +20,7 @@ import logging
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from rest_framework import filters, mixins, status, viewsets
 from rest_framework.authentication import TokenAuthentication
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
@@ -85,6 +86,9 @@ class SubmissionViewSet(
     Authorization: ApiKey <your-key>
     ```
     """
+
+    # Accept JSON (default) and multipart/form-data (for logo file uploads)
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     queryset = (
         ServiceSubmission.objects.select_related("service_center", "biotoolsrecord")
@@ -241,7 +245,7 @@ class SubmissionViewSet(
             "Returns a paginated list of all service submissions.\n\n"
             "Requires admin `Authorization: Token <admin-token>` header.\n\n"
             "**Filters:**\n"
-            "- `?status=submitted|under_review|approved|rejected`\n"
+            "- `?status=submitted|under_review|approved|rejected|deprecated`\n"
             "- `?service_center=<short_name>`\n"
             "- `?year_established=<year>`\n"
             "- `?register_as_elixir=true|false`\n"

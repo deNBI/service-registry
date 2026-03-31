@@ -49,6 +49,7 @@ _sc_links = _sc.get("links", {})
 _sc_api = _sc.get("api", {})
 _sc_edam = _sc.get("edam", {})
 _sc_admin = _sc.get("admin", {})
+_sc_uploads = _sc.get("uploads", {})
 
 
 def env(key, default=None, required=False):
@@ -196,6 +197,12 @@ MEDIA_ROOT = BASE_DIR / "mediafiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ---------------------------------------------------------------------------
+# Uploads
+# ---------------------------------------------------------------------------
+# Maximum logo file size in bytes. Configurable in config/site.toml [uploads].
+LOGO_MAX_BYTES: int = _sc_uploads.get("logo_max_bytes", 10 * 1024 * 1024)
+
+# ---------------------------------------------------------------------------
 # Security headers
 # ---------------------------------------------------------------------------
 SECURE_HSTS_SECONDS = env_int("HSTS_SECONDS", 31536000)
@@ -207,7 +214,7 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 # absolute URLs in emails and redirects when behind a reverse proxy.
 USE_X_FORWARDED_HOST = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
-SECURE_BROWSER_XSS_FILTER = True
+URLIZE_ASSUME_HTTPS = True  # opt in now; becomes the hard default in Django 7.0
 
 SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", not DEBUG)
 SESSION_COOKIE_HTTPONLY = True
@@ -231,6 +238,16 @@ ADMIN_URL_PREFIX = env("ADMIN_URL_PREFIX", default=None) or _sc_admin.get(
 )
 RATE_LIMIT_SUBMIT = env("RATE_LIMIT_SUBMIT", "10/h")
 RATE_LIMIT_UPDATE = env("RATE_LIMIT_UPDATE", "20/h")
+RATE_LIMIT_CHALLENGE = env("RATE_LIMIT_CHALLENGE", "60/h")
+
+# ---------------------------------------------------------------------------
+# ALTCHA — self-hosted proof-of-work CAPTCHA
+# ---------------------------------------------------------------------------
+# HMAC key used to sign and verify ALTCHA challenges.
+# Set ALTCHA_HMAC_KEY to a strong random secret in production.
+# When empty (default), ALTCHA verification is bypassed — safe for local
+# development but must be configured before deploying publicly.
+ALTCHA_HMAC_KEY = env("ALTCHA_HMAC_KEY", "")
 
 # ---------------------------------------------------------------------------
 # Authentication
@@ -243,8 +260,9 @@ AUTHENTICATION_BACKENDS = [
 AXES_FAILURE_LIMIT = env_int("AXES_FAILURE_LIMIT", 5)
 AXES_COOLOFF_TIME = env_int("AXES_COOLOFF_MINUTES", 30) / 60
 AXES_LOCKOUT_CALLABLE = None
-AXES_RESET_ON_SUCCESS = True
+AXES_RESET_ON_SUCCESS = False  # keep AccessAttempt rows after a successful login
 AXES_LOCKOUT_PARAMETERS = ["ip_address", "username"]
+AXES_ENABLE_ACCESS_FAILURE_LOG = True  # Enable logging of all access failures
 # Tell axes to read the real client IP from proxy headers rather than REMOTE_ADDR.
 # REMOTE_ADDR is the internal nginx server IP when behind a reverse proxy;
 # X-Real-IP is set by nginx to $remote_addr (the actual connecting client IP).
@@ -454,6 +472,10 @@ CONTENT_SECURITY_POLICY = {
         "img-src": _csp_img_origins(),
         "font-src": ("'self'",),
         "connect-src": ("'self'",),
+        # Altcha proof-of-work widget spawns Web Workers via blob: URLs to run
+        # SHA-256 computation off the main thread. Without this, workers are
+        # blocked and verification never completes.
+        "worker-src": ("blob:",),
         "frame-src": ("'none'",),
         "frame-ancestors": ("'none'",),
         "form-action": ("'self'",),

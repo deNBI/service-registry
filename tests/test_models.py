@@ -16,6 +16,7 @@ import hashlib
 import pytest
 from django.core.exceptions import ValidationError
 
+from apps.submissions.models import SubmissionStatus
 from tests.factories import (
     APIKeyFactory,
     ServiceSubmissionFactory,
@@ -319,3 +320,24 @@ class TestSensitiveFieldIsolation:
         data = SubmissionDetailSerializer(sub).data
         assert "key_hash" not in str(data)
         assert key_obj.key_hash not in str(data)
+
+
+# ===========================================================================
+# SubmissionStatus choices
+# ===========================================================================
+
+
+class TestSubmissionStatusChoices:
+    def test_deprecated_is_a_valid_status_choice(self):
+        assert "deprecated" in SubmissionStatus.values
+
+    def test_all_expected_statuses_present(self):
+        expected = {
+            "draft",
+            "submitted",
+            "under_review",
+            "approved",
+            "rejected",
+            "deprecated",
+        }
+        assert expected == set(SubmissionStatus.values)

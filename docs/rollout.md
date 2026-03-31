@@ -148,7 +148,7 @@ deploy-staging:
   only: [tags]
   environment: staging
   script:
-    - ssh deploy@staging.denbi.de "IMAGE_TAG=$CI_COMMIT_TAG /opt/denbi/scripts/deploy.sh"
+    - ssh $DEPLOY_USER@$STAGING_HOST "IMAGE_TAG=$CI_COMMIT_TAG /opt/denbi/scripts/deploy.sh"
 
 deploy-production:
   stage: deploy-production
@@ -156,7 +156,7 @@ deploy-production:
   environment: production
   when: manual # Requires explicit click in GitLab UI
   script:
-    - ssh deploy@service-registry.bi.denbi.de "IMAGE_TAG=$CI_COMMIT_TAG /opt/denbi/scripts/deploy.sh"
+    - ssh $DEPLOY_USER@$PROD_HOST "IMAGE_TAG=$CI_COMMIT_TAG /opt/denbi/scripts/deploy.sh"
 ```
 
 ---
@@ -191,7 +191,7 @@ IMAGE_TAG="${IMAGE_TAG}" $COMPOSE up -d --no-deps web worker beat
 # 5. Wait for health check to pass
 echo "--- Waiting for health check ---"
 for i in $(seq 1 12); do
-  STATUS=$(curl -sf http://localhost:8080/health/ready/ | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','error'))" 2>/dev/null || echo "error")
+  STATUS=$(curl -sf http://localhost:8000/health/ready/ | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','error'))" 2>/dev/null || echo "error")
   if [ "$STATUS" = "ok" ]; then
     echo "Health check passed."
     break
@@ -326,6 +326,10 @@ Run through this on staging after every deployment, before promoting to producti
 - [ ] Typing "prote" in the EDAM Topics field filters to proteomics-related terms
 - [ ] Entering `https://bio.tools/blast` in the bio.tools URL field and tabbing out triggers the prefill banner
 - [ ] Clicking "Apply prefill" populates name, description, and EDAM fields from bio.tools
+- [ ] `GET /captcha/` returns `200` with JSON containing `algorithm`, `challenge`, `salt`, `signature`, and `maxNumber` fields
+- [ ] `GET /captcha/` response has `Cache-Control: no-store` header
+- [ ] The ALTCHA widget appears on `/register/` (checkbox or spinner visible below Section G)
+- [ ] Clicking the Submit button on `/register/` triggers the ALTCHA proof-of-work solve (spinner, then checkmark) before the form posts
 - [ ] Submit a test registration with EDAM terms selected → confirm redirect to success page with API key
 - [ ] Copy the API key → go to `/update/` → enter key → form pre-populates including EDAM selections
 - [ ] Submit an update → confirm notification email received

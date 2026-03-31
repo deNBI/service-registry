@@ -23,6 +23,7 @@ from rest_framework.test import APIClient
 
 from tests.factories import (
     APIKeyFactory,
+    BioToolsFunctionFactory,
     BioToolsRecordFactory,
     PIFactory,
     ServiceCategoryFactory,
@@ -94,7 +95,6 @@ def _valid_payload():
         "license": "apache2",
         "kpi_monitoring": "planned",
         "kpi_start_year": "2021",
-        "outreach_consent": True,
         "survey_participation": True,
         "data_protection_consent": True,
     }
@@ -245,6 +245,38 @@ class TestSubmissionRetrieve:
         ):
             assert field not in data
 
+    def test_retrieve_biotoolsrecord_is_null_when_no_record(self, api_client):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.get(f"/api/v1/submissions/{sub.pk}/")
+        assert resp.status_code == 200
+        assert resp.json()["biotoolsrecord"] is None
+
+    def test_retrieve_biotoolsrecord_contains_functions_when_synced(self, api_client):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        bt = BioToolsRecordFactory(submission=sub, biotools_id="synced")
+        BioToolsFunctionFactory(
+            record=bt,
+            position=0,
+            operations=[
+                {"uri": "http://edamontology.org/operation_0004", "term": "Operation"}
+            ],
+        )
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.get(f"/api/v1/submissions/{sub.pk}/")
+        assert resp.status_code == 200
+        bt_data = resp.json()["biotoolsrecord"]
+        assert bt_data is not None
+        assert bt_data["biotools_id"] == "synced"
+        functions = bt_data["functions"]
+        assert len(functions) == 1
+        assert (
+            functions[0]["operations"][0]["uri"]
+            == "http://edamontology.org/operation_0004"
+        )
+
 
 # ===========================================================================
 # PATCH /api/v1/submissions/{id}/ — scope enforcement
@@ -367,6 +399,16 @@ class TestSubmissionList:
         resp = staff_client.get("/api/v1/submissions/?status=approved")
         for item in resp.json()["results"]:
             assert item["status"] == "approved"
+
+    def test_list_filtered_by_deprecated_status(self, staff_client):
+        ServiceSubmissionFactory(status="deprecated")
+        ServiceSubmissionFactory(status="approved")
+        resp = staff_client.get("/api/v1/submissions/?status=deprecated")
+        assert resp.status_code == 200
+        results = resp.json()["results"]
+        assert len(results) >= 1
+        for item in results:
+            assert item["status"] == "deprecated"
 
     def test_list_excludes_internal_contact_email(self, staff_client):
         ServiceSubmissionFactory(internal_contact_email="secret@example.com")
@@ -878,3 +920,134 @@ class TestBioToolsRecordAccessControl:
         resp = staff_client.get("/api/v1/biotools/")
         assert resp.status_code == 200
         assert len(resp.json()["results"]) == 2
+
+    def test_retrieve_response_shape(self, api_client):
+        """Response includes expected fields including nested functions."""
+        record = BioToolsRecordFactory(
+            submission__status="approved",
+            biotools_id="shapetool",
+            edam_topic_uris=["http://edamontology.org/topic_0091"],
+        )
+        BioToolsFunctionFactory(
+            record=record,
+            position=0,
+            operations=[
+                {"uri": "http://edamontology.org/operation_0004", "term": "Operation"}
+            ],
+        )
+        resp = api_client.get(f"/api/v1/biotools/{record.biotools_id}/")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["biotools_id"] == "shapetool"
+        assert "functions" in data
+        assert len(data["functions"]) == 1
+        assert (
+            data["functions"][0]["operations"][0]["uri"]
+            == "http://edamontology.org/operation_0004"
+        )
+        assert "edam_topic_uris" in data
+        assert "edam_topics_resolved" in data
+        assert "last_synced_at" in data
+
+
+# ---------------------------------------------------------------------------
+# Logo upload tests
+# ---------------------------------------------------------------------------
+
+
+def _make_png_bytes():
+    """Minimal 1×1 white PNG for use as a test logo."""
+    from PIL import Image
+    import io
+
+    buf = io.BytesIO()
+    Image.new("RGB", (1, 1), color=(255, 255, 255)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@pytest.mark.django_db
+class TestLogoUpload:
+    def test_logo_url_is_null_when_no_logo(self, api_client):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.get(f"/api/v1/submissions/{sub.id}/")
+        assert resp.status_code == 200
+        assert resp.json()["logo_url"] is None
+
+    def test_logo_url_is_absolute_when_logo_set(self, api_client, tmp_path, settings):
+        settings.MEDIA_ROOT = tmp_path
+        sub = ServiceSubmissionFactory(biotools_url="")
+        # Manually set a fake logo path
+        from django.core.files.base import ContentFile
+
+        sub.logo.save("logos/test.png", ContentFile(_make_png_bytes()), save=True)
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.get(f"/api/v1/submissions/{sub.id}/")
+        assert resp.status_code == 200
+        logo_url = resp.json()["logo_url"]
+        assert logo_url is not None
+        assert logo_url.startswith("http")
+        assert "/media/" in logo_url
+
+    def test_upload_valid_png_via_api(self, api_client, tmp_path, settings):
+        settings.MEDIA_ROOT = tmp_path
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        logo = SimpleUploadedFile(
+            "logo.png", _make_png_bytes(), content_type="image/png"
+        )
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.id}/",
+            {"logo": logo},
+            format="multipart",
+        )
+        assert resp.status_code == 200
+        assert resp.json()["logo_url"] is not None
+
+    def test_upload_invalid_file_returns_400(self, api_client):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        bad_file = SimpleUploadedFile(
+            "logo.png", b"not an image", content_type="image/png"
+        )
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.id}/",
+            {"logo": bad_file},
+            format="multipart",
+        )
+        assert resp.status_code == 400
+
+    def test_upload_oversized_file_returns_400(self, api_client, settings):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        settings.LOGO_MAX_BYTES = 5  # Tiny limit for this test
+        sub = ServiceSubmissionFactory(biotools_url="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        big_file = SimpleUploadedFile(
+            "logo.png", _make_png_bytes(), content_type="image/png"
+        )
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.id}/",
+            {"logo": big_file},
+            format="multipart",
+        )
+        assert resp.status_code == 400
+
+    def test_logo_field_not_in_read_response(self, api_client):
+        """The write-only 'logo' field must not appear in API responses."""
+        sub = ServiceSubmissionFactory(biotools_url="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.get(f"/api/v1/submissions/{sub.id}/")
+        # 'logo' is write_only; 'logo_url' is the read field
+        assert "logo" not in resp.json() or resp.json().get("logo") is None
+        assert "logo_url" in resp.json()

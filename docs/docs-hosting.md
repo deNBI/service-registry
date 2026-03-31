@@ -90,7 +90,7 @@ The workflow runs immediately. After it completes (usually under 1 minute), the 
 be live at `https://<org>.github.io/<repo>/` — for example:
 
 ```
-https://denbi.github.io/denbi_service_registry/
+https://denbi.github.io/service-registry/
 ```
 
 ### 4. Set the canonical URL in mkdocs.yml
@@ -98,7 +98,7 @@ https://denbi.github.io/denbi_service_registry/
 Update `mkdocs.yml` to match your actual GitHub Pages URL:
 
 ```yaml
-site_url: https://denbi.github.io/denbi_service_registry/
+site_url: https://denbi.github.io/service-registry/
 ```
 
 This ensures the sitemap and canonical link tags are correct.
@@ -117,7 +117,7 @@ if the repository is private and GitHub Pages would be public.
 conda run -n denbi-registry mkdocs build --strict
 
 # Rsync to server
-rsync -avz --delete site/ deploy@service-registry.bi.denbi.de:/var/www/docs/
+rsync -avz --delete site/ $DEPLOY_USER@$SERVER_HOST:/var/www/docs/
 ```
 
 ### Nginx vhost for the docs subdirectory

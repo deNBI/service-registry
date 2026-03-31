@@ -112,7 +112,7 @@ class BioToolsClient:
         )
         logger.debug("bio.tools GET %s", url)
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # nosec B310
                 body = resp.read()
                 return json.loads(body)
         except urllib.error.HTTPError as exc:

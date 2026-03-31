@@ -27,7 +27,7 @@ icon: material/sitemap
                                stale draft cleanup)
 ```
 
-Traffic enters the host nginx, which terminates TLS and proxies to Gunicorn on `192.168.232.66:8000`. Gunicorn serves both the Django web application and the REST API. Static files are served directly through Gunicorn via WhiteNoise — no separate static file server.
+Traffic enters the host nginx, which terminates TLS and proxies to the Gunicorn container on the internal network. Gunicorn serves both the Django web application and the REST API. Static files are served directly through Gunicorn via WhiteNoise — no separate static file server.
 
 ---
 

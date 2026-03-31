@@ -33,6 +33,16 @@ from apps.registry.models import PrincipalInvestigator, ServiceCategory, Service
 # ---------------------------------------------------------------------------
 
 
+def _logo_upload_to(instance, filename: str) -> str:
+    """
+    Generate a UUID-based storage path for logo uploads.
+    The original filename is discarded — only the extension is reused after
+    logo_utils.py has already validated and normalised it.
+    """
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
+    return f"logos/{uuid.uuid4()}.{ext}"
+
+
 def _sanitise_text(value: str) -> str:
     """
     Sanitise free-text input:
@@ -108,6 +118,7 @@ class SubmissionStatus(models.TextChoices):
     UNDER_REVIEW = "under_review", _("Under Review")
     APPROVED = "approved", _("Approved")
     REJECTED = "rejected", _("Rejected")
+    DEPRECATED = "deprecated", _("Deprecated")
 
 
 class KpiMonitoring(models.TextChoices):
@@ -136,7 +147,7 @@ class ServiceSubmission(models.Model):
     The full form maps to sections A–G. All required fields raise
     ValidationError if blank on clean(). The status lifecycle is:
 
-        draft → submitted → under_review → approved / rejected
+        draft → submitted → under_review → approved / rejected / deprecated
 
     Sensitive internal fields (internal_contact_email, submission_ip,
     user_agent_hash) are never serialised in API responses.
@@ -371,10 +382,6 @@ class ServiceSubmission(models.Model):
         blank=True,
         help_text="Keywords for search engine optimisation of the service's listing page.",
     )
-    outreach_consent = models.BooleanField(
-        default=False,
-        help_text="Consent for de.NBI to showcase this service on social media.",
-    )
     survey_participation = models.BooleanField(
         default=True,
         help_text="Willingness to participate in de.NBI user surveys.",
@@ -382,6 +389,17 @@ class ServiceSubmission(models.Model):
     comments = models.TextField(
         blank=True,
         help_text="Any additional comments for the de.NBI administration office.",
+    )
+
+    # -- Logo --
+    logo = models.FileField(
+        upload_to=_logo_upload_to,
+        null=True,
+        blank=True,
+        help_text=(
+            "Optional service logo (PNG, JPEG, or SVG). "
+            "Max 10 MB. Old logo files are retained on disk when replaced."
+        ),
     )
 
     # -- Section G: Consent --
@@ -468,7 +486,7 @@ class ServiceSubmission(models.Model):
             value = getattr(self, field, "")
             if value:
                 setattr(self, field, _sanitise_text(value))
-        super().save(*args, **kwargs)
+        super().save(**kwargs)
 
 
 # ---------------------------------------------------------------------------

@@ -71,6 +71,19 @@ STATICFILES_STORAGE = "django.contrib.staticfiles.storage.StaticFilesStorage"
 WHITENOISE_AUTOREFRESH = True
 
 # ---------------------------------------------------------------------------
+# Media files — use a temp directory so uploads don't accumulate in the
+# project's mediafiles/ directory between test runs.
+# ---------------------------------------------------------------------------
+import tempfile  # noqa: E402
+
+MEDIA_ROOT = tempfile.mkdtemp(prefix="denbi_test_media_")
+
+# ---------------------------------------------------------------------------
+# ALTCHA — disable verification in tests (empty key = bypassed)
+# ---------------------------------------------------------------------------
+ALTCHA_HMAC_KEY = ""
+
+# ---------------------------------------------------------------------------
 # Rate limiting — disable so tests aren't blocked by rate limits
 # ---------------------------------------------------------------------------
 RATELIMIT_ENABLE = False

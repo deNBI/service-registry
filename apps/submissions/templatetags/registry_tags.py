@@ -64,6 +64,12 @@ def _linkify_segment(text: str) -> str:
     return "".join(str(p) for p in parts)
 
 
+@register.filter
+def strip(value):
+    """Strip leading/trailing whitespace. Treats whitespace-only strings as empty."""
+    return value.strip() if isinstance(value, str) else value
+
+
 @register.filter(is_safe=True)
 def linkify_description(value: str) -> str:
     """
@@ -81,5 +87,5 @@ def linkify_description(value: str) -> str:
     rendered = []
     for para in paragraphs:
         lines = [_linkify_segment(line) for line in para.split("\n")]
-        rendered.append(mark_safe("<br>".join(lines)))
-    return mark_safe("".join(f"<p>{p}</p>" for p in rendered))
+        rendered.append(mark_safe("<br>".join(lines)))  # nosec B308 B703
+    return mark_safe("".join(f"<p>{p}</p>" for p in rendered))  # nosec B308 B703

@@ -43,6 +43,10 @@ A structured registration platform for de.NBI and ELIXIR-DE bioinformatics servi
 
     Each submission gets a scoped key for future programmatic updates — read or read+write scope.
 
+- :material-image: **Service logo upload**
+
+    Attach a PNG, JPEG, or SVG logo to any service registration — via the web form, the edit form, or the REST API. Images are automatically sanitised (EXIF stripped, SVG scripts removed) before storage.
+
 </div>
 
 ---
@@ -52,8 +56,8 @@ A structured registration platform for de.NBI and ELIXIR-DE bioinformatics servi
 === ":material-laptop: Development"
 
     ```bash
-    git clone https://github.com/deNBI/denbi_service_registry
-    cd denbi_service_registry
+    git clone https://github.com/denbi/service-registry
+    cd service-registry
     cp .env.example .env      # set SECRET_KEY, DB_PASSWORD, REDIS_PASSWORD
     make build                # builds images + starts stack + runs migrations
     make superuser

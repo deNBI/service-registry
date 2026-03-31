@@ -6,7 +6,8 @@
 
 .PHONY: help build dev dev-down logs migrate makemigrations superuser shell \
         test test-cov lint lint-fix audit typecheck collectstatic \
-        docs docs-build prod-up prod-down prod-migrate prod-logs clean nuke
+        docs docs-build prod-up prod-down prod-migrate prod-logs clean nuke \
+        dead-code security pre-commit
 
 # --- Default -----------------------------------------------------------------
 
@@ -34,6 +35,9 @@ help:
 	@echo "    make lint-fix         ruff autofix + format"
 	@echo "    make audit            pip-audit against production requirements"
 	@echo "    make typecheck        mypy type check"
+	@echo "    make dead-code        vulture dead-code scan (min confidence 80%)"
+	@echo "    make security         bandit SAST scan (low+ severity)"
+	@echo "    make pre-commit       ruff format-fix + full test suite + docs strict build"
 	@echo ""
 	@echo "  Documentation"
 	@echo "    make docs             Serve MkDocs at http://127.0.0.1:8001"
@@ -106,6 +110,17 @@ audit:
 
 typecheck:
 	mypy apps/ config/
+
+dead-code:
+	vulture apps/ config/ tests/ --min-confidence 80 \
+	  --exclude "apps/submissions/migrations,apps/edam/migrations,apps/registry/migrations,apps/api/migrations"
+
+security:
+	bandit -r apps/ config/ -ll -q
+
+pre-commit: lint-fix test docs-build
+	@echo ""
+	@echo "All pre-commit checks passed. Safe to commit."
 
 # --- Documentation -----------------------------------------------------------
 

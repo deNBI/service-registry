@@ -111,6 +111,10 @@ publications_pmids:
   help: "Publications related to this service."
   tooltip: "List all related publications. PMIDs preferred and required for ELIXIR impact assessment. Separate multiple entries by commas."
 
+logo:
+  help: "Optional service logo. Accepted formats: PNG, JPEG, SVG. Maximum 10 MB."
+  tooltip: "Upload a logo to represent your service."
+
 # ── Section C — Responsibilities ─────────────────────────────────────────────
 
 responsible_pis:
@@ -195,10 +199,6 @@ keywords_seo:
   help: "Keywords supporting search engine and AI-based discoverability."
   tooltip: "Provide keywords that improve discoverability in search engines and support machine-based indexing (e.g. by AI systems). Keywords complement, but do not replace, a clear and well-structured service description."
 
-outreach_consent:
-  help: "Consent for outreach."
-  tooltip: "Allows de.NBI to showcase this service on social media. Content will be shared for approval."
-
 survey_participation:
   help: "Participation in user surveys."
   tooltip: "Requires placing the de.NBI survey link on your service website. Results will be shared."
@@ -210,5 +210,9 @@ comments:
 # ── Section G — Consent ──────────────────────────────────────────────────────
 
 data_protection_consent:
+  label: >-
+    I agree and give consent to the data protection information described above,
+    and I consent to de.NBI potentially featuring this service in outreach activities
+    such as social media posts, newsletters, and other communications.
   help: ""
   tooltip: "Required to process and store the submitted information according to de.NBI regulations."

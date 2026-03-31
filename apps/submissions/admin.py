@@ -4,7 +4,7 @@ Submissions Admin
 Features:
   - Rich list view with colour-coded status badges and key metrics
   - Custom change view with API-key management panel
-  - Bulk actions: approve, reject, mark-under-review, CSV/JSON export
+  - Bulk actions: approve, reject, mark-under-review, deprecate, undeprecate, CSV/JSON export
   - Status transitions fire email notifications via Celery
   - All admin key operations logged to Django LogEntry
 """
@@ -16,7 +16,6 @@ import logging
 from django.contrib import admin, messages
 from django.forms.widgets import CheckboxSelectMultiple
 from django.contrib.admin.models import CHANGE, LogEntry
-from django.contrib.contenttypes.models import ContentType
 from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.html import format_html, mark_safe
@@ -153,7 +152,19 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         "status",
         "status_actions",
         "key_management_panel",
+        "logo_preview",
     )
+
+    @admin.display(description="Logo preview")
+    def logo_preview(self, obj):
+        if obj.logo:
+            return format_html(
+                '<img src="{}" style="max-height:120px;max-width:300px;'
+                "border:1px solid var(--border-color);"
+                'border-radius:4px;padding:4px;" alt="Service logo">',
+                obj.logo.url,
+            )
+        return "—"
 
     fieldsets = (
         (
@@ -192,6 +203,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     "user_knowledge_required",
                     ("edam_topics", "edam_operations"),
                     "publications_pmids",
+                    ("logo", "logo_preview"),
                 ),
             },
         ),
@@ -230,7 +242,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             {
                 "fields": (
                     ("keywords_uncited", "keywords_seo"),
-                    ("outreach_consent", "survey_participation"),
+                    ("survey_participation",),
                     "comments",
                 ),
             },
@@ -257,6 +269,8 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         "action_approve",
         "action_reject",
         "action_mark_under_review",
+        "action_deprecate",
+        "action_undeprecate",
         "action_export_csv",
         "action_export_json",
     ]
@@ -284,6 +298,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             "under_review": ("#92400e", "#fffbeb"),
             "approved": ("#166534", "#f0fdf4"),
             "rejected": ("#991b1b", "#fef2f2"),
+            "deprecated": ("#374151", "#e5e7eb"),
         }
         text_col, bg_col = colours.get(obj.status, ("#6b7280", "#f3f4f6"))
         return format_html(
@@ -357,12 +372,21 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             ("_approve", "Approve", "#166534", "#f0fdf4", "#bbf7d0"),
             ("_reject", "Reject", "#991b1b", "#fef2f2", "#fecaca"),
             ("_under_review", "Mark Under Review", "#92400e", "#fffbeb", "#fde68a"),
+            ("_deprecate", "Deprecate", "#374151", "#f9fafb", "#d1d5db"),
+            (
+                "_undeprecate",
+                "Undeprecate → Submitted",
+                "#1e40af",
+                "#eff6ff",
+                "#bfdbfe",
+            ),
         ]
         for name, label, color, bg, border in status_opts:
             active = (
                 (name == "_approve" and current == "approved")
                 or (name == "_reject" and current == "rejected")
                 or (name == "_under_review" and current == "under_review")
+                or (name == "_deprecate" and current == "deprecated")
             )
             style = (
                 f"background:{bg};color:{color};border:1.5px solid {border};"
@@ -445,6 +469,50 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
     def action_mark_under_review(self, request, queryset):
         self._change_status(request, queryset, "under_review", "Under Review")
 
+    @admin.action(description="🚫 Deprecate selected")
+    def action_deprecate(self, request, queryset):
+        self._change_status(request, queryset, "deprecated", "Deprecated")
+
+    @admin.action(description="♻️ Undeprecate selected (→ Submitted)")
+    def action_undeprecate(self, request, queryset):
+        self._change_status(request, queryset, "submitted", "Submitted (undeprecated)")
+
+    def _export_queryset(self, queryset):
+        """Return a fully prefetched queryset suitable for both export actions."""
+        return queryset.select_related(
+            "service_center", "biotoolsrecord"
+        ).prefetch_related(
+            "service_categories",
+            "responsible_pis",
+            "edam_topics",
+            "edam_operations",
+            "biotoolsrecord__functions",
+        )
+
+    def _logo_url(self, request, submission):
+        if submission.logo:
+            return request.build_absolute_uri(submission.logo.url)
+        return ""
+
+    def _biotools_data(self, submission):
+        bt = getattr(submission, "biotoolsrecord", None)
+        if bt is None:
+            return {
+                "biotools_id": "",
+                "biotools_name": "",
+                "biotools_edam_topic_uris": [],
+                "biotools_edam_operation_uris": [],
+            }
+        ops = []
+        for fn in bt.functions.all():
+            ops.extend(op["uri"] for op in (fn.operations or []) if op.get("uri"))
+        return {
+            "biotools_id": bt.biotools_id,
+            "biotools_name": bt.name or "",
+            "biotools_edam_topic_uris": bt.edam_topic_uris or [],
+            "biotools_edam_operation_uris": ops,
+        }
+
     @admin.action(description="📥 Export selected as CSV")
     def action_export_csv(self, request, queryset):
         resp = HttpResponse(content_type="text/csv")
@@ -453,36 +521,98 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         w.writerow(
             [
                 "id",
-                "service_name",
                 "status",
-                "submitter_display",
+                "service_name",
+                "service_description",
+                "year_established",
+                "submitter_first_name",
+                "submitter_last_name",
+                "submitter_affiliation",
                 "host_institute",
                 "service_center",
+                "public_contact_email",
+                "internal_contact_name",
+                "internal_contact_email",
+                "service_categories",
+                "responsible_pis",
+                "edam_topics",
+                "edam_operations",
+                "is_toolbox",
+                "toolbox_name",
+                "user_knowledge_required",
+                "publications_pmids",
+                "website_url",
+                "terms_of_use_url",
+                "license",
+                "github_url",
+                "biotools_url",
+                "fairsharing_url",
+                "other_registry_url",
+                "kpi_monitoring",
+                "kpi_start_year",
+                "keywords_uncited",
+                "keywords_seo",
                 "register_as_elixir",
+                "survey_participation",
+                "comments",
+                "logo_url",
+                "biotools_id",
+                "biotools_name",
+                "biotools_edam_topic_uris",
+                "biotools_edam_operation_uris",
                 "submitted_at",
                 "updated_at",
-                "website_url",
-                "license",
-                "kpi_monitoring",
-                "year_established",
             ]
         )
-        for s in queryset.select_related("service_center"):
+        for s in self._export_queryset(queryset):
+            bt = self._biotools_data(s)
             w.writerow(
                 [
                     str(s.id),
-                    s.service_name,
                     s.status,
-                    f"{s.submitter_last_name}, {s.submitter_first_name} — {s.submitter_affiliation}",
+                    s.service_name,
+                    s.service_description,
+                    s.year_established,
+                    s.submitter_first_name,
+                    s.submitter_last_name,
+                    s.submitter_affiliation,
                     s.host_institute,
                     str(s.service_center),
+                    s.public_contact_email,
+                    s.internal_contact_name,
+                    s.internal_contact_email,
+                    "; ".join(c.name for c in s.service_categories.all()),
+                    "; ".join(
+                        f"{pi.first_name} {pi.last_name}".strip()
+                        for pi in s.responsible_pis.all()
+                    ),
+                    "; ".join(f"{t.label} ({t.uri})" for t in s.edam_topics.all()),
+                    "; ".join(f"{t.label} ({t.uri})" for t in s.edam_operations.all()),
+                    s.is_toolbox,
+                    s.toolbox_name,
+                    s.user_knowledge_required,
+                    s.publications_pmids,
+                    s.website_url,
+                    s.terms_of_use_url,
+                    s.license,
+                    s.github_url,
+                    s.biotools_url,
+                    s.fairsharing_url,
+                    s.other_registry_url,
+                    s.kpi_monitoring,
+                    s.kpi_start_year,
+                    s.keywords_uncited,
+                    s.keywords_seo,
                     s.register_as_elixir,
+                    s.survey_participation,
+                    s.comments,
+                    self._logo_url(request, s),
+                    bt["biotools_id"],
+                    bt["biotools_name"],
+                    "; ".join(bt["biotools_edam_topic_uris"]),
+                    "; ".join(bt["biotools_edam_operation_uris"]),
                     s.submitted_at.isoformat(),
                     s.updated_at.isoformat(),
-                    s.website_url,
-                    s.license,
-                    s.kpi_monitoring,
-                    s.year_established,
                 ]
             )
         return resp
@@ -492,22 +622,57 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         resp = HttpResponse(content_type="application/json")
         resp["Content-Disposition"] = 'attachment; filename="submissions.json"'
         data = []
-        for s in queryset.select_related("service_center").prefetch_related(
-            "service_categories", "responsible_pis"
-        ):
+        for s in self._export_queryset(queryset):
+            bt = self._biotools_data(s)
             data.append(
                 {
                     "id": str(s.id),
-                    "service_name": s.service_name,
                     "status": s.status,
-                    "submitter_name": f"{s.submitter_first_name} {s.submitter_last_name}".strip(),
-                    "submitter_affiliation": s.submitter_affiliation,
+                    "service_name": s.service_name,
+                    "service_description": s.service_description,
+                    "year_established": s.year_established,
+                    "submitter": {
+                        "first_name": s.submitter_first_name,
+                        "last_name": s.submitter_last_name,
+                        "affiliation": s.submitter_affiliation,
+                    },
                     "host_institute": s.host_institute,
                     "service_center": str(s.service_center),
-                    "categories": [c.name for c in s.service_categories.all()],
-                    "register_as_elixir": s.register_as_elixir,
+                    "public_contact_email": s.public_contact_email,
+                    "internal_contact_name": s.internal_contact_name,
+                    "internal_contact_email": s.internal_contact_email,
+                    "service_categories": [c.name for c in s.service_categories.all()],
+                    "responsible_pis": [
+                        f"{pi.first_name} {pi.last_name}".strip()
+                        for pi in s.responsible_pis.all()
+                    ],
+                    "edam_topics": [
+                        {"label": t.label, "uri": t.uri} for t in s.edam_topics.all()
+                    ],
+                    "edam_operations": [
+                        {"label": t.label, "uri": t.uri}
+                        for t in s.edam_operations.all()
+                    ],
+                    "is_toolbox": s.is_toolbox,
+                    "toolbox_name": s.toolbox_name,
+                    "user_knowledge_required": s.user_knowledge_required,
+                    "publications_pmids": s.publications_pmids,
                     "website_url": s.website_url,
+                    "terms_of_use_url": s.terms_of_use_url,
                     "license": s.license,
+                    "github_url": s.github_url,
+                    "biotools_url": s.biotools_url,
+                    "fairsharing_url": s.fairsharing_url,
+                    "other_registry_url": s.other_registry_url,
+                    "kpi_monitoring": s.kpi_monitoring,
+                    "kpi_start_year": s.kpi_start_year,
+                    "keywords_uncited": s.keywords_uncited,
+                    "keywords_seo": s.keywords_seo,
+                    "register_as_elixir": s.register_as_elixir,
+                    "survey_participation": s.survey_participation,
+                    "comments": s.comments,
+                    "logo_url": self._logo_url(request, s),
+                    "biotools": bt,
                     "submitted_at": s.submitted_at.isoformat(),
                     "updated_at": s.updated_at.isoformat(),
                 }
@@ -538,6 +703,20 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 obj.__class__.objects.filter(pk=obj.pk),
                 "under_review",
                 "Under Review",
+            )
+        elif "_deprecate" in request.POST:
+            self._change_status(
+                request,
+                obj.__class__.objects.filter(pk=obj.pk),
+                "deprecated",
+                "Deprecated",
+            )
+        elif "_undeprecate" in request.POST:
+            self._change_status(
+                request,
+                obj.__class__.objects.filter(pk=obj.pk),
+                "submitted",
+                "Submitted (undeprecated)",
             )
         return super().response_change(request, obj)
 
@@ -605,11 +784,9 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
     # ── Logging ───────────────────────────────────────────────────────────────
 
     def _log(self, request, obj, message: str):
-        LogEntry.objects.log_action(
+        LogEntry.objects.log_actions(
             user_id=request.user.pk,
-            content_type_id=ContentType.objects.get_for_model(obj).pk,
-            object_id=str(obj.pk),
-            object_repr=str(obj),
+            queryset=obj.__class__.objects.filter(pk=obj.pk),
             action_flag=CHANGE,
             change_message=message,
         )
@@ -886,11 +1063,9 @@ class SubmissionAPIKeyAdmin(admin.ModelAdmin):
         return super().response_change(request, obj)
 
     def _log_key_action(self, request, key_obj, message):
-        LogEntry.objects.log_action(
+        LogEntry.objects.log_actions(
             user_id=request.user.pk,
-            content_type_id=ContentType.objects.get_for_model(key_obj).pk,
-            object_id=str(key_obj.pk),
-            object_repr=str(key_obj),
+            queryset=key_obj.__class__.objects.filter(pk=key_obj.pk),
             action_flag=CHANGE,
             change_message=message,
         )
