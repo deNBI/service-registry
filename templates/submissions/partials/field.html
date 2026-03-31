@@ -1,5 +1,6 @@
 {# Reusable form field partial with Bootstrap styling and HTMX inline validation #}
 {# Usage: {% include "submissions/partials/field.html" with field=form.field_name required=True %} #}
+{% load registry_tags %}
 
 {# RadioSelect / CheckboxSelectMultiple need <fieldset> + <legend> for accessibility. #}
 {# Django's BoundField.use_fieldset (added in 4.1) detects this automatically.        #}
@@ -9,7 +10,7 @@
   <legend class="form-label{% if field.errors %} text-danger fw-semibold{% endif %}">
     {{ field.label }}
     {% if required %}<span class="required-star" aria-label="required">*</span>{% endif %}
-    {% if field.field.tooltip %}
+    {% if field.field.tooltip|strip %}
     <span class="tooltip-icon"
           data-bs-toggle="tooltip"
           data-bs-placement="top"
@@ -73,7 +74,7 @@
          class="form-label{% if field.errors %} text-danger fw-semibold{% endif %}">
     {{ field.label }}
     {% if required %}<span class="required-star" aria-label="required">*</span>{% endif %}
-    {% if field.field.tooltip %}
+    {% if field.field.tooltip|strip %}
     <span class="tooltip-icon"
           data-bs-toggle="tooltip"
           data-bs-placement="top"

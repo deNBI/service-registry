@@ -382,10 +382,6 @@ class ServiceSubmission(models.Model):
         blank=True,
         help_text="Keywords for search engine optimisation of the service's listing page.",
     )
-    outreach_consent = models.BooleanField(
-        default=False,
-        help_text="Consent for de.NBI to showcase this service on social media.",
-    )
     survey_participation = models.BooleanField(
         default=True,
         help_text="Willingness to participate in de.NBI user surveys.",

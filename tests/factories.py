@@ -19,7 +19,7 @@ from datetime import date
 import factory
 from factory.django import DjangoModelFactory
 
-from apps.biotools.models import BioToolsRecord
+from apps.biotools.models import BioToolsFunction, BioToolsRecord
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
 from apps.submissions.models import ServiceSubmission, SubmissionAPIKey, _hash_key
 
@@ -123,7 +123,6 @@ class ServiceSubmissionFactory(DjangoModelFactory):
     # Section F
     keywords_uncited = "test tool"
     keywords_seo = "bioinformatics test"
-    outreach_consent = True
     survey_participation = True
     comments = ""
 
@@ -137,7 +136,7 @@ class ServiceSubmissionFactory(DjangoModelFactory):
     def service_categories(self, create, extracted, **kwargs):
         if not create:
             return
-        if extracted:
+        if extracted is not None:
             for cat in extracted:
                 self.service_categories.add(cat)
         else:
@@ -147,7 +146,7 @@ class ServiceSubmissionFactory(DjangoModelFactory):
     def responsible_pis(self, create, extracted, **kwargs):
         if not create:
             return
-        if extracted:
+        if extracted is not None:
             for pi in extracted:
                 self.responsible_pis.add(pi)
         else:
@@ -168,6 +167,17 @@ class BioToolsRecordFactory(DjangoModelFactory):
     name = factory.LazyAttribute(lambda o: f"Test Tool {o.biotools_id}")
     description = "A test bio.tools record."
     raw_json = factory.LazyFunction(dict)
+
+
+class BioToolsFunctionFactory(DjangoModelFactory):
+    class Meta:
+        model = BioToolsFunction
+
+    record = factory.SubFactory(BioToolsRecordFactory)
+    position = factory.Sequence(lambda n: n)
+    operations = factory.LazyFunction(list)
+    inputs = factory.LazyFunction(list)
+    outputs = factory.LazyFunction(list)
 
 
 # ---------------------------------------------------------------------------

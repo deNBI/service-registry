@@ -144,7 +144,6 @@ are defined in the parent template so each can have its own action/labels.
     {% with desc=form.section_texts.f.description %}{% if desc %}<div class="section-description">{{ desc|linkify_description }}</div>{% endif %}{% endwith %}
     {% include "submissions/partials/field.html" with field=form.keywords_uncited %}
     {% include "submissions/partials/field.html" with field=form.keywords_seo %}
-    {% include "submissions/partials/field.html" with field=form.outreach_consent required=True %}
     {% include "submissions/partials/field.html" with field=form.survey_participation required=True %}
     {% include "submissions/partials/field.html" with field=form.comments %}
   </div>
@@ -175,3 +174,10 @@ are defined in the parent template so each can have its own action/labels.
     </div>
   </div>
 </div>
+
+<!-- ALTCHA proof-of-work CAPTCHA -->
+{% if altcha_enabled %}
+<div class="mb-3">
+  <altcha-widget challengeurl="{% url 'submissions:altcha_challenge' %}"></altcha-widget>
+</div>
+{% endif %}

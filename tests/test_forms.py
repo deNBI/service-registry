@@ -61,7 +61,6 @@ def _base_form_data(overrides=None):
         # Section F
         "keywords_uncited": "",
         "keywords_seo": "",
-        "outreach_consent": True,
         "survey_participation": True,
         "comments": "",
         # Section G
@@ -290,10 +289,11 @@ class TestFormTextsYAML:
     _NON_FIELD_KEYS = {"sections"}
 
     def test_every_entry_has_required_keys(self):
-        """Each field entry must have exactly 'help' and 'tooltip' keys."""
+        """Each field entry must have 'help' and 'tooltip' keys; 'label' is optional."""
         from apps.submissions.forms import _FORM_TEXTS
 
         required_keys = {"help", "tooltip"}
+        allowed_keys = {"help", "tooltip", "label"}
         for field_name, entry in _FORM_TEXTS.items():
             if field_name in self._NON_FIELD_KEYS:
                 continue
@@ -310,10 +310,10 @@ class TestFormTextsYAML:
                 f"'{field_name}' is missing required key(s): {missing}.\n"
                 f"Fix: add the missing key(s) under '{field_name}:' in form_texts.yaml."
             )
-            extra = set(entry.keys()) - required_keys
+            extra = set(entry.keys()) - allowed_keys
             assert not extra, (
                 f"'{field_name}' has unexpected key(s): {extra}.\n"
-                f"Only 'help' and 'tooltip' are allowed."
+                f"Only 'help', 'tooltip', and 'label' are allowed."
             )
 
     def test_all_values_are_strings(self):
@@ -417,20 +417,51 @@ class TestFormTextsYAML:
         assert "tooltip-icon" in html
 
     def test_no_tooltip_icon_when_tooltip_empty(self, rf):
-        """Fields with empty tooltip should not render the info icon."""
+        """Fields with empty or whitespace-only tooltip must not render the info icon."""
+        from django.template.loader import render_to_string
+
+        from apps.submissions.forms import SubmissionForm
+
+        request = rf.get("/")
+
+        for tooltip_value, scenario in [
+            ("", "empty string"),
+            ("   ", "whitespace-only string"),
+        ]:
+            form = SubmissionForm()
+            # Inject the tooltip directly so the test is independent of YAML content.
+            form.fields["comments"].tooltip = tooltip_value
+            html = render_to_string(
+                "submissions/partials/field.html",
+                {"field": form["comments"], "required": False},
+                request=request,
+            )
+            assert "tooltip-icon" not in html, (
+                f"tooltip-icon was rendered for field 'comments' with {scenario} tooltip "
+                f"({tooltip_value!r}). "
+                f"The template should suppress the icon when tooltip is empty or whitespace-only. "
+                f"Fix: ensure forms.py strips the tooltip value, or update the template condition."
+            )
+
+    def test_tooltip_icon_rendered_when_tooltip_non_empty(self, rf):
+        """Fields with a non-empty tooltip must render the info icon."""
         from django.template.loader import render_to_string
 
         from apps.submissions.forms import SubmissionForm
 
         request = rf.get("/")
         form = SubmissionForm()
-        # comments has tooltip: "" in the YAML
+        # Inject a known non-empty tooltip to verify the icon appears.
+        form.fields["comments"].tooltip = "Some helpful context."
         html = render_to_string(
             "submissions/partials/field.html",
             {"field": form["comments"], "required": False},
             request=request,
         )
-        assert "tooltip-icon" not in html
+        assert "tooltip-icon" in html, (
+            "tooltip-icon was NOT rendered for field 'comments' despite having a non-empty tooltip. "
+            "Check the field.html template condition for '{% if field.field.tooltip %}'."
+        )
 
     # -- Accessibility: fieldset/legend for multi-choice widgets --
 

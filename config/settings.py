@@ -238,6 +238,16 @@ ADMIN_URL_PREFIX = env("ADMIN_URL_PREFIX", default=None) or _sc_admin.get(
 )
 RATE_LIMIT_SUBMIT = env("RATE_LIMIT_SUBMIT", "10/h")
 RATE_LIMIT_UPDATE = env("RATE_LIMIT_UPDATE", "20/h")
+RATE_LIMIT_CHALLENGE = env("RATE_LIMIT_CHALLENGE", "60/h")
+
+# ---------------------------------------------------------------------------
+# ALTCHA — self-hosted proof-of-work CAPTCHA
+# ---------------------------------------------------------------------------
+# HMAC key used to sign and verify ALTCHA challenges.
+# Set ALTCHA_HMAC_KEY to a strong random secret in production.
+# When empty (default), ALTCHA verification is bypassed — safe for local
+# development but must be configured before deploying publicly.
+ALTCHA_HMAC_KEY = env("ALTCHA_HMAC_KEY", "")
 
 # ---------------------------------------------------------------------------
 # Authentication
@@ -250,8 +260,9 @@ AUTHENTICATION_BACKENDS = [
 AXES_FAILURE_LIMIT = env_int("AXES_FAILURE_LIMIT", 5)
 AXES_COOLOFF_TIME = env_int("AXES_COOLOFF_MINUTES", 30) / 60
 AXES_LOCKOUT_CALLABLE = None
-AXES_RESET_ON_SUCCESS = True
+AXES_RESET_ON_SUCCESS = False  # keep AccessAttempt rows after a successful login
 AXES_LOCKOUT_PARAMETERS = ["ip_address", "username"]
+AXES_ENABLE_ACCESS_FAILURE_LOG = True  # Enable logging of all access failures
 # Tell axes to read the real client IP from proxy headers rather than REMOTE_ADDR.
 # REMOTE_ADDR is the internal nginx server IP when behind a reverse proxy;
 # X-Real-IP is set by nginx to $remote_addr (the actual connecting client IP).
@@ -461,6 +472,10 @@ CONTENT_SECURITY_POLICY = {
         "img-src": _csp_img_origins(),
         "font-src": ("'self'",),
         "connect-src": ("'self'",),
+        # Altcha proof-of-work widget spawns Web Workers via blob: URLs to run
+        # SHA-256 computation off the main thread. Without this, workers are
+        # blocked and verification never completes.
+        "worker-src": ("blob:",),
         "frame-src": ("'none'",),
         "frame-ancestors": ("'none'",),
         "form-action": ("'self'",),

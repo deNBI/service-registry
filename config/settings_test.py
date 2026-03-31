@@ -79,6 +79,11 @@ import tempfile  # noqa: E402
 MEDIA_ROOT = tempfile.mkdtemp(prefix="denbi_test_media_")
 
 # ---------------------------------------------------------------------------
+# ALTCHA — disable verification in tests (empty key = bypassed)
+# ---------------------------------------------------------------------------
+ALTCHA_HMAC_KEY = ""
+
+# ---------------------------------------------------------------------------
 # Rate limiting — disable so tests aren't blocked by rate limits
 # ---------------------------------------------------------------------------
 RATELIMIT_ENABLE = False

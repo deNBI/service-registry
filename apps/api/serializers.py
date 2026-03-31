@@ -211,7 +211,6 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
             # Section F
             "keywords_uncited",
             "keywords_seo",
-            "outreach_consent",
             "survey_participation",
             "comments",
             # Section G — write-only; must be True to create/update

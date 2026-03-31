@@ -281,3 +281,56 @@ class TestTokenAdminMasking:
 
         # Full key must NOT be on the change page
         assert token.key not in content
+
+
+# ===========================================================================
+# ALTCHA challenge endpoint security
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestAltchaChallengeSecurity:
+    """Security properties of the GET /captcha/ challenge endpoint."""
+
+    def test_endpoint_accessible_without_authentication(self):
+        """GET /captcha/ must be publicly accessible — no auth required."""
+        from django.test import Client, override_settings
+        from django.urls import reverse
+
+        client = Client()
+        with override_settings(ALTCHA_HMAC_KEY="test-security-key"):
+            resp = client.get(reverse("submissions:altcha_challenge"))
+        assert resp.status_code == 200
+
+    def test_response_content_type_is_json(self):
+        """GET /captcha/ must return application/json."""
+        from django.test import Client, override_settings
+        from django.urls import reverse
+
+        client = Client()
+        with override_settings(ALTCHA_HMAC_KEY="test-security-key"):
+            resp = client.get(reverse("submissions:altcha_challenge"))
+        assert "application/json" in resp["Content-Type"]
+
+    def test_challenge_payload_does_not_expose_hmac_key(self):
+        """The JSON challenge must never include the raw HMAC key."""
+        from django.test import Client, override_settings
+        from django.urls import reverse
+
+        hmac_key = "super-secret-hmac-key-must-not-leak"
+        client = Client()
+        with override_settings(ALTCHA_HMAC_KEY=hmac_key):
+            resp = client.get(reverse("submissions:altcha_challenge"))
+        assert hmac_key not in resp.content.decode()
+
+    def test_challenge_fields_are_not_empty(self):
+        """Every required challenge field must be a non-empty string."""
+        from django.test import Client, override_settings
+        from django.urls import reverse
+
+        client = Client()
+        with override_settings(ALTCHA_HMAC_KEY="test-security-key"):
+            resp = client.get(reverse("submissions:altcha_challenge"))
+        data = resp.json()
+        for field in ("algorithm", "challenge", "salt", "signature"):
+            assert data.get(field), f"Challenge field '{field}' must not be empty"

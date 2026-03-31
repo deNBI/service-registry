@@ -242,7 +242,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             {
                 "fields": (
                     ("keywords_uncited", "keywords_seo"),
-                    ("outreach_consent", "survey_participation"),
+                    ("survey_participation",),
                     "comments",
                 ),
             },
@@ -505,7 +505,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             }
         ops = []
         for fn in bt.functions.all():
-            ops.extend(fn.edam_operation_uris or [])
+            ops.extend(op["uri"] for op in (fn.operations or []) if op.get("uri"))
         return {
             "biotools_id": bt.biotools_id,
             "biotools_name": bt.name or "",
@@ -553,7 +553,6 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 "keywords_uncited",
                 "keywords_seo",
                 "register_as_elixir",
-                "outreach_consent",
                 "survey_participation",
                 "comments",
                 "logo_url",
@@ -605,7 +604,6 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     s.keywords_uncited,
                     s.keywords_seo,
                     s.register_as_elixir,
-                    s.outreach_consent,
                     s.survey_participation,
                     s.comments,
                     self._logo_url(request, s),
@@ -671,7 +669,6 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     "keywords_uncited": s.keywords_uncited,
                     "keywords_seo": s.keywords_seo,
                     "register_as_elixir": s.register_as_elixir,
-                    "outreach_consent": s.outreach_consent,
                     "survey_participation": s.survey_participation,
                     "comments": s.comments,
                     "logo_url": self._logo_url(request, s),

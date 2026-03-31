@@ -186,7 +186,6 @@
           {% with desc=form.section_texts.f.description %}{% if desc %}<div class="section-description">{{ desc|linkify_description }}</div>{% endif %}{% endwith %}
           {% include "submissions/partials/field.html" with field=form.keywords_uncited %}
           {% include "submissions/partials/field.html" with field=form.keywords_seo %}
-          {% include "submissions/partials/field.html" with field=form.outreach_consent required=True %}
           {% include "submissions/partials/field.html" with field=form.survey_participation required=True %}
           {% include "submissions/partials/field.html" with field=form.comments %}
         </div>
@@ -222,6 +221,13 @@
           </div>
         </div>
       </div>
+
+      <!-- ALTCHA proof-of-work CAPTCHA -->
+      {% if altcha_enabled %}
+      <div class="mb-3">
+        <altcha-widget challengeurl="{% url 'submissions:altcha_challenge' %}"></altcha-widget>
+      </div>
+      {% endif %}
 
       <!-- Submit button — sticky bar -->
       <div class="form-submit-row d-flex justify-content-between align-items-center">
@@ -455,15 +461,39 @@ if (kpiSelect) {
 // ---------------------------------------------------------------------------
 // Fix 5: localStorage draft — save & restore form fields across page loads
 // Excluded: CSRF token, data_protection_consent (must re-check deliberately)
+// ALTCHA widget: Explicitly reset when draft is cleared to prevent stale state
 // ---------------------------------------------------------------------------
 (function formDraft() {
   const DRAFT_KEY = 'denbi_registration_draft';
-  const SKIP_NAMES = new Set(['csrfmiddlewaretoken', 'data_protection_consent']);
+  const SKIP_NAMES = new Set(['csrfmiddlewaretoken', 'data_protection_consent', 'altcha']);
   const form = document.getElementById('registration-form');
   if (!form) return;
 
+  // Guard flag to prevent change events from triggering widget updates during draft restoration
+  let isRestoringDraft = false;
+
   // --- Restore draft on page load (only if form has no server-side errors) ---
-  const hasServerErrors = document.querySelector('[id^="field-errors-"] .text-danger') !== null;
+  // Detect both field-level errors and non-field errors (e.g. CAPTCHA failure shown in alert-danger)
+  const hasServerErrors =
+    document.querySelector('[id^="field-errors-"] .text-danger') !== null ||
+    document.querySelector('.alert-danger') !== null;
+
+  function resetAltchaWidget() {
+    // Reset the Altcha widget to fetch a fresh challenge and clear the solution
+    const widget = form.querySelector('altcha-widget');
+    if (widget) {
+      // Clear the hidden altcha field (where widget stores the solution)
+      const altchaField = form.querySelector('input[name="altcha"]');
+      if (altchaField) altchaField.value = '';
+
+      // If widget has a reset or refresh method, call it
+      if (typeof widget.reset === 'function') {
+        widget.reset();
+      } else if (typeof widget.refresh === 'function') {
+        widget.refresh();
+      }
+    }
+  }
 
   function restoreDraft() {
     let draft;
@@ -502,11 +532,17 @@ if (kpiSelect) {
   // Only restore if there are no server-side errors (so the user sees real errors, not draft)
   if (!hasServerErrors) {
     // Delay slightly so TomSelect is initialised first
-    setTimeout(restoreDraft, 150);
+    setTimeout(function() {
+      isRestoringDraft = true;
+      restoreDraft();
+      isRestoringDraft = false;
+    }, 150);
   }
 
-  // --- Save draft on every input change ---
+  // --- Save draft on every input change (skip during restoration) ---
   function saveDraft() {
+    if (isRestoringDraft) return;  // Don't save while restoring draft
+
     const draft = {};
     const data = new FormData(form);
     for (const [name, value] of data.entries()) {
@@ -542,6 +578,7 @@ if (kpiSelect) {
         localStorage.removeItem(DRAFT_KEY);
         indicator.remove();
         form.reset();
+        resetAltchaWidget();  // Reset Altcha to fetch a fresh challenge
       });
     }
   } catch(e) {}

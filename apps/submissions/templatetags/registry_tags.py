@@ -64,6 +64,12 @@ def _linkify_segment(text: str) -> str:
     return "".join(str(p) for p in parts)
 
 
+@register.filter
+def strip(value):
+    """Strip leading/trailing whitespace. Treats whitespace-only strings as empty."""
+    return value.strip() if isinstance(value, str) else value
+
+
 @register.filter(is_safe=True)
 def linkify_description(value: str) -> str:
     """

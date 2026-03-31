@@ -49,6 +49,7 @@ htmlcov/
 .mypy_cache/
 junit.xml
 test-results/
+local_tests/
 
 
 # =============================================================================

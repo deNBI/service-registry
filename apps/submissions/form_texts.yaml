@@ -199,10 +199,6 @@ keywords_seo:
   help: "Search keywords for search engine optimisation (SEO)."
   tooltip: "Keywords that improve search engine visibility of your de.NBI service listing page."
 
-outreach_consent:
-  help: "Allow de.NBI to showcase this service on social media?"
-  tooltip: "If yes, de.NBI may feature your service in social media posts, newsletters, or other outreach activities."
-
 survey_participation:
   help: "Willing to participate in user surveys?"
   tooltip: "If yes, de.NBI may contact users of your service for feedback surveys."
@@ -214,5 +210,9 @@ comments:
 # ── Section G — Consent ──────────────────────────────────────────────────────
 
 data_protection_consent:
+  label: >-
+    I agree and give consent to the data protection information described above,
+    and I consent to de.NBI potentially featuring this service in outreach activities
+    such as social media posts, newsletters, and other communications.
   help: ""
   tooltip: ""

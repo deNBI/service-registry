@@ -15,7 +15,11 @@ from django.test import Client
 from django.urls import reverse
 
 from apps.edam.models import EdamTerm
-from tests.factories import BioToolsRecordFactory, ServiceSubmissionFactory
+from tests.factories import (
+    BioToolsFunctionFactory,
+    BioToolsRecordFactory,
+    ServiceSubmissionFactory,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +140,6 @@ class TestExportCSV:
         "keywords_uncited",
         "keywords_seo",
         "register_as_elixir",
-        "outreach_consent",
         "survey_participation",
         "comments",
         "logo_url",
@@ -202,6 +205,47 @@ class TestExportCSV:
         assert rows[0]["biotools_id"] == ""
         assert rows[0]["biotools_name"] == ""
 
+    def test_csv_biotools_no_functions_has_empty_operation_uris(self, admin_client):
+        sub = ServiceSubmissionFactory()
+        BioToolsRecordFactory(submission=sub, biotools_id="noops")
+        rows = self._get_csv(admin_client, sub)
+        assert rows[0]["biotools_id"] == "noops"
+        assert rows[0]["biotools_edam_operation_uris"] == ""
+
+    def test_csv_export_logo_url_empty_when_no_logo(self, admin_client):
+        sub = ServiceSubmissionFactory()
+        rows = self._get_csv(admin_client, sub)
+        assert rows[0]["logo_url"] == ""
+
+    def test_csv_export_empty_responsible_pis(self, admin_client):
+        sub = ServiceSubmissionFactory(responsible_pis=[])
+        rows = self._get_csv(admin_client, sub)
+        assert rows[0]["responsible_pis"] == ""
+
+    def test_csv_export_empty_service_categories(self, admin_client):
+        sub = ServiceSubmissionFactory(service_categories=[])
+        rows = self._get_csv(admin_client, sub)
+        assert rows[0]["service_categories"] == ""
+
+    def test_csv_biotools_edam_operation_uris_from_functions(self, admin_client):
+        sub = ServiceSubmissionFactory()
+        bt = BioToolsRecordFactory(submission=sub)
+        BioToolsFunctionFactory(
+            record=bt,
+            position=0,
+            operations=[
+                {"uri": "http://edamontology.org/operation_0004", "term": "Operation"},
+                {
+                    "uri": "http://edamontology.org/operation_0337",
+                    "term": "Visualisation",
+                },
+            ],
+        )
+        rows = self._get_csv(admin_client, sub)
+        uris = rows[0]["biotools_edam_operation_uris"]
+        assert "http://edamontology.org/operation_0004" in uris
+        assert "http://edamontology.org/operation_0337" in uris
+
     def test_csv_deprecated_submission_exported(self, admin_client):
         sub = ServiceSubmissionFactory(status="deprecated")
         rows = self._get_csv(admin_client, sub)
@@ -247,7 +291,6 @@ class TestExportJSON:
         "keywords_uncited",
         "keywords_seo",
         "register_as_elixir",
-        "outreach_consent",
         "survey_participation",
         "comments",
         "logo_url",
@@ -318,6 +361,42 @@ class TestExportJSON:
         data = self._get_json(admin_client, sub)
         assert isinstance(data[0]["service_categories"], list)
         assert len(data[0]["service_categories"]) >= 1
+
+    def test_json_biotools_no_functions_has_empty_operation_uris(self, admin_client):
+        sub = ServiceSubmissionFactory()
+        BioToolsRecordFactory(submission=sub, biotools_id="noops")
+        data = self._get_json(admin_client, sub)
+        assert data[0]["biotools"]["biotools_id"] == "noops"
+        assert data[0]["biotools"]["biotools_edam_operation_uris"] == []
+
+    def test_json_export_logo_url_empty_when_no_logo(self, admin_client):
+        sub = ServiceSubmissionFactory()
+        data = self._get_json(admin_client, sub)
+        assert data[0]["logo_url"] == ""
+
+    def test_json_export_empty_responsible_pis(self, admin_client):
+        sub = ServiceSubmissionFactory(responsible_pis=[])
+        data = self._get_json(admin_client, sub)
+        assert data[0]["responsible_pis"] == []
+
+    def test_json_export_empty_service_categories(self, admin_client):
+        sub = ServiceSubmissionFactory(service_categories=[])
+        data = self._get_json(admin_client, sub)
+        assert data[0]["service_categories"] == []
+
+    def test_json_biotools_edam_operation_uris_from_functions(self, admin_client):
+        sub = ServiceSubmissionFactory()
+        bt = BioToolsRecordFactory(submission=sub)
+        BioToolsFunctionFactory(
+            record=bt,
+            position=0,
+            operations=[
+                {"uri": "http://edamontology.org/operation_0004", "term": "Operation"},
+            ],
+        )
+        data = self._get_json(admin_client, sub)
+        uris = data[0]["biotools"]["biotools_edam_operation_uris"]
+        assert "http://edamontology.org/operation_0004" in uris
 
     def test_json_deprecated_submission_exported(self, admin_client):
         sub = ServiceSubmissionFactory(status="deprecated")
