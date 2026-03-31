@@ -417,20 +417,48 @@ class TestFormTextsYAML:
         assert "tooltip-icon" in html
 
     def test_no_tooltip_icon_when_tooltip_empty(self, rf):
-        """Fields with empty tooltip should not render the info icon."""
+        """Fields with empty or whitespace-only tooltip must not render the info icon."""
+        from django.template.loader import render_to_string
+
+        from apps.submissions.forms import SubmissionForm
+
+        request = rf.get("/")
+
+        for tooltip_value, scenario in [("", "empty string"), ("   ", "whitespace-only string")]:
+            form = SubmissionForm()
+            # Inject the tooltip directly so the test is independent of YAML content.
+            form.fields["comments"].tooltip = tooltip_value
+            html = render_to_string(
+                "submissions/partials/field.html",
+                {"field": form["comments"], "required": False},
+                request=request,
+            )
+            assert "tooltip-icon" not in html, (
+                f"tooltip-icon was rendered for field 'comments' with {scenario} tooltip "
+                f"({tooltip_value!r}). "
+                f"The template should suppress the icon when tooltip is empty or whitespace-only. "
+                f"Fix: ensure forms.py strips the tooltip value, or update the template condition."
+            )
+
+    def test_tooltip_icon_rendered_when_tooltip_non_empty(self, rf):
+        """Fields with a non-empty tooltip must render the info icon."""
         from django.template.loader import render_to_string
 
         from apps.submissions.forms import SubmissionForm
 
         request = rf.get("/")
         form = SubmissionForm()
-        # comments has tooltip: "" in the YAML
+        # Inject a known non-empty tooltip to verify the icon appears.
+        form.fields["comments"].tooltip = "Some helpful context."
         html = render_to_string(
             "submissions/partials/field.html",
             {"field": form["comments"], "required": False},
             request=request,
         )
-        assert "tooltip-icon" not in html
+        assert "tooltip-icon" in html, (
+            "tooltip-icon was NOT rendered for field 'comments' despite having a non-empty tooltip. "
+            "Check the field.html template condition for '{% if field.field.tooltip %}'."
+        )
 
     # -- Accessibility: fieldset/legend for multi-choice widgets --
 

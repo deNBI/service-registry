@@ -359,7 +359,7 @@ class SubmissionForm(forms.ModelForm):
                 field_obj.help_text = texts["help"]
             if texts.get("label"):
                 field_obj.label = texts["label"]
-            field_obj.tooltip = texts.get("tooltip", "")
+            field_obj.tooltip = texts.get("tooltip", "").strip()
 
         # Expose section descriptions for template rendering
         self.section_texts = _FORM_TEXTS.get("sections", {})
