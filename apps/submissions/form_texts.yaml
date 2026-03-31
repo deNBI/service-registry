@@ -50,66 +50,66 @@ sections:
 # ── Section A — General Information ──────────────────────────────────────────
 
 date_of_entry:
-  help: "Please state the date."
-  tooltip: "Use the date you are completing this form, not the date the service was established."
+  help: "Date of submission or last update."
+  tooltip: "Enter the date on which this information is submitted or last updated. This helps track changes and revisions over time."
 
 submitter_first_name:
   help: "First name of the person filling in this form."
-  tooltip: ""
+  tooltip: "Provide the first name of the person submitting or updating this service entry."
 
 submitter_last_name:
   help: "Last name of the person filling in this form."
-  tooltip: ""
+  tooltip: "Provide the last name of the person submitting or updating this service entry."
 
 submitter_affiliation:
-  help: "Institute or organisation of the person filling in this form."
-  tooltip: "Use your primary institutional affiliation, e.g. 'Forschungszentrum Jülich'."
+  help: "Institution of the submitter."
+  tooltip: "Provide the institutional affiliation of the person submitting or updating this service entry. Used for internal documentation and follow-up."
 
 register_as_elixir:
-  help: "Do you want to register this service also as an ELIXIR-DE Service?"
-  tooltip: "A service can only be registered as an ELIXIR-DE Service if the applicant is affiliated with an institute that is a member of ELIXIR-DE. Information on ELIXIR-DE Services can be found here: https://elixir-europe.org/services/list?field_elixir_node_target_id_entityreference_filter=2364"
+  help: "Register this service also as an ELIXIR-DE Service?"
+  tooltip: "Only possible if the applicant is affiliated with an ELIXIR-DE member institute. See: https://elixir-europe.org/services/list?field_elixir_node_target_id_entityreference_filter=2364"
 
 # ── Section B — Service Master Data ──────────────────────────────────────────
 
 service_name:
   help: "Official name of the service."
-  tooltip: "Use the canonical name as it appears on your website. Avoid abbreviations unless they are the official name."
+  tooltip: "Official name as it should appear on the de.NBI website and in related communications."
 
 service_description:
-  help: "Describe your service briefly."
-  tooltip: "Include the technology used (e.g. AI/ML/Deep Learning, programming language), data types handled, and primary use case. Between 50 and 5,000 characters."
+  help: "Describe your service."
+  tooltip: "Provide a clear and comprehensive description (recommended: 75–500 words). This description is used not only for human readers but also for machine processing (e.g. search engines and AI-based systems). Well-structured, precise descriptions significantly improve discoverability, reuse, and integration into automated workflows. If this is a toolbox, briefly describe each included tool. The de.NBI team can support drafting."
 
 year_established:
-  help: "Year the service was first available (YYYY)."
-  tooltip: "The year the service first became available to users, not the year development started."
+  help: "Year the service became available."
+  tooltip: "Since which year is the service available to the community."
 
 service_categories:
-  help: "Select all service types that apply."
-  tooltip: "You may select multiple categories (e.g. Tool/Application, Web application). If unsure, consult the de.NBI service type definitions."
+  help: "Select all applicable service categories."
+  tooltip: "Select all relevant categories. For collections of multiple tools or services, also select Toolbox. Contact us if unsure."
 
 is_toolbox:
-  help: "Is this service a toolbox or part of one?"
-  tooltip: "A toolbox is a consolidated collection of related tools offered as a single service."
+  help: "Is this a toolbox or part of one?"
+  tooltip: "If yes, include a Tools section in the description. Tools can be described collectively and KPIs may be aggregated."
 
 toolbox_name:
   help: "Name of the de.NBI toolbox."
-  tooltip: "Required only if 'Yes' is selected above. Enter the official de.NBI toolbox name."
+  tooltip: "Enter the toolbox name. Contact the de.NBI Service Coordination Team before registering a new toolbox."
 
 user_knowledge_required:
-  help: "Prerequisites for users."
-  tooltip: "List any required software, programming skills, domain knowledge, or hardware that users need to use this service."
+  help: "Required user knowledge."
+  tooltip: "Describe the required level of prior knowledge (e.g. none, basic bioinformatics, command-line, advanced programming)."
 
 edam_topics:
-  help: "Scientific domain of this service."
-  tooltip: "Select up to 6 EDAM Topic terms (e.g. Proteomics, Genomics). These improve discoverability in bio.tools, ELIXIR, and EOSC."
+  help: "Scientific domain."
+  tooltip: "Select up to 6 EDAM Topics to improve discoverability in bio.tools, ELIXIR, and EOSC."
 
 edam_operations:
-  help: "Computational operations performed."
-  tooltip: "Select up to 6 EDAM Operation terms (e.g. Sequence alignment, Visualisation) describing what your service does."
+  help: "Computational operations."
+  tooltip: "Select up to 6 EDAM Operations describing what your service does."
 
 publications_pmids:
-  help: "Please list publication(s) connected to the service (DOIs or PMIDs)."
-  tooltip: "Enter PubMed IDs (digits only) or DOIs (e.g. 10.1000/xyz123), separated by commas. Up to 50 entries. For ELIXIR impact assessment, PMIDs are required."
+  help: "Publications related to this service."
+  tooltip: "List all related publications. PMIDs preferred and required for ELIXIR impact assessment. Separate multiple entries by commas."
 
 logo:
   help: "Optional service logo. Accepted formats: PNG, JPEG, SVG. Maximum 10 MB."
@@ -118,94 +118,94 @@ logo:
 # ── Section C — Responsibilities ─────────────────────────────────────────────
 
 responsible_pis:
-  help: "Select all PIs responsible for this service."
-  tooltip: "Choose 'Associated partner' if your PI is not listed and provide details in the field below."
+  help: "Responsible PIs."
+  tooltip: "Select the principal investigator(s) responsible for this service."
 
 associated_partner_note:
-  help: "Name and affiliation of the associated partner."
-  tooltip: "Required when 'Associated partner' is selected as a PI. Include the full name, title, and institutional affiliation."
+  help: "If PI not listed."
+  tooltip: "Provide the PI's name and affiliation if not available in the list."
 
 host_institute:
-  help: "The institute hosting this service."
-  tooltip: "The primary institution where the service infrastructure is hosted and maintained."
+  help: "Host institute."
+  tooltip: "Institute where the service is hosted and operated."
 
 service_center:
   help: "Associated de.NBI service centre."
-  tooltip: "Select the de.NBI service centre your service is affiliated with."
+  tooltip: "Select the service centre this service is affiliated with."
 
 public_contact_email:
-  help: "This email will be publicly visible on the de.NBI website."
-  tooltip: "Please state the contact email address to be displayed on the service page within the de.NBI website. Use a functional or team email address rather than a personal one."
+  help: "Public contact email."
+  tooltip: "This email will be displayed on the de.NBI website. Functional addresses (e.g. service@...) are recommended."
 
 internal_contact_name:
-  help: "Name and affiliation of the contact person (admin use only)."
-  tooltip: "This person will be contacted by the de.NBI administration office for service-related matters. Not publicly visible."
+  help: "Internal contact person."
+  tooltip: "Contact person for communication with the de.NBI administration office. Not publicly visible."
 
 internal_contact_email:
-  help: "Email of the contact person for the administration office."
-  tooltip: "This email is used exclusively by the de.NBI administration office and will never be displayed publicly."
+  help: "Internal contact email."
+  tooltip: "Used exclusively for communication with the de.NBI administration office. Must be actively maintained. Not publicly visible."
 
 internal_contact_email_confirm:
-  help: "Please confirm your email address."
-  tooltip: ""
+  help: "Confirm internal email."
+  tooltip: "Re-enter the email address to avoid typographical errors."
 
 # ── Section D — Websites & Links ─────────────────────────────────────────────
 
 website_url:
-  help: "Link to the service website (https://)."
-  tooltip: "The main landing page for your service. Must use HTTPS."
+  help: "Service website."
+  tooltip: "Public landing page of the service. Include full URL (https://)."
 
 terms_of_use_url:
-  help: "Link to the service terms of use (https://)."
-  tooltip: "Link to the page describing usage terms, acceptable use policies, or service-level agreements."
+  help: "Terms of use."
+  tooltip: "Link to terms, conditions, or usage policies of the service."
 
 license:
-  help: "License governing use of this service."
-  tooltip: "Select the license under which your service is offered. Choose 'None of the above' if your license is not listed."
+  help: "Service license."
+  tooltip: "Select the license under which the service or software is provided."
 
 github_url:
-  help: "Link to the service's GitHub repository, if available."
-  tooltip: "Please insert the link if a GitHub repository exists for this service."
+  help: "GitHub repository (optional)."
+  tooltip: "Provide link if available. Leave empty if not applicable."
 
 biotools_url:
-  help: "Link to the service's bio.tools entry, if available."
-  tooltip: "Please insert the link if a bio.tools entry exists. This helps cross-reference metadata."
+  help: "bio.tools entry (optional)."
+  tooltip: "Provide link if available. Leave empty if not applicable."
 
 fairsharing_url:
-  help: "Link to the service's FAIRsharing entry, if available."
-  tooltip: "Please insert the link if a FAIRsharing entry exists for this service."
+  help: "FAIRsharing entry (optional)."
+  tooltip: "Provide link if available. Leave empty if not applicable."
 
 other_registry_url:
-  help: "Link to any other registry, if available."
-  tooltip: "Please insert the link if the service is listed in any other registry (e.g. EOSC, re3data, RIsources)."
+  help: "Other registry (optional)."
+  tooltip: "Provide link if listed in another registry (e.g. EOSC). Leave empty if not applicable."
 
 # ── Section E — KPIs ─────────────────────────────────────────────────────────
 
 kpi_monitoring:
   help: "Is KPI monitoring in place?"
-  tooltip: "Indicate whether you are already collecting Key Performance Indicators or plan to start."
+  tooltip: "Select Yes if KPIs are already monitored, or Planned if monitoring will be implemented."
 
 kpi_start_year:
-  help: "Year KPI monitoring started (YYYY)."
-  tooltip: "If monitoring is already in place, enter the year it began. If planned, state the roughly targeted start year."
+  help: "Start year of KPI monitoring."
+  tooltip: "Year when KPI monitoring started or is planned to start."
 
 # ── Section F — Discoverability & Outreach ───────────────────────────────────
 
 keywords_uncited:
-  help: "Search keywords for citations not referencing the publication in the bibliography."
-  tooltip: "Enter keywords to identify usage where your tool is mentioned by name or website link in the materials and methods section, rather than formally cited."
+  help: "Keywords for uncited usage."
+  tooltip: "Provide names, abbreviations, or URLs used instead of formal citations (e.g. in Materials and Methods). These also support automated detection of service usage in publications."
 
 keywords_seo:
-  help: "Search keywords for search engine optimisation (SEO)."
-  tooltip: "Keywords that improve search engine visibility of your de.NBI service listing page."
+  help: "Keywords supporting search engine and AI-based discoverability."
+  tooltip: "Provide keywords that improve discoverability in search engines and support machine-based indexing (e.g. by AI systems). Keywords complement, but do not replace, a clear and well-structured service description."
 
 survey_participation:
-  help: "Willing to participate in user surveys?"
-  tooltip: "If yes, de.NBI may contact users of your service for feedback surveys."
+  help: "Participation in user surveys."
+  tooltip: "Requires placing the de.NBI survey link on your service website. Results will be shared."
 
 comments:
-  help: "Any additional comments for the administration office."
-  tooltip: ""
+  help: "Additional comments."
+  tooltip: "Optional. Provide any relevant context for onboarding."
 
 # ── Section G — Consent ──────────────────────────────────────────────────────
 
@@ -215,4 +215,4 @@ data_protection_consent:
     and I consent to de.NBI potentially featuring this service in outreach activities
     such as social media posts, newsletters, and other communications.
   help: ""
-  tooltip: ""
+  tooltip: "Required to process and store the submitted information according to de.NBI regulations."
