@@ -424,7 +424,10 @@ class TestFormTextsYAML:
 
         request = rf.get("/")
 
-        for tooltip_value, scenario in [("", "empty string"), ("   ", "whitespace-only string")]:
+        for tooltip_value, scenario in [
+            ("", "empty string"),
+            ("   ", "whitespace-only string"),
+        ]:
             form = SubmissionForm()
             # Inject the tooltip directly so the test is independent of YAML content.
             form.fields["comments"].tooltip = tooltip_value

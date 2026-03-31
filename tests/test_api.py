@@ -272,7 +272,10 @@ class TestSubmissionRetrieve:
         assert bt_data["biotools_id"] == "synced"
         functions = bt_data["functions"]
         assert len(functions) == 1
-        assert functions[0]["operations"][0]["uri"] == "http://edamontology.org/operation_0004"
+        assert (
+            functions[0]["operations"][0]["uri"]
+            == "http://edamontology.org/operation_0004"
+        )
 
 
 # ===========================================================================
@@ -938,7 +941,10 @@ class TestBioToolsRecordAccessControl:
         assert data["biotools_id"] == "shapetool"
         assert "functions" in data
         assert len(data["functions"]) == 1
-        assert data["functions"][0]["operations"][0]["uri"] == "http://edamontology.org/operation_0004"
+        assert (
+            data["functions"][0]["operations"][0]["uri"]
+            == "http://edamontology.org/operation_0004"
+        )
         assert "edam_topic_uris" in data
         assert "edam_topics_resolved" in data
         assert "last_synced_at" in data

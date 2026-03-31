@@ -518,7 +518,11 @@ class TestAltchaVerification:
     """Tests for the ALTCHA verification guard on form submission endpoints."""
 
     def _valid_register_data(self):
-        from tests.factories import PIFactory, ServiceCategoryFactory, ServiceCenterFactory
+        from tests.factories import (
+            PIFactory,
+            ServiceCategoryFactory,
+            ServiceCenterFactory,
+        )
         from django.utils import timezone
 
         cat = ServiceCategoryFactory()

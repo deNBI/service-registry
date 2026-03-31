@@ -15,7 +15,11 @@ from django.test import Client
 from django.urls import reverse
 
 from apps.edam.models import EdamTerm
-from tests.factories import BioToolsFunctionFactory, BioToolsRecordFactory, ServiceSubmissionFactory
+from tests.factories import (
+    BioToolsFunctionFactory,
+    BioToolsRecordFactory,
+    ServiceSubmissionFactory,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +235,10 @@ class TestExportCSV:
             position=0,
             operations=[
                 {"uri": "http://edamontology.org/operation_0004", "term": "Operation"},
-                {"uri": "http://edamontology.org/operation_0337", "term": "Visualisation"},
+                {
+                    "uri": "http://edamontology.org/operation_0337",
+                    "term": "Visualisation",
+                },
             ],
         )
         rows = self._get_csv(admin_client, sub)
