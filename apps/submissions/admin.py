@@ -548,7 +548,9 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             "biotools_documentation": bt.documentation or [],
             "biotools_download": bt.download or [],
             "biotools_links": bt.links or [],
-            "biotools_last_synced_at": bt.last_synced_at.isoformat() if bt.last_synced_at else "",
+            "biotools_last_synced_at": bt.last_synced_at.isoformat()
+            if bt.last_synced_at
+            else "",
         }
 
     @admin.action(description="📥 Export selected as CSV")

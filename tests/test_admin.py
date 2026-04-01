@@ -213,9 +213,17 @@ class TestExportCSV:
             tool_type=["Web application"],
             operating_system=["Linux"],
             edam_topic_uris=["http://edamontology.org/topic_0091"],
-            publications=[{"pmid": "12345", "doi": "", "pmcid": "", "type": "Primary", "note": ""}],
+            publications=[
+                {"pmid": "12345", "doi": "", "pmcid": "", "type": "Primary", "note": ""}
+            ],
             documentation=[{"url": "https://docs.example.com", "type": "General"}],
-            download=[{"url": "https://example.com/dl", "type": "Source code", "version": "1.0"}],
+            download=[
+                {
+                    "url": "https://example.com/dl",
+                    "type": "Source code",
+                    "version": "1.0",
+                }
+            ],
             links=[{"url": "https://example.com/issues", "type": "Issue tracker"}],
         )
         rows = self._get_csv(admin_client, sub)
@@ -229,7 +237,9 @@ class TestExportCSV:
         assert rows[0]["biotools_cost"] == "Free"
         assert "Web application" in rows[0]["biotools_tool_type"]
         assert "Linux" in rows[0]["biotools_operating_system"]
-        assert "http://edamontology.org/topic_0091" in rows[0]["biotools_edam_topic_uris"]
+        assert (
+            "http://edamontology.org/topic_0091" in rows[0]["biotools_edam_topic_uris"]
+        )
         assert "12345" in rows[0]["biotools_publications"]
         assert "https://docs.example.com" in rows[0]["biotools_documentation"]
         assert "https://example.com/dl" in rows[0]["biotools_download"]
@@ -292,8 +302,18 @@ class TestExportCSV:
         BioToolsFunctionFactory(
             record=bt,
             position=0,
-            operations=[{"uri": "http://edamontology.org/operation_0004", "term": "Operation"}],
-            inputs=[{"data": {"uri": "http://edamontology.org/data_2044", "term": "Sequence"}, "formats": []}],
+            operations=[
+                {"uri": "http://edamontology.org/operation_0004", "term": "Operation"}
+            ],
+            inputs=[
+                {
+                    "data": {
+                        "uri": "http://edamontology.org/data_2044",
+                        "term": "Sequence",
+                    },
+                    "formats": [],
+                }
+            ],
             outputs=[],
             cmd="",
             note="alignment function",
@@ -301,7 +321,10 @@ class TestExportCSV:
         rows = self._get_csv(admin_client, sub)
         functions = json.loads(rows[0]["biotools_functions"])
         assert len(functions) == 1
-        assert functions[0]["operations"][0]["uri"] == "http://edamontology.org/operation_0004"
+        assert (
+            functions[0]["operations"][0]["uri"]
+            == "http://edamontology.org/operation_0004"
+        )
         assert functions[0]["note"] == "alignment function"
 
     def test_csv_deprecated_submission_exported(self, admin_client):
@@ -408,9 +431,17 @@ class TestExportJSON:
             tool_type=["Web application"],
             operating_system=["Linux"],
             edam_topic_uris=["http://edamontology.org/topic_0091"],
-            publications=[{"pmid": "12345", "doi": "", "pmcid": "", "type": "Primary", "note": ""}],
+            publications=[
+                {"pmid": "12345", "doi": "", "pmcid": "", "type": "Primary", "note": ""}
+            ],
             documentation=[{"url": "https://docs.example.com", "type": "General"}],
-            download=[{"url": "https://example.com/dl", "type": "Source code", "version": "1.0"}],
+            download=[
+                {
+                    "url": "https://example.com/dl",
+                    "type": "Source code",
+                    "version": "1.0",
+                }
+            ],
             links=[{"url": "https://example.com/issues", "type": "Issue tracker"}],
         )
         data = self._get_json(admin_client, sub)
@@ -489,8 +520,18 @@ class TestExportJSON:
         BioToolsFunctionFactory(
             record=bt,
             position=0,
-            operations=[{"uri": "http://edamontology.org/operation_0004", "term": "Operation"}],
-            inputs=[{"data": {"uri": "http://edamontology.org/data_2044", "term": "Sequence"}, "formats": []}],
+            operations=[
+                {"uri": "http://edamontology.org/operation_0004", "term": "Operation"}
+            ],
+            inputs=[
+                {
+                    "data": {
+                        "uri": "http://edamontology.org/data_2044",
+                        "term": "Sequence",
+                    },
+                    "formats": [],
+                }
+            ],
             outputs=[],
             cmd="",
             note="alignment",
@@ -498,7 +539,10 @@ class TestExportJSON:
         data = self._get_json(admin_client, sub)
         functions = data[0]["biotools"]["biotools_functions"]
         assert len(functions) == 1
-        assert functions[0]["operations"][0]["uri"] == "http://edamontology.org/operation_0004"
+        assert (
+            functions[0]["operations"][0]["uri"]
+            == "http://edamontology.org/operation_0004"
+        )
         assert functions[0]["inputs"][0]["data"]["term"] == "Sequence"
         assert functions[0]["note"] == "alignment"
 
