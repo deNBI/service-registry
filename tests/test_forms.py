@@ -482,8 +482,8 @@ class TestFormTextsYAML:
         assert "<legend" in html
         assert "<label" not in html.split("<legend")[0].split("<fieldset")[-1]
 
-    def test_checkbox_group_renders_fieldset(self, rf):
-        """CheckboxSelectMultiple fields should render inside <fieldset>."""
+    def test_service_categories_renders_label_select(self, rf):
+        """service_categories (SelectMultiple) should render with <label> and <select>."""
         from django.template.loader import render_to_string
 
         from apps.submissions.forms import SubmissionForm
@@ -495,8 +495,9 @@ class TestFormTextsYAML:
             {"field": form["service_categories"], "required": True},
             request=request,
         )
-        assert "<fieldset" in html
-        assert "<legend" in html
+        assert "<label" in html
+        assert "<select" in html
+        assert "multiple" in html
 
     def test_text_input_does_not_render_fieldset(self, rf):
         """Standard text inputs should use <label>, not <fieldset>."""

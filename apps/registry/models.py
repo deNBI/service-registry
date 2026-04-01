@@ -118,8 +118,7 @@ def _validate_orcid(value: str) -> None:
     for char in digits[:-1]:
         total = (total + int(char)) * 2
     check = 12 - (total % 11)
-    if check == 11:
-        check = 0
+    check %= 11  # Handle cases where check == 11 (becomes 0) or check == 12 (becomes 1)
     expected = "X" if check == 10 else str(check)
     if digits[-1].upper() != expected:
         raise ValidationError("ORCID checksum is invalid.")

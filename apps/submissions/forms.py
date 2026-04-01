@@ -196,7 +196,9 @@ class SubmissionForm(forms.ModelForm):
                     "placeholder": "YYYY",
                 }
             ),
-            "service_categories": forms.CheckboxSelectMultiple(),
+            "service_categories": forms.SelectMultiple(
+                attrs={"class": "form-select", "size": "7"}
+            ),
             "is_toolbox": forms.RadioSelect(choices=[(True, "Yes"), (False, "No")]),
             "toolbox_name": forms.TextInput(
                 attrs={"class": "form-control", "id": "id_toolbox_name"}

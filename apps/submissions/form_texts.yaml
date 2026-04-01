@@ -32,7 +32,7 @@ sections:
   b:
     description: "This section collects the core information describing the service, including its scope, structure, category, and scientific context."
   c:
-    description: "The section asks for the responsibility of the Service and for person who can be contacted by the user and the administration office (responsiveness)."
+    description: "The section asks for the responsibility of the Service and for the person who can be contacted by the user and the administration office (responsiveness)."
   d:
     description: "This section collects all public links associated with the service, including the main website, terms of use, license information, and registry entries. These links ensure transparency, accessibility, and proper referencing of the service."
   e:
