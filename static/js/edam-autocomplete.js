@@ -1,5 +1,10 @@
 /**
- * de.NBI Service Registry — EDAM Tag Picker & PI Compact Select & bio.tools Prefill
+ * de.NBI Service Registry — EDAM Tag Picker, Compact Select & bio.tools Prefill
+ *
+ * buildEdamPicker   — pill-zone picker for EDAM ontology fields (select.edam-autocomplete)
+ * buildCompactSelect — searchable checkbox list for any <select data-compact-select="label">
+ *                      (currently: responsible_pis, service_categories)
+ * initBioToolsPrefill — auto-fills form fields from bio.tools on URL entry
  */
 "use strict";
 
@@ -232,20 +237,20 @@ function buildCompactSelect(sel, label) {
   root.style.cssText = "border:1.5px solid #d1d5db;border-radius:8px;background:#fff;font-family:inherit;overflow:hidden";
 
   root.innerHTML =
-    /* Search input */
-    `<div style="padding:.5rem .9rem;border-bottom:1px solid #f3f4f6;background:#f9fafb">
+    /* Selected pills — top, matching EDAM picker layout */
+    `<div id="${uid}-sel" style="min-height:36px;padding:.4rem .9rem;border-bottom:1px solid #f3f4f6;display:flex;flex-wrap:wrap;gap:.28rem;align-items:center;background:#fafafa;border-radius:8px 8px 0 0">
+       <span id="${uid}-sh" style="font-size:.78rem;color:#9ca3af;font-style:italic">No ${_esc(label)} selected</span>
+     </div>
+     <!-- Search input -->
+     <div style="padding:.5rem .9rem;border-bottom:1px solid #f3f4f6;background:#f9fafb">
        <div style="position:relative">
          <svg style="position:absolute;left:.55rem;top:50%;transform:translateY(-50%);color:#9ca3af" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-         <input id="${uid}-s" type="text" placeholder="Filter PIs…" autocomplete="off" spellcheck="false"
+         <input id="${uid}-s" type="text" placeholder="Filter ${_esc(label)}…" autocomplete="off" spellcheck="false"
            style="width:100%;border:1px solid #e5e7eb;border-radius:5px;padding:.33rem .6rem .33rem 1.85rem;font-size:.82rem;font-family:inherit;box-sizing:border-box">
        </div>
      </div>
      <!-- Scrollable options list -->
-     <div id="${uid}-list" style="max-height:160px;overflow-y:auto;overscroll-behavior:contain"></div>
-     <!-- Selected pills -->
-     <div id="${uid}-sel" style="min-height:36px;padding:.4rem .9rem;border-top:1px solid #f3f4f6;display:flex;flex-wrap:wrap;gap:.28rem;align-items:center;background:#fafafa">
-       <span id="${uid}-sh" style="font-size:.78rem;color:#9ca3af;font-style:italic">No PIs selected</span>
-     </div>`;
+     <div id="${uid}-list" style="max-height:160px;overflow-y:auto;overscroll-behavior:contain"></div>`;
 
   sel.parentNode.insertBefore(root, sel.nextSibling);
 
@@ -362,9 +367,10 @@ document.addEventListener("DOMContentLoaded", () => {
   /* EDAM pickers */
   document.querySelectorAll("select.edam-autocomplete").forEach(buildEdamPicker);
 
-  /* PI compact select */
-  const piSel = document.getElementById("id_responsible_pis");
-  if (piSel) buildCompactSelect(piSel, "PI");
+  /* Compact select — any <select data-compact-select="label"> is auto-enhanced */
+  document.querySelectorAll("select[data-compact-select]").forEach(el => {
+    buildCompactSelect(el, el.dataset.compactSelect);
+  });
 
   initBioToolsPrefill();
 });

@@ -174,10 +174,10 @@ class SubmissionForm(forms.ModelForm):
             "submitter_last_name": forms.TextInput(
                 attrs={"class": "form-control", "placeholder": "e.g. Lovelace"}
             ),
-            "submitter_affiliation": forms.TextInput(
+            "submitter_affiliation": forms.Select(
                 attrs={
-                    "class": "form-control",
-                    "placeholder": "e.g. Forschungszentrum Jülich",
+                    "class": "form-select",
+                    "data-affiliation-combobox": "true",
                 }
             ),
             "register_as_elixir": forms.RadioSelect(
@@ -197,7 +197,7 @@ class SubmissionForm(forms.ModelForm):
                 }
             ),
             "service_categories": forms.SelectMultiple(
-                attrs={"class": "form-select", "size": "7"}
+                attrs={"class": "form-select", "data-compact-select": "categories"}
             ),
             "is_toolbox": forms.RadioSelect(choices=[(True, "Yes"), (False, "No")]),
             "toolbox_name": forms.TextInput(
@@ -218,7 +218,9 @@ class SubmissionForm(forms.ModelForm):
                 attrs={"data-max-items": "6"},
             ),
             # Section C
-            "responsible_pis": forms.SelectMultiple(attrs={"class": "form-select"}),
+            "responsible_pis": forms.SelectMultiple(
+                attrs={"class": "form-select", "data-compact-select": "PIs"}
+            ),
             "associated_partner_note": forms.Textarea(
                 attrs={
                     "class": "form-control",
@@ -347,6 +349,30 @@ class SubmissionForm(forms.ModelForm):
         self.fields["edam_operations"].queryset = EdamTerm.objects.filter(
             branch="operation", is_obsolete=False
         ).order_by("label")
+
+        # Affiliation combobox — suggestions from PI institutes + past submissions
+        pi_institutes = set(
+            PrincipalInvestigator.objects.filter(is_active=True)
+            .exclude(institute="")
+            .values_list("institute", flat=True)
+        )
+        past_affiliations = set(
+            ServiceSubmission.objects.exclude(submitter_affiliation="").values_list(
+                "submitter_affiliation", flat=True
+            )
+        )
+        suggestions = sorted(pi_institutes | past_affiliations, key=str.casefold)
+        # Include the current instance value so edit pre-fill works even if not in list
+        current_affiliation = (
+            self.instance.submitter_affiliation or ""
+            if self.instance and self.instance.pk
+            else ""
+        )
+        if current_affiliation and current_affiliation not in suggestions:
+            suggestions = [current_affiliation] + suggestions
+        self.fields["submitter_affiliation"].widget.choices = [("", "")] + [
+            (s, s) for s in suggestions
+        ]
 
         # Pre-fill email confirmation from instance
         if self.instance.pk:

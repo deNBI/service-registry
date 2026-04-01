@@ -62,7 +62,7 @@ submitter_last_name:
   tooltip: "Provide the last name of the person submitting or updating this service entry."
 
 submitter_affiliation:
-  help: "Institution of the submitter."
+  help: "Start typing to search for your institution, or enter a custom name."
   tooltip: "Provide the institutional affiliation of the person submitting or updating this service entry. Used for internal documentation and follow-up."
 
 register_as_elixir:

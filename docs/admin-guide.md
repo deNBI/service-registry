@@ -150,6 +150,12 @@ deactivate or delete.
 - ORCID iDs are validated on save.
 - The **Submissions** column shows the total number of submissions that list this PI as responsible (plain count — no hyperlink, as the submission list does not have a per-PI filter).
 
+!!! info "PI institutes populate the affiliation combobox"
+    The **Institute** field on each PI record feeds directly into the affiliation
+    autocomplete shown to submitters in Section A of the registration form.
+    Keeping PI institute names consistent and up-to-date here helps submitters
+    find and reuse the correct spelling, reducing data inconsistencies.
+
 ### Service Centres
 
 **Location:** Admin → Reference Data → Service Centers

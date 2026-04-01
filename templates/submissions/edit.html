@@ -1,5 +1,5 @@
 {% extends "base/base.html" %}
-{% load i18n %}
+{% load i18n static %}
 
 {% block title %}Edit: {{ submission.service_name }} — de.NBI{% endblock %}
 {% block meta_description %}Edit your de.NBI service registration.{% endblock %}
@@ -143,4 +143,27 @@
   </div>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'js/tom-select.complete.min.js' %}"></script>
+<script>
+"use strict";
+(function() {
+  var el = document.querySelector('[data-affiliation-combobox="true"]');
+  if (!el || typeof TomSelect === 'undefined') return;
+  new TomSelect(el, {
+    create: true,
+    maxItems: 1,
+    createOnBlur: true,
+    persist: false,
+    placeholder: 'e.g. Forschungszentrum Jülich',
+    render: {
+      option_create: function(data, escape) {
+        return '<div class="create">Use "<strong>' + escape(data.input) + '</strong>"</div>';
+      }
+    }
+  });
+})();
+</script>
 {% endblock %}

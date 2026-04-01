@@ -234,7 +234,7 @@ All third-party CSS and JavaScript is downloaded once and committed to `static/`
 |---|---|---|---|
 | Bootstrap | 5.3.3 | `static/css/bootstrap.min.css`, `static/js/bootstrap.bundle.min.js` | All pages |
 | HTMX | 1.9.12 | `static/js/htmx.min.js` | bio.tools prefill |
-| Tom-Select | 2.3.1 | `static/css/tom-select.bootstrap5.min.css`, `static/js/tom-select.complete.min.js` | EDAM multi-select widget |
+| Tom-Select | 2.3.1 | `static/css/tom-select.bootstrap5.min.css`, `static/js/tom-select.complete.min.js` | EDAM multi-select widget, affiliation combobox |
 | ALTCHA | 2.3.0 | `static/js/altcha.min.js` | Registration and edit forms (CAPTCHA widget) |
 | swagger-ui-dist | 5.18.2 | `static/swagger-ui/` (4 files) | `/api/docs/` |
 | ReDoc | 2.2.0 | `static/redoc/bundles/redoc.standalone.js` | `/api/redoc/` |
@@ -422,6 +422,50 @@ the `settings` + `tmp_path` fixtures to set a deterministic `MEDIA_ROOT`
 | `{% site_logo_url %}` | Returns logo URL from `site.toml`, or empty string |
 | `{% site_favicon_url %}` | Returns favicon URL (auto-detects `static/img/favicon.*` as fallback) |
 | `{% site_setting section key %}` | Generic accessor for any `site.toml` value |
+
+---
+
+## Frontend JavaScript widgets
+
+All form widget JS lives in `static/js/edam-autocomplete.js`. It is loaded globally
+via `base.html` and provides three independent functions:
+
+### `buildEdamPicker(selectEl)`
+
+Enhances any `<select class="edam-autocomplete">` into a pill-zone + search + dropdown
+picker for EDAM ontology terms. Applied automatically to all matching elements on
+`DOMContentLoaded`. Configure via data attributes on the `<select>`:
+
+| Attribute | Default | Purpose |
+|---|---|---|
+| `data-max-items` | `6` | Maximum selectable terms |
+| `data-placeholder` | `"Search EDAM terms…"` | Search input placeholder |
+| `data-branch` | `""` | EDAM branch filter (`topic`, `operation`, etc.) |
+
+### `buildCompactSelect(selectEl, label)`
+
+Enhances any `<select multiple data-compact-select="label">` into a searchable
+checkbox list with selected pills shown at the top (matching the EDAM picker layout).
+
+**To apply to a new field**, add the data attribute to the widget in `forms.py`:
+
+```python
+"my_field": forms.SelectMultiple(
+    attrs={"class": "form-select", "data-compact-select": "items"}
+),
+```
+
+No JS changes needed — the boot code auto-discovers all `[data-compact-select]` elements.
+
+Currently used by: `responsible_pis` (`"PIs"`), `service_categories` (`"categories"`).
+
+### Tom Select combobox (`data-affiliation-combobox`)
+
+The `submitter_affiliation` field uses Tom Select (vendored at
+`static/js/tom-select.complete.min.js`) initialised in `register.html` and
+`edit.html`. It provides a single-value searchable combobox with `create: true`
+(free-text entry). To add Tom Select to another field, load the JS in the relevant
+template's `{% block extra_js %}` and initialise with `new TomSelect(el, {...})`.
 
 ---
 

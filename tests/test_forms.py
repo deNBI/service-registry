@@ -483,7 +483,7 @@ class TestFormTextsYAML:
         assert "<label" not in html.split("<legend")[0].split("<fieldset")[-1]
 
     def test_service_categories_renders_label_select(self, rf):
-        """service_categories (SelectMultiple) should render with <label> and <select>."""
+        """service_categories renders as <select> with the compact-select data attribute."""
         from django.template.loader import render_to_string
 
         from apps.submissions.forms import SubmissionForm
@@ -498,6 +498,45 @@ class TestFormTextsYAML:
         assert "<label" in html
         assert "<select" in html
         assert "multiple" in html
+        assert 'data-compact-select="categories"' in html
+
+    def test_responsible_pis_renders_compact_select(self, rf):
+        """responsible_pis renders as <select> with the compact-select data attribute."""
+        from django.template.loader import render_to_string
+
+        from apps.submissions.forms import SubmissionForm
+
+        request = rf.get("/")
+        form = SubmissionForm()
+        html = render_to_string(
+            "submissions/partials/field.html",
+            {"field": form["responsible_pis"], "required": True},
+            request=request,
+        )
+        assert "<label" in html
+        assert "<select" in html
+        assert "multiple" in html
+        assert 'data-compact-select="PIs"' in html
+
+    def test_submitter_affiliation_renders_select_combobox(self, rf):
+        """submitter_affiliation (Select + Tom Select) should render as <select> with data attribute."""
+        from django.template.loader import render_to_string
+
+        from apps.submissions.forms import SubmissionForm
+
+        request = rf.get("/")
+        form = SubmissionForm()
+        html = render_to_string(
+            "submissions/partials/field.html",
+            {"field": form["submitter_affiliation"], "required": True},
+            request=request,
+        )
+        assert "<label" in html
+        assert "<select" in html
+        assert 'data-affiliation-combobox="true"' in html
+        assert (
+            "<input" not in html.split("<select")[0]
+        )  # no text input before the select
 
     def test_text_input_does_not_render_fieldset(self, rf):
         """Standard text inputs should use <label>, not <fieldset>."""
@@ -1046,3 +1085,40 @@ class TestLogoFormField:
         form = SubmissionForm(_base_form_data(), files={"logo": too_big})
         assert not form.is_valid()
         assert "logo" in form.errors
+
+
+# ---------------------------------------------------------------------------
+# Affiliation combobox — Tom Select with create
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestAffiliationCombobox:
+    def test_free_text_value_accepted(self):
+        """A value not in the suggestions list is accepted (CharField doesn't validate choices)."""
+        from apps.submissions.forms import SubmissionForm
+
+        data = _base_form_data({"submitter_affiliation": "Brand New Institute 2026"})
+        form = SubmissionForm(data)
+        assert form.is_valid(), form.errors
+        assert form.cleaned_data["submitter_affiliation"] == "Brand New Institute 2026"
+
+    def test_choices_populated_from_pi_institutes(self):
+        """Affiliation choices include institutes from active PrincipalInvestigator records."""
+        from apps.submissions.forms import SubmissionForm
+
+        PIFactory(institute="Max Planck Institute for Testing")
+        form = SubmissionForm()
+        choice_values = [
+            v for v, _ in form.fields["submitter_affiliation"].widget.choices
+        ]
+        assert "Max Planck Institute for Testing" in choice_values
+
+    def test_min_length_still_enforced(self):
+        """The 2-character minimum length is enforced even with the new combobox widget."""
+        from apps.submissions.forms import SubmissionForm
+
+        data = _base_form_data({"submitter_affiliation": "A"})
+        form = SubmissionForm(data)
+        assert not form.is_valid()
+        assert "submitter_affiliation" in form.errors
