@@ -79,7 +79,11 @@ Both formats include all submission fields:
 | KPIs | `kpi_monitoring`, `kpi_start_year` |
 | Discovery | `keywords_uncited`, `keywords_seo`, `register_as_elixir`, `survey_participation`, `comments` |
 | Logo | `logo_url` — absolute URL, or empty if no logo uploaded |
-| bio.tools | `biotools_id`, `biotools_name`, `biotools_edam_topic_uris`, `biotools_edam_operation_uris` — empty if no bio.tools record |
+| bio.tools (scalar) | `biotools_id`, `biotools_name`, `biotools_description`, `biotools_homepage`, `biotools_version`, `biotools_license`, `biotools_maturity`, `biotools_cost` — empty strings if no bio.tools record |
+| bio.tools (lists) | `biotools_tool_type`, `biotools_operating_system` — semicolons in CSV, arrays in JSON |
+| bio.tools (EDAM) | `biotools_edam_topic_uris`, `biotools_edam_operation_uris` — semicolons in CSV, arrays in JSON |
+| bio.tools (structured) | `biotools_functions`, `biotools_publications`, `biotools_documentation`, `biotools_download`, `biotools_links` — JSON strings in CSV, arrays of objects in JSON |
+| bio.tools (sync) | `biotools_last_synced_at` — ISO datetime of last successful sync, or empty |
 
 ---
 

@@ -114,7 +114,40 @@ curl https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
       "edam_topics": [{"uri": "...", "accession": "topic_0091", "label": "Proteomics"}],
       "edam_operations": [...],
       "responsible_pis": [{"last_name": "...", "orcid": "..."}],
-      "biotoolsrecord": { ... },
+      "biotoolsrecord": {
+        "id": "...",
+        "biotools_id": "my-tool",
+        "biotools_url": "https://bio.tools/my-tool",
+        "name": "My Tool",
+        "description": "A tool for ...",
+        "homepage": "https://example.com/my-tool",
+        "version": ["1.0", "1.1"],
+        "license": "MIT",
+        "maturity": "Mature",
+        "cost": "Free of charge",
+        "tool_type": ["Web application", "Command-line tool"],
+        "operating_system": ["Linux", "Mac"],
+        "edam_topic_uris": ["http://edamontology.org/topic_0091"],
+        "edam_topics_resolved": [
+          {"uri": "http://edamontology.org/topic_0091", "accession": "topic_0091", "label": "Proteomics"}
+        ],
+        "functions": [
+          {
+            "position": 0,
+            "operations": [{"uri": "http://edamontology.org/operation_0004", "term": "Operation"}],
+            "inputs": [{"data": {"uri": "...", "term": "Sequence"}, "formats": []}],
+            "outputs": [{"data": {"uri": "...", "term": "Report"}, "formats": []}],
+            "cmd": null,
+            "note": null
+          }
+        ],
+        "publications": [{"doi": "10.1000/xyz", "pmid": null, "pmcid": null, "type": "Primary", "note": null}],
+        "documentation": [{"url": "https://example.com/docs", "type": "General", "note": null}],
+        "download": [],
+        "links": [],
+        "last_synced_at": "2024-03-15T10:30:00Z",
+        "sync_error": null
+      },
       ...
     }
   ]
@@ -273,6 +306,40 @@ curl -X PATCH https://service-registry.bi.denbi.de/api/v1/categories/<id>/ \
   -H "Content-Type: application/json" \
   -d '{"is_active": true}'
 ```
+
+### bio.tools records
+
+Bio.tools metadata is automatically fetched and kept in sync when a submission includes a `biotools_id`.
+The data is embedded directly in every submission response under the `biotoolsrecord` key (see above).
+
+A standalone read-only endpoint is also available for admin tokens:
+
+| Method | URL | Description |
+|--------|-----|-------------|
+| `GET` | `/api/v1/biotools/` | List all bio.tools records |
+| `GET` | `/api/v1/biotools/{biotools_id}/` | Retrieve one bio.tools record by its bio.tools ID |
+
+**Authentication:** admin Token required.
+
+Both endpoints return the same field set as the `biotoolsrecord` object shown in the submission response above, plus a `submission` link field pointing to the associated submission.
+
+```bash
+# List all synced bio.tools records
+curl https://service-registry.bi.denbi.de/api/v1/biotools/ \
+  -H "Authorization: Token <admin-token>"
+
+# Retrieve a specific record
+curl https://service-registry.bi.denbi.de/api/v1/biotools/my-tool/ \
+  -H "Authorization: Token <admin-token>"
+```
+
+#### bio.tools sync actions
+
+Admins can trigger a manual re-sync from the bio.tools record list in the Django admin
+(**Bio.tools records → select records → "Sync selected records from bio.tools now"**).
+Syncs are queued as Celery tasks and run in the background.
+
+---
 
 ### EDAM ontology terms
 

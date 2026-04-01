@@ -100,8 +100,8 @@ class BioToolsRecordAdmin(admin.ModelAdmin):
 
     def sync_status(self, obj):
         if obj.sync_ok:
-            return format_html('<span style="color:green">✓ OK</span>')
-        return format_html('<span style="color:red">✗ Error</span>')
+            return format_html('<span style="color:green">{}</span>', "✓ OK")
+        return format_html('<span style="color:red">{}</span>', "✗ Error")
 
     sync_status.short_description = "Sync"
 

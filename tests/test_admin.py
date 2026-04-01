@@ -145,8 +145,22 @@ class TestExportCSV:
         "logo_url",
         "biotools_id",
         "biotools_name",
+        "biotools_description",
+        "biotools_homepage",
+        "biotools_version",
+        "biotools_license",
+        "biotools_maturity",
+        "biotools_cost",
+        "biotools_tool_type",
+        "biotools_operating_system",
         "biotools_edam_topic_uris",
         "biotools_edam_operation_uris",
+        "biotools_functions",
+        "biotools_publications",
+        "biotools_documentation",
+        "biotools_download",
+        "biotools_links",
+        "biotools_last_synced_at",
         "submitted_at",
         "updated_at",
     ]
@@ -190,20 +204,56 @@ class TestExportCSV:
             submission=sub,
             biotools_id="mytool",
             name="My Tool",
+            description="A great tool.",
+            homepage="https://example.com",
+            version="1.0",
+            license="MIT",
+            maturity="Mature",
+            cost="Free",
+            tool_type=["Web application"],
+            operating_system=["Linux"],
             edam_topic_uris=["http://edamontology.org/topic_0091"],
+            publications=[
+                {"pmid": "12345", "doi": "", "pmcid": "", "type": "Primary", "note": ""}
+            ],
+            documentation=[{"url": "https://docs.example.com", "type": "General"}],
+            download=[
+                {
+                    "url": "https://example.com/dl",
+                    "type": "Source code",
+                    "version": "1.0",
+                }
+            ],
+            links=[{"url": "https://example.com/issues", "type": "Issue tracker"}],
         )
         rows = self._get_csv(admin_client, sub)
         assert rows[0]["biotools_id"] == "mytool"
         assert rows[0]["biotools_name"] == "My Tool"
+        assert rows[0]["biotools_description"] == "A great tool."
+        assert rows[0]["biotools_homepage"] == "https://example.com"
+        assert rows[0]["biotools_version"] == "1.0"
+        assert rows[0]["biotools_license"] == "MIT"
+        assert rows[0]["biotools_maturity"] == "Mature"
+        assert rows[0]["biotools_cost"] == "Free"
+        assert "Web application" in rows[0]["biotools_tool_type"]
+        assert "Linux" in rows[0]["biotools_operating_system"]
         assert (
             "http://edamontology.org/topic_0091" in rows[0]["biotools_edam_topic_uris"]
         )
+        assert "12345" in rows[0]["biotools_publications"]
+        assert "https://docs.example.com" in rows[0]["biotools_documentation"]
+        assert "https://example.com/dl" in rows[0]["biotools_download"]
+        assert "https://example.com/issues" in rows[0]["biotools_links"]
 
     def test_csv_empty_biotools_when_no_record(self, admin_client):
         sub = ServiceSubmissionFactory()
         rows = self._get_csv(admin_client, sub)
         assert rows[0]["biotools_id"] == ""
         assert rows[0]["biotools_name"] == ""
+        assert rows[0]["biotools_description"] == ""
+        assert rows[0]["biotools_functions"] == "[]"
+        assert rows[0]["biotools_publications"] == "[]"
+        assert rows[0]["biotools_last_synced_at"] == ""
 
     def test_csv_biotools_no_functions_has_empty_operation_uris(self, admin_client):
         sub = ServiceSubmissionFactory()
@@ -245,6 +295,37 @@ class TestExportCSV:
         uris = rows[0]["biotools_edam_operation_uris"]
         assert "http://edamontology.org/operation_0004" in uris
         assert "http://edamontology.org/operation_0337" in uris
+
+    def test_csv_biotools_functions_serialised_as_json(self, admin_client):
+        sub = ServiceSubmissionFactory()
+        bt = BioToolsRecordFactory(submission=sub)
+        BioToolsFunctionFactory(
+            record=bt,
+            position=0,
+            operations=[
+                {"uri": "http://edamontology.org/operation_0004", "term": "Operation"}
+            ],
+            inputs=[
+                {
+                    "data": {
+                        "uri": "http://edamontology.org/data_2044",
+                        "term": "Sequence",
+                    },
+                    "formats": [],
+                }
+            ],
+            outputs=[],
+            cmd="",
+            note="alignment function",
+        )
+        rows = self._get_csv(admin_client, sub)
+        functions = json.loads(rows[0]["biotools_functions"])
+        assert len(functions) == 1
+        assert (
+            functions[0]["operations"][0]["uri"]
+            == "http://edamontology.org/operation_0004"
+        )
+        assert functions[0]["note"] == "alignment function"
 
     def test_csv_deprecated_submission_exported(self, admin_client):
         sub = ServiceSubmissionFactory(status="deprecated")
@@ -341,13 +422,45 @@ class TestExportJSON:
             submission=sub,
             biotools_id="mytool",
             name="My Tool",
+            description="A great tool.",
+            homepage="https://example.com",
+            version="1.0",
+            license="MIT",
+            maturity="Mature",
+            cost="Free",
+            tool_type=["Web application"],
+            operating_system=["Linux"],
             edam_topic_uris=["http://edamontology.org/topic_0091"],
+            publications=[
+                {"pmid": "12345", "doi": "", "pmcid": "", "type": "Primary", "note": ""}
+            ],
+            documentation=[{"url": "https://docs.example.com", "type": "General"}],
+            download=[
+                {
+                    "url": "https://example.com/dl",
+                    "type": "Source code",
+                    "version": "1.0",
+                }
+            ],
+            links=[{"url": "https://example.com/issues", "type": "Issue tracker"}],
         )
         data = self._get_json(admin_client, sub)
         bt = data[0]["biotools"]
         assert bt["biotools_id"] == "mytool"
         assert bt["biotools_name"] == "My Tool"
+        assert bt["biotools_description"] == "A great tool."
+        assert bt["biotools_homepage"] == "https://example.com"
+        assert bt["biotools_version"] == "1.0"
+        assert bt["biotools_license"] == "MIT"
+        assert bt["biotools_maturity"] == "Mature"
+        assert bt["biotools_cost"] == "Free"
+        assert bt["biotools_tool_type"] == ["Web application"]
+        assert bt["biotools_operating_system"] == ["Linux"]
         assert "http://edamontology.org/topic_0091" in bt["biotools_edam_topic_uris"]
+        assert bt["biotools_publications"][0]["pmid"] == "12345"
+        assert bt["biotools_documentation"][0]["url"] == "https://docs.example.com"
+        assert bt["biotools_download"][0]["url"] == "https://example.com/dl"
+        assert bt["biotools_links"][0]["url"] == "https://example.com/issues"
 
     def test_json_biotools_empty_when_no_record(self, admin_client):
         sub = ServiceSubmissionFactory()
@@ -355,6 +468,9 @@ class TestExportJSON:
         bt = data[0]["biotools"]
         assert bt["biotools_id"] == ""
         assert bt["biotools_edam_topic_uris"] == []
+        assert bt["biotools_functions"] == []
+        assert bt["biotools_publications"] == []
+        assert bt["biotools_last_synced_at"] == ""
 
     def test_json_service_categories_is_list(self, admin_client):
         sub = ServiceSubmissionFactory()
@@ -397,6 +513,38 @@ class TestExportJSON:
         data = self._get_json(admin_client, sub)
         uris = data[0]["biotools"]["biotools_edam_operation_uris"]
         assert "http://edamontology.org/operation_0004" in uris
+
+    def test_json_biotools_functions_structured(self, admin_client):
+        sub = ServiceSubmissionFactory()
+        bt = BioToolsRecordFactory(submission=sub)
+        BioToolsFunctionFactory(
+            record=bt,
+            position=0,
+            operations=[
+                {"uri": "http://edamontology.org/operation_0004", "term": "Operation"}
+            ],
+            inputs=[
+                {
+                    "data": {
+                        "uri": "http://edamontology.org/data_2044",
+                        "term": "Sequence",
+                    },
+                    "formats": [],
+                }
+            ],
+            outputs=[],
+            cmd="",
+            note="alignment",
+        )
+        data = self._get_json(admin_client, sub)
+        functions = data[0]["biotools"]["biotools_functions"]
+        assert len(functions) == 1
+        assert (
+            functions[0]["operations"][0]["uri"]
+            == "http://edamontology.org/operation_0004"
+        )
+        assert functions[0]["inputs"][0]["data"]["term"] == "Sequence"
+        assert functions[0]["note"] == "alignment"
 
     def test_json_deprecated_submission_exported(self, admin_client):
         sub = ServiceSubmissionFactory(status="deprecated")
