@@ -60,9 +60,17 @@ Enter comma-separated PMIDs (PubMed IDs, digits only) or DOIs (starting with `10
 
 PMIDs are required for ELIXIR impact assessment.
 
+### Institute / Affiliation (Section A)
+
+The affiliation field is a searchable combobox. As you type, it filters a list of known
+institute names drawn from registered PIs and previous submissions. If your institute is
+not in the list, simply finish typing the full name and press **Enter** (or click
+**Use "…"** in the dropdown) — the value you typed is accepted as-is.
+
 ### Service Categories
 
-Select all that apply by checking the relevant boxes. Multiple selections are supported.
+Click any category to select or deselect it. Multiple selections are supported — no
+modifier key needed. Selected categories appear as pills at the top of the field.
 
 ### Toolbox
 

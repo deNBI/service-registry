@@ -238,10 +238,28 @@ class TestSubmissionValidation:
     def test_orcid_format_validation(self):
         from apps.registry.models import _validate_orcid
 
+        # Bad format — must be rejected before checksum check
         for bad in ("not-an-orcid", "0000-0000-0000-000", "1234567890"):
             with pytest.raises(ValidationError):
                 _validate_orcid(bad)
-        _validate_orcid("0000-0002-1825-0097")  # known valid
+
+        # Wrong checksum (correct format, wrong last digit) — must be rejected
+        with pytest.raises(ValidationError):
+            _validate_orcid("0000-0002-1825-0098")  # check digit should be 7
+
+        # Valid ORCIDs — must all pass
+        # Standard case (total % 11 != 0)
+        _validate_orcid("0000-0002-1825-0097")
+        # Previously failing: total % 11 == 0 → check digit must be 1
+        # The old code computed 12 - 0 = 12 instead of (12 - 0) % 11 = 1
+        _validate_orcid("0000-0002-1379-9451")  # Schwudke
+        _validate_orcid("0000-0003-2563-7561")  # Klamt
+        _validate_orcid("0000-0002-2177-8781")  # Beier
+        _validate_orcid("0000-0003-0921-8041")  # Usadel
+        _validate_orcid("0000-0001-5809-2321")  # Müller
+        _validate_orcid("0000-0002-5016-5191")  # Stadler
+        # Edge case: check digit X (total % 11 == 2 → check == 10 → 'X')
+        _validate_orcid("0000-0002-3960-224X")
 
 
 @pytest.mark.django_db

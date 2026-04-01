@@ -1,5 +1,5 @@
 {% extends "base/base.html" %}
-{% load i18n registry_tags %}
+{% load i18n registry_tags static %}
 
 {% block title %}Register a Service — de.NBI{% endblock %}
 {% block meta_description %}Register a new de.NBI or ELIXIR-DE bioinformatics service.{% endblock %}
@@ -302,6 +302,35 @@
 {% endblock %}
 
 {% block extra_js %}
+<script src="{% static 'js/tom-select.complete.min.js' %}"></script>
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Affiliation combobox — Tom Select with create
+// ---------------------------------------------------------------------------
+(function() {
+  var el = document.querySelector('[data-affiliation-combobox="true"]');
+  if (!el || typeof TomSelect === 'undefined') return;
+  var ts = new TomSelect(el, {
+    create: true,
+    maxItems: 1,
+    createOnBlur: true,
+    persist: false,
+    placeholder: 'e.g. Forschungszentrum Jülich',
+    render: {
+      option_create: function(data, escape) {
+        return '<div class="create">Use "<strong>' + escape(data.input) + '</strong>"</div>';
+      }
+    }
+  });
+  el._tomSelect = ts;  // expose for draft restore
+  if (el.classList.contains('is-invalid')) {
+    var wrapper = el.closest('.ts-wrapper');
+    if (wrapper) wrapper.classList.add('is-invalid');
+  }
+})();
+</script>
 <script>
 "use strict";
 
@@ -521,6 +550,11 @@ if (kpiSelect) {
           el._tomSelect.clear(true);
           vals.forEach(v => { try { el._tomSelect.addItem(v, true); } catch(e){} });
         }
+      } else if (el.tagName === 'SELECT' && el._tomSelect && !el.multiple) {
+        // Single-value Tom Select combobox (e.g. affiliation): add option if missing, then select
+        var ts = el._tomSelect;
+        if (!ts.options[value]) ts.addOption({ value: value, text: value });
+        ts.setValue(value, true);
       } else if (el.tagName === 'SELECT') {
         el.value = value;
       } else {

@@ -204,7 +204,7 @@ Named PIs who can be selected as responsible for a service.
 | `is_active` | boolean | `false` hides from form |
 | `is_associated_partner` | boolean | Marks the generic "Associated partner" dropdown entry |
 
-**ORCID validation:** Format `0000-0000-0000-000X` plus Luhn checksum verification — the last character may be `X` (value 10).
+**ORCID validation:** Format `0000-0000-0000-000X` plus ISO 7064 MOD 11-2 checksum verification — the last character may be `X` (value 10). The check digit is computed as `(12 − (total mod 11)) mod 11`; ORCIDs whose check digit is `1` (i.e. where the running total mod 11 equals 0) require the outer `mod 11` to be applied correctly.
 
 ---
 

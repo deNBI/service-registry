@@ -222,8 +222,8 @@ All static assets are vendored locally in `static/` — zero CDN requests at run
 | `static/css/bootstrap.min.css` | Bootstrap 5.3.3 | All pages |
 | `static/js/bootstrap.bundle.min.js` | Bootstrap 5.3.3 | All pages |
 | `static/js/htmx.min.js` | HTMX 1.9.12 | bio.tools prefill |
-| `static/css/tom-select.bootstrap5.min.css` | Tom-Select 2.3.1 | EDAM multi-select |
-| `static/js/tom-select.complete.min.js` | Tom-Select 2.3.1 | EDAM multi-select |
+| `static/css/tom-select.bootstrap5.min.css` | Tom-Select 2.3.1 | EDAM multi-select, affiliation combobox |
+| `static/js/tom-select.complete.min.js` | Tom-Select 2.3.1 | EDAM multi-select, affiliation combobox |
 | `static/swagger-ui/swagger-ui.css` | swagger-ui-dist 5.18.2 | `/api/docs/` |
 | `static/swagger-ui/swagger-ui-bundle.js` | swagger-ui-dist 5.18.2 | `/api/docs/` |
 | `static/swagger-ui/swagger-ui-standalone-preset.js` | swagger-ui-dist 5.18.2 | `/api/docs/` |

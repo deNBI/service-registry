@@ -116,6 +116,30 @@ Reference data (PIs, service centres, categories) can be managed in two ways:
 
 Both interfaces support soft-delete: `DELETE` via the API (or setting `is_active = False` in the admin) hides the record from the registration form but keeps it linked to existing submissions.
 
+### Deletion guard
+
+Hard deletion of any PI, service centre, or service category is **blocked** whenever the record is referenced by at least one submission (in any status — draft, submitted, approved, etc.).
+
+| Scenario | Behaviour |
+|----------|-----------|
+| Single delete — record **in use** | **Blocked.** The confirmation screen is never shown. The admin is redirected straight back to the list page with an error message stating how many submissions are affected and instructing them to use `is_active = False` instead. |
+| Single delete — record **not in use** | Allowed. The normal Django confirmation page is shown and deletion proceeds only after the admin confirms. |
+| Bulk "Delete selected" — **any** selected record in use | **Blocked entirely.** No records in the selection are deleted. A detailed error lists each blocked record and its submission count. |
+| Bulk "Delete selected" — **all** selected records have no submissions | Allowed. All selected records are deleted. |
+
+!!! warning "Use `is_active = False` to retire records, not Delete"
+    Setting `is_active = False` hides the record from the submission form dropdown
+    while preserving all existing submission links.  This is always the correct
+    operation for records that are no longer in use.  Hard deletion is only
+    appropriate for records that were added by mistake and have never been
+    referenced by any submission.
+
+The **Submissions** column in each list view shows how many submissions currently
+reference the record.  For Service Categories and Service Centres the count is a
+hyperlink that opens the submission changelist pre-filtered to that record, making
+it easy to see exactly which submissions are affected before deciding whether to
+deactivate or delete.
+
 ### Principal Investigators (PIs)
 
 **Location:** Admin → Reference Data → Principal Investigators
@@ -124,6 +148,13 @@ Both interfaces support soft-delete: `DELETE` via the API (or setting `is_active
 - Set `is_active = False` to hide a PI from the form dropdown without removing them from existing submissions.
 - The `is_associated_partner` flag should be `True` for exactly one entry (the generic "Associated partner" option).
 - ORCID iDs are validated on save.
+- The **Submissions** column shows the total number of submissions that list this PI as responsible (plain count — no hyperlink, as the submission list does not have a per-PI filter).
+
+!!! info "PI institutes populate the affiliation combobox"
+    The **Institute** field on each PI record feeds directly into the affiliation
+    autocomplete shown to submitters in Section A of the registration form.
+    Keeping PI institute names consistent and up-to-date here helps submitters
+    find and reuse the correct spelling, reducing data inconsistencies.
 
 ### Service Centres
 
@@ -131,6 +162,7 @@ Both interfaces support soft-delete: `DELETE` via the API (or setting `is_active
 
 - Each centre has a short name (e.g. "HD-HuB"), full name, and optional website.
 - `is_active = False` hides from the form but keeps existing submission links intact.
+- The **Submissions** column links to the filtered submission changelist for that centre.
 
 ### Service Categories
 
@@ -138,6 +170,7 @@ Both interfaces support soft-delete: `DELETE` via the API (or setting `is_active
 
 - Add new category types as needed.
 - `is_active = False` hides from the form.
+- The **Submissions** column links to the filtered submission changelist for that category.
 
 ---
 

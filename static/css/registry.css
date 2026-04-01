@@ -629,7 +629,29 @@ select.edam-autocomplete { display: none !important; }
 .invalid-feedback { font-size: .8rem; }
 
 /* ---------------------------------------------------------------------------
-   13. Status badges
+   13. Tom Select — affiliation combobox
+   --------------------------------------------------------------------------- */
+/* Match the focus ring and error state to the rest of the design system */
+.ts-wrapper .ts-control {
+  border: 1.5px solid var(--gray-200);
+  border-radius: var(--radius);
+  font-family: var(--font);
+  font-size: .9375rem;
+  color: var(--charcoal);
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.ts-wrapper.focus .ts-control {
+  border-color: var(--g);
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+.ts-wrapper.is-invalid .ts-control {
+  border-color: var(--red);
+  box-shadow: var(--focus-ring-err);
+}
+
+/* ---------------------------------------------------------------------------
+   14. Status badges
    --------------------------------------------------------------------------- */
 .badge-status {
   display: inline-block;
