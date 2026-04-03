@@ -379,6 +379,19 @@ class SubmissionForm(forms.ModelForm):
             (s, s) for s in suggestions
         ]
 
+        # Host institute — same suggestion pool, but also include the current value
+        current_host = (
+            self.instance.host_institute or ""
+            if self.instance and self.instance.pk
+            else ""
+        )
+        host_suggestions = suggestions
+        if current_host and current_host not in host_suggestions:
+            host_suggestions = [current_host] + list(host_suggestions)
+        self.fields["host_institute"].widget.choices = [("", "")] + [
+            (s, s) for s in host_suggestions
+        ]
+
         # Pre-fill email confirmation from instance
         if self.instance.pk:
             self.fields[
