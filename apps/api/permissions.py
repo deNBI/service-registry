@@ -3,7 +3,8 @@ API Permissions
 ===============
 Custom DRF permission classes enforcing the two-tier access model:
 
-  IsAdminTokenUser   : Requires DRF Token auth (staff/integrations).
+  IsAdminTokenUser   : Accepts an AdminAPIKey (scoped machine-to-machine key).
+                       The ``read`` scope restricts access to safe HTTP methods only.
   IsSubmissionOwner  : Requires ApiKey auth whose submission matches the URL.
   IsAdminOrOwner     : Allows either — used for detail GET/PATCH.
 """
@@ -12,25 +13,44 @@ from rest_framework.permissions import BasePermission
 from rest_framework.request import Request
 from rest_framework.views import APIView
 
+_SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+
 
 class IsAdminTokenUser(BasePermission):
     """
-    Grants access when the request carries a DRF Token
-    (Authorization: Token <key>) for an active staff user.
+    Grants access when the request carries a valid admin API key credential.
 
-    DRF sets request.auth to the Token ORM object on success.
-    SubmissionAPIKey auth sets request.user to a ServiceSubmission,
-    so the is_staff check naturally returns False for those requests.
+    Accepted credentials:
+
+    AdminAPIKey (``Authorization: AdminKey <key>``).
+    Scope is enforced per key:
+      - ``read``  → safe HTTP methods only (GET / HEAD / OPTIONS)
+      - ``full``  → all HTTP methods
+
+    Revoked / inactive credentials are rejected.
     """
 
-    message = "Admin token authentication required."
+    message = "Admin API key authentication required."
 
     def has_permission(self, request: Request, view: APIView) -> bool:
-        from rest_framework.authtoken.models import Token
+        from .models import AdminAPIKey
 
-        return isinstance(request.auth, Token) and bool(
-            request.user and request.user.is_active and request.user.is_staff
-        )
+        # ── AdminAPIKey (scoped machine-to-machine key) ─────────────────────
+        if isinstance(request.auth, AdminAPIKey):
+            if not request.auth.is_active:
+                return False
+            if (
+                request.auth.scope == AdminAPIKey.SCOPE_READ
+                and request.method not in _SAFE_METHODS
+            ):
+                self.message = (
+                    "This key is read-only. "
+                    "Use a full-access Admin API Key to modify data."
+                )
+                return False
+            return True
+
+        return False
 
 
 class IsSubmissionOwner(BasePermission):

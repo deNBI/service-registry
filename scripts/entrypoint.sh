@@ -15,6 +15,9 @@ if [ "${SKIP_MIGRATE:-false}" = "false" ]; then
     echo "[entrypoint] Running database migrations..."
     python manage.py migrate --noinput
     echo "[entrypoint] Migrations done."
+    echo "[entrypoint] Syncing admin role groups..."
+    python manage.py setup_groups
+    echo "[entrypoint] Groups synced."
 else
     echo "[entrypoint] Skipping migrations (SKIP_MIGRATE=true)."
 fi

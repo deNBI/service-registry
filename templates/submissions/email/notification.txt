@@ -6,7 +6,17 @@ Service: {{ submission.service_name }}
 Status: {{ submission.get_status_display }}
 Submission ID: {{ submission.id }}
 Timestamp: {{ submission.updated_at|date:"Y-m-d H:i" }} UTC
-
+{% if admin_url %}
+Admin Portal: {{ admin_url }}
+{% endif %}
+{% if event == "updated" and changes %}
+--- WHAT CHANGED ---
+{% for ch in changes %}
+  {{ ch.label }}:
+    Before: {{ ch.old }}
+    After:  {{ ch.new }}
+{% endfor %}
+{% endif %}
 --- SERVICE DETAILS ---
 
 Submitter: {{ submission.submitter_name }}
@@ -28,7 +38,6 @@ Publications/PMIDs:
 Responsible PIs:
 {% for pi in pis %}- {{ pi }}
 {% endfor %}
-
 KPI Monitoring: {{ submission.get_kpi_monitoring_display }}
 KPI Start Year: {{ submission.kpi_start_year }}
 
@@ -37,6 +46,6 @@ Internal Contact: {{ submission.internal_contact_name }} <{{ submission.internal
 
 --- END OF NOTIFICATION ---
 
-de.NBI Administration Office
+{{ CONTACT_ORG }}
 {{ CONTACT_EMAIL }}
 {{ WEBSITE_URL }}

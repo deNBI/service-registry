@@ -20,26 +20,54 @@ Both Swagger UI (swagger-ui-dist 5.18.2) and ReDoc (2.2.0) assets are vendored l
 
 Two authentication schemes are supported.
 
-### Admin Token
+### Admin API Key (scoped, independent of user accounts)
 
-`Authorization: Token <key>`
+`Authorization: AdminKey <key>`
 
-For staff users and trusted integrations. Grants access to the full submission list
-and all reference data endpoints.
+Machine-to-machine keys that are **independent of any staff user account** and carry
+an explicit scope. Create as many as needed — one per consumer, rotate individually.
 
-**Creating a token** (see [Admin Guide → Issuing Admin API Tokens](admin-guide.md#issuing-admin-api-tokens)):
+| Scope  | HTTP methods allowed                | Typical use case                               |
+| ------ | ----------------------------------- | ---------------------------------------------- |
+| `read` | GET / HEAD / OPTIONS only           | Public-facing website, dashboard, read-only CI |
+| `full` | All methods (GET/POST/PATCH/DELETE) | Trusted back-end integration                   |
+
+**Why use a `read` scope key?**
+
+If you give a `read` key to a third-party website that renders registry data, leaking
+the key is low-risk: the worst-case outcome is that someone reads data that might
+already be public. They **cannot** modify submissions, create or delete reference
+data, or access any field that the serialisers already exclude (`internal_contact_email`,
+`submission_ip`, etc.).
+
+**Creating a key** (see [Admin Guide → Admin API Keys](admin-guide.md#admin-api-keys)):
 
 1. Log in to `/admin-denbi/`
-2. Go to **Auth Token → Tokens → Add Token**
-3. Select the staff user and save
-4. Copy the key — it is shown once in full and then masked
+2. Go to **API → Admin API Keys → Add Admin API Key**
+3. Enter a label (e.g. `Public website`) and choose the scope
+4. Save — the full plaintext key appears once. Copy it now.
 
 **Using it:**
 
 ```bash
+# Read-only access — safe to embed in a public application
 curl https://service-registry.bi.denbi.de/api/v1/submissions/ \
-  -H "Authorization: Token d876555a570df89909058eeeb6d88f4b814a81a1"
+  -H "Authorization: AdminKey <your-key>"
+
+# Attempt to write with a read-scope key → 403 Forbidden
+curl -X POST https://service-registry.bi.denbi.de/api/v1/categories/ \
+  -H "Authorization: AdminKey <read-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "New"}'
+# → {"detail": "This key is read-only. Use a full-access Admin API Key to modify data."}
 ```
+
+**Revoking a key:**
+
+Set **Is active** to unchecked in the admin UI. The record is retained for audit
+purposes; the key immediately stops authenticating.
+
+---
 
 ### Submission API Key
 
@@ -50,10 +78,14 @@ Scoped to a single submission. The plaintext key is shown **once** — store it 
 
 Two scopes are available (set by admins via the API Key admin):
 
-| Scope   | Allowed methods |
-| ------- | --------------- |
-| `read`  | GET only        |
-| `write` | GET + PATCH     |
+| Scope   | REST API    | Web edit form (`/update/edit/`) |
+| ------- | ----------- | ------------------------------- |
+| `read`  | GET only    | View form (GET), cannot submit  |
+| `write` | GET + PATCH | View and submit changes         |
+
+Scope is enforced consistently in both the REST API and the web edit form.
+A `read` key stored in the update session can load the pre-populated form
+for inspection but any POST attempt is rejected and redirected to the key-entry page.
 
 **Using it:**
 
@@ -87,17 +119,17 @@ curl https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
 
 ### List all submissions
 
-`GET /api/v1/submissions/` — requires admin Token. Returns paginated full detail for all submissions.
+`GET /api/v1/submissions/` — requires admin API Key. Returns paginated full detail for all submissions.
 
 **Query parameters:**
 
-| Parameter            | Example                       | Description                      |
-| -------------------- | ----------------------------- | -------------------------------- |
+| Parameter            | Example                       | Description                                                                                   |
+| -------------------- | ----------------------------- | --------------------------------------------------------------------------------------------- |
 | `status`             | `?status=approved`            | Filter by status (`draft`, `submitted`, `under_review`, `approved`, `rejected`, `deprecated`) |
-| `service_center`     | `?service_center=BioinfoProt` | Filter by centre short name      |
-| `year_established`   | `?year_established=2021`      | Filter by year                   |
-| `register_as_elixir` | `?register_as_elixir=true`    | Filter by ELIXIR flag            |
-| `ordering`           | `?ordering=-submitted_at`     | Sort (prefix `-` for descending) |
+| `service_center`     | `?service_center=BioinfoProt` | Filter by centre short name                                                                   |
+| `year_established`   | `?year_established=2021`      | Filter by year                                                                                |
+| `register_as_elixir` | `?register_as_elixir=true`    | Filter by ELIXIR flag                                                                         |
+| `ordering`           | `?ordering=-submitted_at`     | Sort (prefix `-` for descending)                                                              |
 
 **Response (200):**
 
@@ -178,6 +210,22 @@ curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
 
 Full `PUT` is not supported — use `PATCH`.
 
+!!! info "Email notifications on PATCH"
+Every successful `PATCH` triggers the same notification flow as a submitter web-form edit: an admin email with the full submission report, a field-level **what changed** diff table, and a direct link to the admin change view. If any fields actually changed, the submitter also receives a separate confirmation email with the same diff table. No notification is sent when the request body contains no actual changes.
+
+---
+
+## Custom permissions
+
+Two semantic permissions are defined on `ServiceSubmission` beyond the standard CRUD permissions:
+
+| Codename                                | What it gates                                                       | API endpoint impact                            |
+| --------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------- |
+| `submissions.approve_servicesubmission` | Approve and reject status transitions; bulk approve/reject actions. | Admin-only via `/admin/`. Not exposed via API. |
+| `submissions.manage_apikeys`            | Issue, reset, and revoke `SubmissionAPIKey` objects.                | Admin-only via `/admin/`. Not exposed via API. |
+
+These permissions are enforced in the Django admin backend (see [Admin Guide → Custom permission codenames](admin-guide.md#custom-permission-codenames)). They are kept separate from standard CRUD permissions so editors can fix data without having final-decision authority or being able to create credentials that grant submitters write access.
+
 ---
 
 ### Upload or update a service logo
@@ -202,14 +250,14 @@ curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
 ```
 
 !!! note "Use `multipart/form-data` for logo uploads"
-    When uploading a logo, send the request as `multipart/form-data` (`-F` flags in curl) instead of `application/json`. You can mix file and text fields in the same request. JSON-only requests (`Content-Type: application/json`) cannot carry file data.
+When uploading a logo, send the request as `multipart/form-data` (`-F` flags in curl) instead of `application/json`. You can mix file and text fields in the same request. JSON-only requests (`Content-Type: application/json`) cannot carry file data.
 
 **Logo field behaviour:**
 
-| Field | Direction | Type | Notes |
-|-------|-----------|------|-------|
-| `logo` | write-only | file | Accepted in `multipart/form-data` requests only. Omit to leave the existing logo unchanged. |
-| `logo_url` | read-only | string \| null | Absolute URL to the stored logo file, or `null` if no logo has been uploaded. Returned in all submission responses. |
+| Field      | Direction  | Type           | Notes                                                                                                               |
+| ---------- | ---------- | -------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `logo`     | write-only | file           | Accepted in `multipart/form-data` requests only. Omit to leave the existing logo unchanged.                         |
+| `logo_url` | read-only  | string \| null | Absolute URL to the stored logo file, or `null` if no logo has been uploaded. Returned in all submission responses. |
 
 **Accepted formats:** PNG, JPEG, SVG — max 10 MB (configurable via `logo_max_bytes` in `config/site.toml`).
 
@@ -226,17 +274,17 @@ Old logos are **not deleted** when a logo is replaced — previous files remain 
 
 ### Reference data {#reference-data-categories-service-centres-pis}
 
-All reference data endpoints require an admin Token. All three resources support
+All reference data endpoints require an admin API Key. All three resources support
 full CRUD and follow the same pattern.
 
-| Method | URL pattern | Description |
-|--------|-------------|-------------|
-| `GET` | `/api/v1/categories/` | List all categories (active + inactive) |
-| `POST` | `/api/v1/categories/` | Create a category |
-| `GET` | `/api/v1/categories/{id}/` | Retrieve a category |
-| `PATCH` | `/api/v1/categories/{id}/` | Partial update |
-| `PUT` | `/api/v1/categories/{id}/` | Full update |
-| `DELETE` | `/api/v1/categories/{id}/` | Soft-delete (sets `is_active=False`) |
+| Method   | URL pattern                | Description                             |
+| -------- | -------------------------- | --------------------------------------- |
+| `GET`    | `/api/v1/categories/`      | List all categories (active + inactive) |
+| `POST`   | `/api/v1/categories/`      | Create a category                       |
+| `GET`    | `/api/v1/categories/{id}/` | Retrieve a category                     |
+| `PATCH`  | `/api/v1/categories/{id}/` | Partial update                          |
+| `PUT`    | `/api/v1/categories/{id}/` | Full update                             |
+| `DELETE` | `/api/v1/categories/{id}/` | Soft-delete (sets `is_active=False`)    |
 
 Same pattern applies for `/api/v1/service-centers/{id}/` and `/api/v1/pis/{id}/`.
 
@@ -249,60 +297,60 @@ Without the filter, both active and inactive records are returned.
 
 #### Fields — `/api/v1/categories/`
 
-| Field | Type | Writable | Notes |
-|-------|------|----------|-------|
-| `id` | integer | no | Auto-assigned |
-| `name` | string | yes | Must be unique |
-| `is_active` | boolean | yes | Defaults to `true` |
+| Field       | Type    | Writable | Notes              |
+| ----------- | ------- | -------- | ------------------ |
+| `id`        | integer | no       | Auto-assigned      |
+| `name`      | string  | yes      | Must be unique     |
+| `is_active` | boolean | yes      | Defaults to `true` |
 
 #### Fields — `/api/v1/service-centers/`
 
-| Field | Type | Writable | Notes |
-|-------|------|----------|-------|
-| `id` | UUID | no | Auto-assigned |
-| `short_name` | string | yes | e.g. `"HD-HuB"` |
-| `full_name` | string | yes | Full official name |
-| `website` | URL | yes | Optional |
-| `is_active` | boolean | yes | Defaults to `true` |
+| Field        | Type    | Writable | Notes              |
+| ------------ | ------- | -------- | ------------------ |
+| `id`         | UUID    | no       | Auto-assigned      |
+| `short_name` | string  | yes      | e.g. `"HD-HuB"`    |
+| `full_name`  | string  | yes      | Full official name |
+| `website`    | URL     | yes      | Optional           |
+| `is_active`  | boolean | yes      | Defaults to `true` |
 
 #### Fields — `/api/v1/pis/`
 
-| Field | Type | Writable | Notes |
-|-------|------|----------|-------|
-| `id` | UUID | no | Auto-assigned |
-| `last_name` | string | yes | Required |
-| `first_name` | string | yes | Required |
-| `display_name` | string | no | Computed (`"Last, First"`) |
-| `email` | string | yes | Internal — never exposed in submission responses |
-| `institute` | string | yes | Optional |
-| `orcid` | string | yes | Optional; validated format + checksum |
-| `is_active` | boolean | yes | Defaults to `true` |
-| `is_associated_partner` | boolean | yes | Mark `true` for the generic "Associated partner" entry |
+| Field                   | Type    | Writable | Notes                                                  |
+| ----------------------- | ------- | -------- | ------------------------------------------------------ |
+| `id`                    | UUID    | no       | Auto-assigned                                          |
+| `last_name`             | string  | yes      | Required                                               |
+| `first_name`            | string  | yes      | Required                                               |
+| `display_name`          | string  | no       | Computed (`"Last, First"`)                             |
+| `email`                 | string  | yes      | Internal — never exposed in submission responses       |
+| `institute`             | string  | yes      | Optional                                               |
+| `orcid`                 | string  | yes      | Optional; validated format + checksum                  |
+| `is_active`             | boolean | yes      | Defaults to `true`                                     |
+| `is_associated_partner` | boolean | yes      | Mark `true` for the generic "Associated partner" entry |
 
 #### curl examples
 
 ```bash
 # List all service centres (active + inactive)
 curl https://service-registry.bi.denbi.de/api/v1/service-centers/ \
-  -H "Authorization: Token <admin-token>"
+  -H "Authorization: ApiKey <admin-key>"
 
 # List active categories only
 curl "https://service-registry.bi.denbi.de/api/v1/categories/?is_active=true" \
-  -H "Authorization: Token <admin-token>"
+  -H "Authorization: ApiKey <admin-key>"
 
 # Create a new PI
 curl -X POST https://service-registry.bi.denbi.de/api/v1/pis/ \
-  -H "Authorization: Token <admin-token>" \
+  -H "Authorization: ApiKey <admin-key>" \
   -H "Content-Type: application/json" \
   -d '{"last_name": "Smith", "first_name": "Alice", "email": "a.smith@example.com", "institute": "Example University"}'
 
 # Deactivate a service centre (soft-delete)
 curl -X DELETE https://service-registry.bi.denbi.de/api/v1/service-centers/<id>/ \
-  -H "Authorization: Token <admin-token>"
+  -H "Authorization: ApiKey <admin-key>"
 
 # Re-activate a category via PATCH
 curl -X PATCH https://service-registry.bi.denbi.de/api/v1/categories/<id>/ \
-  -H "Authorization: Token <admin-token>" \
+  -H "Authorization: ApiKey <admin-key>" \
   -H "Content-Type: application/json" \
   -d '{"is_active": true}'
 ```
@@ -312,25 +360,25 @@ curl -X PATCH https://service-registry.bi.denbi.de/api/v1/categories/<id>/ \
 Bio.tools metadata is automatically fetched and kept in sync when a submission includes a `biotools_id`.
 The data is embedded directly in every submission response under the `biotoolsrecord` key (see above).
 
-A standalone read-only endpoint is also available for admin tokens:
+A standalone read-only endpoint is also available for admin API keys:
 
-| Method | URL | Description |
-|--------|-----|-------------|
-| `GET` | `/api/v1/biotools/` | List all bio.tools records |
-| `GET` | `/api/v1/biotools/{biotools_id}/` | Retrieve one bio.tools record by its bio.tools ID |
+| Method | URL                               | Description                                       |
+| ------ | --------------------------------- | ------------------------------------------------- |
+| `GET`  | `/api/v1/biotools/`               | List all bio.tools records                        |
+| `GET`  | `/api/v1/biotools/{biotools_id}/` | Retrieve one bio.tools record by its bio.tools ID |
 
-**Authentication:** admin Token required.
+**Authentication:** admin API Key required.
 
 Both endpoints return the same field set as the `biotoolsrecord` object shown in the submission response above, plus a `submission` link field pointing to the associated submission.
 
 ```bash
 # List all synced bio.tools records
 curl https://service-registry.bi.denbi.de/api/v1/biotools/ \
-  -H "Authorization: Token <admin-token>"
+  -H "Authorization: AdminKey <admin-key>"
 
 # Retrieve a specific record
 curl https://service-registry.bi.denbi.de/api/v1/biotools/my-tool/ \
-  -H "Authorization: Token <admin-token>"
+  -H "Authorization: AdminKey <admin-key>"
 ```
 
 #### bio.tools sync actions
@@ -388,9 +436,9 @@ curl -X POST https://service-registry.bi.denbi.de/api/v1/submissions/ \
   -H "Content-Type: application/json" \
   -d @submission.json
 
-# List all submissions (admin token)
+# List all submissions (admin key)
 curl https://service-registry.bi.denbi.de/api/v1/submissions/ \
-  -H "Authorization: Token <admin-token>"
+  -H "Authorization: AdminKey <admin-key>"
 
 # Retrieve your submission (ApiKey)
 curl https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \

@@ -15,6 +15,7 @@ Security notes:
 
 import hashlib
 import hmac
+import re
 import secrets
 import unicodedata
 import uuid
@@ -26,6 +27,22 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
+
+
+# ---------------------------------------------------------------------------
+# Shared validation constants (imported by forms.py and serializers.py)
+# ---------------------------------------------------------------------------
+
+#: Allowed length range for service_description (enforced in clean() and the form).
+DESCRIPTION_MIN_LENGTH: int = 50
+DESCRIPTION_MAX_LENGTH: int = 5000
+
+#: Upper bound on comma-separated publication entries.
+PUBLICATIONS_MAX_COUNT: int = 50
+
+#: Pre-compiled regexes for publication validation (reused by PublicationsField).
+_PMID_RE = re.compile(r"^\d{1,8}$")
+_DOI_RE = re.compile(r"^10\.\d{4,}/\S+$")
 
 
 # ---------------------------------------------------------------------------
@@ -87,19 +104,17 @@ def _validate_fairsharing_url(value: str) -> None:
 
 def _validate_publications(value: str) -> None:
     """Validate comma-separated PMIDs or DOIs."""
-    import re
-
     if not value:
         return
     tokens = [t.strip() for t in value.split(",") if t.strip()]
     if not tokens:
         raise ValidationError(_("At least one PMID or DOI is required."))
-    if len(tokens) > 50:
-        raise ValidationError(_("A maximum of 50 publications may be listed."))
-    pmid_re = re.compile(r"^\d{1,8}$")
-    doi_re = re.compile(r"^10\.\d{4,}/\S+$")
+    if len(tokens) > PUBLICATIONS_MAX_COUNT:
+        raise ValidationError(
+            _(f"A maximum of {PUBLICATIONS_MAX_COUNT} publications may be listed.")
+        )
     for token in tokens:
-        if not (pmid_re.match(token) or doi_re.match(token)):
+        if not (_PMID_RE.match(token) or _DOI_RE.match(token)):
             raise ValidationError(
                 _(
                     f"'{token}' is not a valid PMID (digits only) or DOI (starts with 10.xxxx/)."
@@ -364,9 +379,12 @@ class ServiceSubmission(models.Model):
     )
     kpi_start_year = models.CharField(
         max_length=100,
+        blank=True,
+        default="",
         help_text=(
             "Year KPI monitoring started, or estimated start year if planned. "
-            "Use YYYY format or a short description."
+            "Use YYYY format or a short description. "
+            "Not required when KPI monitoring is set to 'Planned'."
         ),
     )
 
@@ -408,6 +426,20 @@ class ServiceSubmission(models.Model):
         help_text="Consent to data protection information and privacy policy.",
     )
 
+    # -- Change tracking --
+    last_change_summary = models.JSONField(
+        null=True,
+        blank=True,
+        help_text=(
+            "Structured record of the most recent field-level change. "
+            "Written by EditView (submitter edits) and ServiceSubmissionAdmin "
+            "(admin edits). Schema: "
+            '{"changed_by": "submitter|admin:<username>", '
+            '"changed_at": "<ISO-8601>", '
+            '"changes": [{"field":…, "label":…, "old":…, "new":…}]}'
+        ),
+    )
+
     # DRF's throttle system calls request.user.is_authenticated.
     # ServiceSubmission is used as request.user by SubmissionAPIKeyAuthentication,
     # so it must satisfy this interface. A keyed submission is always "authenticated".
@@ -417,6 +449,22 @@ class ServiceSubmission(models.Model):
         verbose_name = "Service Submission"
         verbose_name_plural = "Service Submissions"
         ordering = ["-submitted_at"]
+        permissions = [
+            # Semantic permission for the approve/reject status transitions.
+            # Separating this from change_servicesubmission lets organisations
+            # grant editing rights without granting final-decision rights.
+            (
+                "approve_servicesubmission",
+                "Can approve or reject service submissions",
+            ),
+            # Guards all three key-management operations (issue, reset, revoke).
+            # Kept separate so read-only auditors can view key metadata without
+            # being able to create credentials that grant submitter write access.
+            (
+                "manage_apikeys",
+                "Can issue, reset, and revoke submission API keys",
+            ),
+        ]
         indexes = [
             models.Index(fields=["status"]),
             models.Index(fields=["submitted_at"]),
@@ -438,11 +486,12 @@ class ServiceSubmission(models.Model):
                 "Please provide the toolbox name since this service is part of a toolbox."
             )
 
-        # Data protection consent is mandatory
-        if not self.data_protection_consent:
-            errors["data_protection_consent"] = _(
-                "You must consent to the data protection information to submit this form."
-            )
+        # KPI start year required when monitoring is active (not "planned")
+        if self.kpi_monitoring and self.kpi_monitoring != "planned":
+            if not (self.kpi_start_year or "").strip():
+                errors["kpi_start_year"] = _(
+                    "Please provide the year KPI monitoring started."
+                )
 
         # Year range check
         from django.utils import timezone as tz
@@ -455,11 +504,17 @@ class ServiceSubmission(models.Model):
                 f"Year must be between 1900 and {current_year}."
             )
 
-        # Description minimum length
-        if self.service_description and len(self.service_description.strip()) < 50:
-            errors["service_description"] = _(
-                "Service description must be at least 50 characters."
-            )
+        # Description length bounds
+        if self.service_description:
+            desc_len = len(self.service_description.strip())
+            if desc_len < DESCRIPTION_MIN_LENGTH:
+                errors["service_description"] = _(
+                    f"Service description must be at least {DESCRIPTION_MIN_LENGTH} characters."
+                )
+            elif desc_len > DESCRIPTION_MAX_LENGTH:
+                errors["service_description"] = _(
+                    f"Service description must not exceed {DESCRIPTION_MAX_LENGTH} characters."
+                )
 
         if errors:
             raise ValidationError(errors)
@@ -487,6 +542,48 @@ class ServiceSubmission(models.Model):
             if value:
                 setattr(self, field, _sanitise_text(value))
         super().save(**kwargs)
+
+
+# ---------------------------------------------------------------------------
+# SubmissionChangeLog
+# ---------------------------------------------------------------------------
+
+
+class SubmissionChangeLog(models.Model):
+    """
+    Append-only audit log for field-level changes to a ServiceSubmission.
+
+    One row is written per edit event — regardless of whether the edit came
+    from the submitter's web form, an admin save, or an API PATCH.
+
+    Schema for ``changes`` (mirrors diff_utils.build_diff output):
+        [{"field": "service_name", "label": "Service Name", "old": "...", "new": "..."}]
+    """
+
+    submission = models.ForeignKey(
+        ServiceSubmission,
+        on_delete=models.CASCADE,
+        related_name="change_log",
+    )
+    changed_by = models.CharField(
+        max_length=200,
+        help_text=(
+            'Who made this change. Format: "submitter", "admin:<username>", '
+            'or "api:<key_label>".'
+        ),
+    )
+    changed_at = models.DateTimeField()
+    changes = models.JSONField(
+        help_text="List of changed fields: [{field, label, old, new}, ...]",
+    )
+
+    class Meta:
+        ordering = ["-changed_at"]
+        verbose_name = "Change Log Entry"
+        verbose_name_plural = "Change Log"
+
+    def __str__(self) -> str:
+        return f"{self.changed_by} @ {self.changed_at:%Y-%m-%d %H:%M} ({len(self.changes)} fields)"
 
 
 # ---------------------------------------------------------------------------

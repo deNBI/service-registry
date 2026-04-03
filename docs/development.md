@@ -10,11 +10,11 @@ Everything you need to go from a fresh clone to a running local stack.
 
 ### 1. Prerequisites
 
-| Tool | Minimum version | Install |
-|---|---|---|
-| Docker Engine + Compose | 24 / v2 | [docs.docker.com](https://docs.docker.com/engine/install/) |
-| Git | any | system package |
-| Conda / Miniforge | any | [github.com/conda-forge/miniforge](https://github.com/conda-forge/miniforge) — only needed for local Python work (tests, linting) without Docker |
+| Tool                    | Minimum version | Install                                                                                                                                          |
+| ----------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Docker Engine + Compose | 24 / v2         | [docs.docker.com](https://docs.docker.com/engine/install/)                                                                                       |
+| Git                     | any             | system package                                                                                                                                   |
+| Conda / Miniforge       | any             | [github.com/conda-forge/miniforge](https://github.com/conda-forge/miniforge) — only needed for local Python work (tests, linting) without Docker |
 
 ### 2. Clone and configure
 
@@ -42,7 +42,7 @@ make dev      # starts web + worker + beat + db + redis
 ```
 
 !!! info "Migrations run automatically"
-    The container entrypoint runs `manage.py migrate` before starting. On a fresh database this also auto-seeds the EDAM ontology (~3 400 terms, ~30 s). No manual migrate step needed.
+The container entrypoint runs `manage.py migrate` before starting. On a fresh database this also auto-seeds the EDAM ontology (~3 400 terms, ~30 s). No manual migrate step needed.
 
 ### 4. Create a superuser
 
@@ -52,12 +52,12 @@ make superuser
 
 ### 5. Access the app
 
-| URL | What |
-|---|---|
-| http://localhost:8000 | Public registration form |
-| http://localhost:8000/admin-denbi/ | Admin portal (superuser login) |
-| http://localhost:8000/api/docs/ | Interactive API docs (Swagger UI) |
-| http://localhost:8000/api/redoc/ | ReDoc API reference |
+| URL                                | What                              |
+| ---------------------------------- | --------------------------------- |
+| http://localhost:8000              | Public registration form          |
+| http://localhost:8000/admin-denbi/ | Admin portal (superuser login)    |
+| http://localhost:8000/api/docs/    | Interactive API docs (Swagger UI) |
+| http://localhost:8000/api/redoc/   | ReDoc API reference               |
 
 ---
 
@@ -126,53 +126,53 @@ make typecheck     # mypy
 
 **Development**
 
-| Target | What it does |
-|---|---|
-| `make build` | Rebuild all Docker images with `--no-cache` |
-| `make dev` | Start full dev stack (web + worker + beat + db + redis) |
-| `make dev-down` | Stop the dev stack (data preserved) |
-| `make logs` | Tail all dev stack logs |
-| `make migrate` | Run pending migrations in the running `web` container |
+| Target                | What it does                                                      |
+| --------------------- | ----------------------------------------------------------------- |
+| `make build`          | Rebuild all Docker images with `--no-cache`                       |
+| `make dev`            | Start full dev stack (web + worker + beat + db + redis)           |
+| `make dev-down`       | Stop the dev stack (data preserved)                               |
+| `make logs`           | Tail all dev stack logs                                           |
+| `make migrate`        | Run pending migrations in the running `web` container             |
 | `make makemigrations` | Generate new migration files locally (needed after model changes) |
-| `make superuser` | Create a Django superuser |
-| `make shell` | Open Django `shell_plus` in the `web` container |
-| `make collectstatic` | Collect static files into the container |
+| `make superuser`      | Create a Django superuser                                         |
+| `make shell`          | Open Django `shell_plus` in the `web` container                   |
+| `make collectstatic`  | Collect static files into the container                           |
 
 **Testing and quality** (requires `pip install -r requirements/development.txt`)
 
-| Target | What it does |
-|---|---|
-| `make test` | pytest with SQLite in-memory — no Docker needed |
-| `make test-cov` | pytest + HTML coverage report (`htmlcov/`) |
-| `make lint` | ruff check + format check |
-| `make lint-fix` | Auto-fix ruff lint and formatting issues |
-| `make audit` | `pip-audit` against production requirements |
-| `make typecheck` | Run mypy type checker |
+| Target           | What it does                                                |
+| ---------------- | ----------------------------------------------------------- |
+| `make test`      | pytest with SQLite in-memory — no Docker needed             |
+| `make test-cov`  | pytest + HTML coverage report (`htmlcov/`)                  |
+| `make lint`      | ruff check + format check                                   |
+| `make lint-fix`  | Auto-fix ruff lint and formatting issues                    |
+| `make audit`     | `pip-audit` against production requirements                 |
+| `make typecheck` | Run mypy type checker                                       |
 | `make dead-code` | `vulture` dead-code detection (unused functions, variables) |
-| `make security` | `bandit` SAST security scan (medium + high severity) |
+| `make security`  | `bandit` SAST security scan (medium + high severity)        |
 
 **Documentation**
 
-| Target | What it does |
-|---|---|
-| `make docs` | Serve MkDocs locally at http://127.0.0.1:8001 |
+| Target            | What it does                                       |
+| ----------------- | -------------------------------------------------- |
+| `make docs`       | Serve MkDocs locally at http://127.0.0.1:8001      |
 | `make docs-build` | Build static MkDocs site into `site/` (`--strict`) |
 
 **Production**
 
-| Target | What it does |
-|---|---|
-| `make prod-up` | Start production stack (compose + prod overlay) |
-| `make prod-down` | Stop production stack |
-| `make prod-migrate` | Run migrations in the production web container |
-| `make prod-logs` | Tail production logs |
+| Target              | What it does                                    |
+| ------------------- | ----------------------------------------------- |
+| `make prod-up`      | Start production stack (compose + prod overlay) |
+| `make prod-down`    | Stop production stack                           |
+| `make prod-migrate` | Run migrations in the production web container  |
+| `make prod-logs`    | Tail production logs                            |
 
 **Cleanup**
 
-| Target | What it does |
-|---|---|
-| `make clean` | Stop containers + remove all volumes — **permanently deletes DB data**, prompts for confirmation |
-| `make nuke` | Full reset: `clean` → `build` → `dev` → wait for migrations — one command to a fresh working stack |
+| Target       | What it does                                                                                       |
+| ------------ | -------------------------------------------------------------------------------------------------- |
+| `make clean` | Stop containers + remove all volumes — **permanently deletes DB data**, prompts for confirmation   |
+| `make nuke`  | Full reset: `clean` → `build` → `dev` → wait for migrations — one command to a fresh working stack |
 
 ---
 
@@ -206,7 +206,7 @@ denbi_service_registry/
 │   ├── biotools/     — bio.tools HTTP client, sync, signal, Celery tasks
 │   ├── edam/         — EDAM ontology model, sync management command
 │   ├── registry/     — Reference data (PIs, categories, service centres)
-│   └── submissions/  — Core model, registration form, views, admin
+│   └── submissions/  — Core model, registration form, views, admin, diff_utils
 ├── config/
 │   ├── settings.py       — Main Django settings
 │   ├── settings_test.py  — Test overrides (SQLite, no Redis)
@@ -230,15 +230,15 @@ All third-party CSS and JavaScript is downloaded once and committed to `static/`
 
 ### Current inventory
 
-| Asset | Version | Location | Used by |
-|---|---|---|---|
-| Bootstrap | 5.3.3 | `static/css/bootstrap.min.css`, `static/js/bootstrap.bundle.min.js` | All pages |
-| HTMX | 1.9.12 | `static/js/htmx.min.js` | bio.tools prefill |
-| Tom-Select | 2.3.1 | `static/css/tom-select.bootstrap5.min.css`, `static/js/tom-select.complete.min.js` | EDAM multi-select widget, affiliation combobox |
-| ALTCHA | 2.3.0 | `static/js/altcha.min.js` | Registration and edit forms (CAPTCHA widget) |
-| swagger-ui-dist | 5.18.2 | `static/swagger-ui/` (4 files) | `/api/docs/` |
-| ReDoc | 2.2.0 | `static/redoc/bundles/redoc.standalone.js` | `/api/redoc/` |
-| de.NBI favicon | — | `static/img/favicon.ico` | All pages, admin |
+| Asset           | Version | Location                                                                           | Used by                                        |
+| --------------- | ------- | ---------------------------------------------------------------------------------- | ---------------------------------------------- |
+| Bootstrap       | 5.3.3   | `static/css/bootstrap.min.css`, `static/js/bootstrap.bundle.min.js`                | All pages                                      |
+| HTMX            | 1.9.12  | `static/js/htmx.min.js`                                                            | bio.tools prefill                              |
+| Tom-Select      | 2.3.1   | `static/css/tom-select.bootstrap5.min.css`, `static/js/tom-select.complete.min.js` | EDAM multi-select widget, affiliation combobox |
+| ALTCHA          | 2.3.0   | `static/js/altcha.min.js`                                                          | Registration and edit forms (CAPTCHA widget)   |
+| swagger-ui-dist | 5.18.2  | `static/swagger-ui/` (4 files)                                                     | `/api/docs/`                                   |
+| ReDoc           | 2.2.0   | `static/redoc/bundles/redoc.standalone.js`                                         | `/api/redoc/`                                  |
+| de.NBI favicon  | —       | `static/img/favicon.ico`                                                           | All pages, admin                               |
 
 ### Updating a library
 
@@ -300,12 +300,12 @@ All third-party CSS and JavaScript is downloaded once and committed to `static/`
 
 ### Can I use an external URL instead of vendoring?
 
-| Asset type | External URL OK? | Notes |
-|---|---|---|
-| **Logo** (`logo_url` in `site.toml`) | Yes | CSP `img-src` is built dynamically from this URL |
-| **Favicon** (`favicon_url` in `site.toml`) | Yes | Same dynamic CSP behaviour |
-| **JS/CSS frameworks** | **No** | Would make browser requests to third-party CDNs — GDPR violation |
-| **Swagger UI / ReDoc** | **No** | drf-spectacular defaults to jsDelivr; we override to `/static/`. Do not revert |
+| Asset type                                 | External URL OK? | Notes                                                                          |
+| ------------------------------------------ | ---------------- | ------------------------------------------------------------------------------ |
+| **Logo** (`logo_url` in `site.toml`)       | Yes              | CSP `img-src` is built dynamically from this URL                               |
+| **Favicon** (`favicon_url` in `site.toml`) | Yes              | Same dynamic CSP behaviour                                                     |
+| **JS/CSS frameworks**                      | **No**           | Would make browser requests to third-party CDNs — GDPR violation               |
+| **Swagger UI / ReDoc**                     | **No**           | drf-spectacular defaults to jsDelivr; we override to `/static/`. Do not revert |
 
 ### Checking for CDN leakage
 
@@ -326,13 +326,13 @@ Custom template tags and filters live in
 Renders a section description string from `form_texts.yaml` as safe HTML.
 Use this filter (not Django's built-in `urlize`) for all section description output.
 
-| Input syntax | Output |
-|---|---|
-| `[link text](https://example.com)` | `<a href="https://example.com">link text</a>` |
-| `https://example.com` | auto-linked anchor |
-| Blank line (`\n\n`) | paragraph break — wraps each block in `<p>` |
-| Single newline (`\n`, using YAML `\|` block) | `<br>` |
-| Raw `<html>` | escaped — never rendered as markup |
+| Input syntax                                 | Output                                        |
+| -------------------------------------------- | --------------------------------------------- |
+| `[link text](https://example.com)`           | `<a href="https://example.com">link text</a>` |
+| `https://example.com`                        | auto-linked anchor                            |
+| Blank line (`\n\n`)                          | paragraph break — wraps each block in `<p>`   |
+| Single newline (`\n`, using YAML `\|` block) | `<br>`                                        |
+| Raw `<html>`                                 | escaped — never rendered as markup            |
 
 Only `http://` and `https://` schemes are accepted for links. `javascript:` and other
 schemes in `[text](...)` syntax are not matched and pass through as escaped plain text.
@@ -361,6 +361,50 @@ element.
 
 ---
 
+## Field-level diff (`diff_utils`)
+
+`apps/submissions/diff_utils.py` computes a human-readable before/after diff for any submission save. It is used by all three edit paths — the submitter web form (`views.py`), the admin backend (`admin.py`), and the REST API (`api/views.py`).
+
+### Key functions
+
+| Function                    | Purpose                                                                                                              |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `snapshot(instance)`        | Returns a `dict` of current scalar field values; **must be called before** `form.is_valid()` or admin `save_model()` |
+| `snapshot_m2m(instance)`    | Returns a `dict` of current M2M field values as sorted lists of strings                                              |
+| `build_diff(before, after)` | Compares two snapshots; returns `[{field, label, old, new}]` for changed fields only                                 |
+
+### Snapshot timing
+
+Django's `ModelForm._post_clean()` calls `construct_instance()` during `is_valid()`, which writes POST data onto `form.instance` **before** `form.save()` is called. Always take the `snapshot()` and `snapshot_m2m()` calls before constructing the form:
+
+```python
+before_scalar = snapshot(submission)          # ← before form construction
+before_m2m    = snapshot_m2m(submission)
+form = SubmissionForm(request.POST, instance=submission)
+form.is_valid()                               # ← would corrupt before-state if snapshot taken here
+form.save()
+after_scalar = snapshot(submission)
+after_m2m    = snapshot_m2m(submission)
+changes = build_diff({**before_scalar, **before_m2m}, {**after_scalar, **after_m2m})
+```
+
+In the admin, `save_model()` receives `obj` already populated with new form values — re-fetch the original from the database for the before-snapshot:
+
+```python
+original = obj.__class__.objects.get(pk=obj.pk)
+before_scalar = snapshot(original)
+```
+
+DRF serializers do **not** modify `self.instance` during `is_valid()`, so the snapshot can safely be taken before serializer construction.
+
+### Adding a diffable field
+
+1. Add an entry to `DIFFABLE_FIELDS` (scalar) or `DIFFABLE_M2M` in `diff_utils.py`
+2. If the field uses `choices`, add it to `_CHOICE_FIELDS` so `get_FOO_display()` is used
+3. Add a test to `tests/test_diff_utils.py`
+
+---
+
 ## Logo upload security pipeline
 
 Uploaded service logos pass through `apps/submissions/logo_utils.py` before being
@@ -376,13 +420,13 @@ result = validate_and_process_logo(file_obj)  # → InMemoryUploadedFile
 
 ### Processing steps (in order)
 
-| Step | What happens |
-|------|-------------|
-| Size check | Raises `ValidationError` if file exceeds `settings.LOGO_MAX_BYTES` (configurable in `site.toml`) |
-| Magic-byte detection | Reads first bytes to determine type — never trusts file extension or MIME header |
-| JPEG / PNG | Re-encoded via Pillow: strips EXIF metadata, verifies image integrity |
-| SVG | Parsed by stdlib `xml.etree.ElementTree` (safe on Python 3.12+/Expat 2.7.1, which blocks XXE and entity-expansion attacks), then scrubbed of `<script>` elements, `on*` event-handler attributes, non-fragment `href`/`src` URLs |
-| UUID filename | Original filename is discarded; `_logo_upload_to()` in `models.py` assigns `logos/<uuid4>.<ext>` |
+| Step                 | What happens                                                                                                                                                                                                                     |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Size check           | Raises `ValidationError` if file exceeds `settings.LOGO_MAX_BYTES` (configurable in `site.toml`)                                                                                                                                 |
+| Magic-byte detection | Reads first bytes to determine type — never trusts file extension or MIME header                                                                                                                                                 |
+| JPEG / PNG           | Re-encoded via Pillow: strips EXIF metadata, verifies image integrity                                                                                                                                                            |
+| SVG                  | Parsed by stdlib `xml.etree.ElementTree` (safe on Python 3.12+/Expat 2.7.1, which blocks XXE and entity-expansion attacks), then scrubbed of `<script>` elements, `on*` event-handler attributes, non-fragment `href`/`src` URLs |
+| UUID filename        | Original filename is discarded; `_logo_upload_to()` in `models.py` assigns `logos/<uuid4>.<ext>`                                                                                                                                 |
 
 ### Known limitation
 
@@ -417,11 +461,11 @@ the `settings` + `tmp_path` fixtures to set a deterministic `MEDIA_ROOT`
 
 ### Available simple tags
 
-| Tag | Purpose |
-|---|---|
-| `{% site_logo_url %}` | Returns logo URL from `site.toml`, or empty string |
-| `{% site_favicon_url %}` | Returns favicon URL (auto-detects `static/img/favicon.*` as fallback) |
-| `{% site_setting section key %}` | Generic accessor for any `site.toml` value |
+| Tag                              | Purpose                                                               |
+| -------------------------------- | --------------------------------------------------------------------- |
+| `{% site_logo_url %}`            | Returns logo URL from `site.toml`, or empty string                    |
+| `{% site_favicon_url %}`         | Returns favicon URL (auto-detects `static/img/favicon.*` as fallback) |
+| `{% site_setting section key %}` | Generic accessor for any `site.toml` value                            |
 
 ---
 
@@ -436,11 +480,11 @@ Enhances any `<select class="edam-autocomplete">` into a pill-zone + search + dr
 picker for EDAM ontology terms. Applied automatically to all matching elements on
 `DOMContentLoaded`. Configure via data attributes on the `<select>`:
 
-| Attribute | Default | Purpose |
-|---|---|---|
-| `data-max-items` | `6` | Maximum selectable terms |
-| `data-placeholder` | `"Search EDAM terms…"` | Search input placeholder |
-| `data-branch` | `""` | EDAM branch filter (`topic`, `operation`, etc.) |
+| Attribute          | Default                | Purpose                                         |
+| ------------------ | ---------------------- | ----------------------------------------------- |
+| `data-max-items`   | `6`                    | Maximum selectable terms                        |
+| `data-placeholder` | `"Search EDAM terms…"` | Search input placeholder                        |
+| `data-branch`      | `""`                   | EDAM branch filter (`topic`, `operation`, etc.) |
 
 ### `buildCompactSelect(selectEl, label)`
 
@@ -466,6 +510,31 @@ The `submitter_affiliation` field uses Tom Select (vendored at
 `edit.html`. It provides a single-value searchable combobox with `create: true`
 (free-text entry). To add Tom Select to another field, load the JS in the relevant
 template's `{% block extra_js %}` and initialise with `new TomSelect(el, {...})`.
+
+---
+
+## Reusable form widgets
+
+**Four reusable widget classes** in `apps/submissions/widgets.py` provide consistent UX across form fields:
+
+| Widget                      | Use case                                                                       | Output                                                                                 |
+| --------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| `EdamAutocompleteWidget`    | EDAM term fields (`edam_topics`, `edam_operations`)                            | Searchable multi-select with pills, max 6 items                                        |
+| `AffiliationComboboxWidget` | Institute/affiliation autocomplete (`submitter_affiliation`, `host_institute`) | Tom Select single-select combobox with free-text entry                                 |
+| `CompactSelectWidget`       | Multi-select fields (`service_categories`, `responsible_pis`)                  | Searchable list with checkboxes, selected items shown as pills                         |
+| `CompactSelectSingleWidget` | Single-select fields (`service_center`)                                        | Searchable list with **radio buttons** (not checkboxes), clarifies "pick one" to users |
+
+**To add a new instance of these**, just use them in `forms.py`:
+
+```python
+"my_instit_field": AffiliationComboboxWidget(placeholder="e.g. Max-Planck-Institut"),
+"my_multi_field": CompactSelectWidget(label="Items"),
+"my_single_field": CompactSelectSingleWidget(label="Choice"),
+```
+
+No JS changes needed — widgets declare their Media (CSS/JS dependencies) and register data attributes that the boot code auto-discovers.
+
+**Implementation details** — see `apps/submissions/widgets.py` docstrings for architectural rationale (progressive enhancement, accessibility, GDPR compliance for vendored assets).
 
 ---
 

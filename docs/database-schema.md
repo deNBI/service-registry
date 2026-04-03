@@ -9,6 +9,7 @@ icon: material/database
 ```
 ServiceSubmission (UUID PK)
 ├── SubmissionAPIKey (FK → submission, CASCADE)         — one-to-many
+├── SubmissionChangeLog (FK → submission, CASCADE)      — one-to-many
 ├── BioToolsRecord (OneToOne → submission, CASCADE)     — one-to-one
 │   └── BioToolsFunction (FK → record, CASCADE)        — one-to-many
 ├── service_categories → ServiceCategory               — many-to-many
@@ -135,6 +136,29 @@ CREATE INDEX ON submissions_servicesubmission (year_established);
 -- Compound: default admin list sort + status filter
 CREATE INDEX ON submissions_servicesubmission (submitted_at DESC, status);
 ```
+
+---
+
+## `submissions_submissionchangelog`
+
+Append-only audit trail of field-level changes. One row per edit event regardless of source (submitter web form, admin backend, API PATCH).
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | bigint | PK (auto-increment) | |
+| `submission_id` | UUID | FK → `ServiceSubmission`, CASCADE | |
+| `changed_by` | varchar(200) | | `"submitter"`, `"admin:<username>"`, or `"api:<key_label>"` |
+| `changed_at` | timestamptz | | Timestamp of the edit |
+| `changes` | jsonb | | `[{field, label, old, new}, …]` — only changed fields |
+
+**Design notes:**
+
+- Rows are never updated or deleted — the table is append-only.
+- Ordered by `changed_at DESC` (most recent first).
+- Displayed in the admin change view under "Change History" (collapsed, each entry expandable).
+- Captures edits from: submitter web form (`"submitter"`), admin backend (`"admin:<username>"`), and API PATCH (`"api:<key_label>"`).
+
+For a full discussion of the audit logging system, see [Admin Guide → Audit Logging](admin-guide.md#audit-logging).
 
 ---
 

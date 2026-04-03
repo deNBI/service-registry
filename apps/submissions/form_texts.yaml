@@ -63,7 +63,7 @@ submitter_last_name:
 
 submitter_affiliation:
   help: "Start typing to search for your institution, or enter a custom name."
-  tooltip: "Provide the institutional affiliation of the person submitting or updating this service entry. Used for internal documentation and follow-up."
+  tooltip: "Type the name of your institute or affiliation. A list of suggestions will appear, drawn from active PIs and past submissions — just select yours. If your institute isn't in the list, you can type a custom name and it will be saved."
 
 register_as_elixir:
   help: "Register this service also as an ELIXIR-DE Service?"
@@ -126,12 +126,12 @@ associated_partner_note:
   tooltip: "Provide the PI's name and affiliation if not available in the list."
 
 host_institute:
-  help: "Host institute."
-  tooltip: "Institute where the service is hosted and operated."
+  help: "Start typing to search for the host institute, or enter a custom name."
+  tooltip: "The institute where the service is operationally hosted and maintained. As with the affiliation field above, you can search for known institutes or enter a custom name if not listed."
 
 service_center:
-  help: "Associated de.NBI service centre."
-  tooltip: "Select the service centre this service is affiliated with."
+  help: "Search and select the de.NBI service centre this service is affiliated with."
+  tooltip: "Select a single de.NBI service centre from the dropdown. Start typing to filter the list of available centres. This helps organize services within the de.NBI network."
 
 public_contact_email:
   help: "Public contact email."
@@ -216,3 +216,10 @@ data_protection_consent:
     such as social media posts, newsletters, and other communications.
   help: ""
   tooltip: "Required to process and store the submitted information according to de.NBI regulations."
+
+
+# ── Internal / admin-only fields ─────────────────────────────────────────────
+
+last_change_summary:
+  help: ""
+  tooltip: ""

@@ -6,7 +6,7 @@ DRF ViewSets for the de.NBI Service Registry REST API.
 Authentication strategy
 -----------------------
 - POST /submissions/           — public, no auth needed
-- GET  /submissions/           — admin Token auth (list all)
+- GET  /submissions/           — admin ApiKey auth (list all)
 - GET  /submissions/{id}/      — ApiKey auth (owner sees own record)
 - PATCH /submissions/{id}/     — ApiKey auth (owner updates own record)
 
@@ -17,18 +17,27 @@ Authentication strategy
 
 import logging
 
+from django.utils.timezone import now
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from rest_framework import filters, mixins, status, viewsets
-from rest_framework.authentication import TokenAuthentication
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
-from apps.submissions.models import ServiceSubmission, SubmissionAPIKey
-from apps.submissions.tasks import send_submission_notification
+from apps.submissions.diff_utils import build_diff, snapshot, snapshot_m2m
+from apps.submissions.http_utils import get_client_ip, hash_user_agent
+from apps.submissions.models import (
+    ServiceSubmission,
+    SubmissionAPIKey,
+    SubmissionChangeLog,
+)
+from apps.submissions.tasks import (
+    send_submission_notification,
+    send_update_notification,
+)
 
-from .authentication import SubmissionAPIKeyAuthentication
+from .authentication import AdminAPIKeyAuthentication, SubmissionAPIKeyAuthentication
 from .permissions import IsAdminOrOwner, IsAdminTokenUser
 from .serializers import (
     PrincipalInvestigatorAdminSerializer,
@@ -74,7 +83,7 @@ class SubmissionViewSet(
     | Method | URL | Auth | Description |
     |--------|-----|------|-------------|
     | POST | /api/v1/submissions/ | None | Register a new service |
-    | GET | /api/v1/submissions/ | Admin Token | List all submissions |
+    | GET | /api/v1/submissions/ | Admin ApiKey | List all submissions |
     | GET | /api/v1/submissions/{id}/ | ApiKey | Retrieve your submission |
     | PATCH | /api/v1/submissions/{id}/ | ApiKey | Update your submission |
 
@@ -112,8 +121,8 @@ class SubmissionViewSet(
         Called during request initialisation before self.action exists.
         Use method + URL kwargs to decide auth scheme.
         - POST (create) → no authentication required
-        - GET list      → admin Token
-        - GET/PATCH detail → ApiKey (owner) or Token (admin)
+        - GET list      → admin ApiKey
+        - GET/PATCH detail → ApiKey (owner) or ApiKey (admin)
         """
         http_method = (
             self.request.method if hasattr(self, "request") and self.request else "GET"
@@ -123,8 +132,11 @@ class SubmissionViewSet(
         if http_method == "POST" and not _is_detail_action(self):
             return []
 
-        # All other requests accept both schemes; permissions filter further
-        return [TokenAuthentication(), SubmissionAPIKeyAuthentication()]
+        # All other requests accept both API key schemes; permissions filter further
+        return [
+            AdminAPIKeyAuthentication(),
+            SubmissionAPIKeyAuthentication(),
+        ]
 
     def get_permissions(self):
         """
@@ -163,7 +175,7 @@ class SubmissionViewSet(
         if isinstance(self.request.user, ServiceSubmission):
             return qs.filter(id=self.request.user.id)
 
-        # Admin token: support optional query-param filters
+        # Admin ApiKey: support optional query-param filters
         params = self.request.query_params
 
         status_filter = params.get("status")
@@ -206,7 +218,8 @@ class SubmissionViewSet(
 
         submission = serializer.save(
             status="submitted",
-            submission_ip=self._get_client_ip(request),
+            submission_ip=get_client_ip(request),
+            user_agent_hash=hash_user_agent(request),
         )
 
         _, plaintext = SubmissionAPIKey.create_for_submission(
@@ -243,7 +256,7 @@ class SubmissionViewSet(
         summary="List all submissions",
         description=(
             "Returns a paginated list of all service submissions.\n\n"
-            "Requires admin `Authorization: Token <admin-token>` header.\n\n"
+            "Requires admin `Authorization: ApiKey <admin-key>` header.\n\n"
             "**Filters:**\n"
             "- `?status=submitted|under_review|approved|rejected|deprecated`\n"
             "- `?service_center=<short_name>`\n"
@@ -282,6 +295,12 @@ class SubmissionViewSet(
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
         instance = self.get_object()
+
+        # Snapshot BEFORE serializer.save() — DRF's update() writes the new
+        # values to the instance, so we must capture the originals first.
+        before_scalar = snapshot(instance)
+        before_m2m = snapshot_m2m(instance)
+
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -290,8 +309,39 @@ class SubmissionViewSet(
             instance.status = "submitted"
             instance.save(update_fields=["status"])
 
-        send_submission_notification.delay(str(instance.id), event="updated")
-        logger.info("API submission updated", extra={"submission_id": str(instance.id)})
+        # Compute field-level diff and persist it on the submission.
+        after_scalar = snapshot(instance)
+        after_m2m = snapshot_m2m(instance)
+        changes = build_diff(
+            {**before_scalar, **before_m2m},
+            {**after_scalar, **after_m2m},
+        )
+
+        if changes:
+            # Identify who made the change via the API key label (request.auth
+            # is the SubmissionAPIKey instance set by SubmissionAPIKeyAuthentication).
+            key_label = getattr(request.auth, "label", "api")
+            changed_by = f"api:{key_label}"
+            changed_at = now()
+            instance.last_change_summary = {
+                "changed_by": changed_by,
+                "changed_at": changed_at.isoformat(),
+                "changes": changes,
+            }
+            instance.save(update_fields=["last_change_summary"])
+            SubmissionChangeLog.objects.create(
+                submission=instance,
+                changed_by=changed_by,
+                changed_at=changed_at,
+                changes=changes,
+            )
+
+        send_update_notification.delay(str(instance.id), changes=changes)
+        logger.info(
+            "API submission updated (%d field(s) changed)",
+            len(changes),
+            extra={"submission_id": str(instance.id)},
+        )
         return Response(serializer.data)
 
     def update(self, request, *args, **kwargs):
@@ -304,13 +354,6 @@ class SubmissionViewSet(
                 status=status.HTTP_405_METHOD_NOT_ALLOWED,
             )
         return super().update(request, *args, **kwargs)
-
-    @staticmethod
-    def _get_client_ip(request) -> str:
-        forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        return request.META.get("REMOTE_ADDR", "")
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +371,19 @@ def _active_filter(qs, params):
     return qs
 
 
+class SoftDeleteMixin:
+    """
+    Mixin for ModelViewSet subclasses whose model has an ``is_active`` flag.
+    DELETE sets ``is_active=False`` and returns 204 — the row is never removed.
+    """
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        instance.is_active = False
+        instance.save(update_fields=["is_active"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 _is_active_param = OpenApiParameter(
     "is_active",
     str,
@@ -336,9 +392,9 @@ _is_active_param = OpenApiParameter(
 
 
 @extend_schema(tags=["Reference Data"], parameters=[_is_active_param])
-class ServiceCategoryViewSet(viewsets.ModelViewSet):
+class ServiceCategoryViewSet(SoftDeleteMixin, viewsets.ModelViewSet):
     """
-    CRUD for service categories. All operations require admin token.
+    CRUD for service categories. All operations require admin API key.
 
     | Method | URL | Description |
     |--------|-----|-------------|
@@ -354,7 +410,7 @@ class ServiceCategoryViewSet(viewsets.ModelViewSet):
 
     serializer_class = ServiceCategoryAdminSerializer
     permission_classes = [IsAdminTokenUser]
-    authentication_classes = [TokenAuthentication]
+    authentication_classes = [AdminAPIKeyAuthentication]
     pagination_class = None
 
     def get_queryset(self):
@@ -363,17 +419,11 @@ class ServiceCategoryViewSet(viewsets.ModelViewSet):
             self.request.query_params,
         )
 
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        instance.is_active = False
-        instance.save(update_fields=["is_active"])
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
 
 @extend_schema(tags=["Reference Data"], parameters=[_is_active_param])
-class ServiceCenterViewSet(viewsets.ModelViewSet):
+class ServiceCenterViewSet(SoftDeleteMixin, viewsets.ModelViewSet):
     """
-    CRUD for de.NBI service centres. All operations require admin token.
+    CRUD for de.NBI service centres. All operations require admin API key.
 
     | Method | URL | Description |
     |--------|-----|-------------|
@@ -389,7 +439,7 @@ class ServiceCenterViewSet(viewsets.ModelViewSet):
 
     serializer_class = ServiceCenterAdminSerializer
     permission_classes = [IsAdminTokenUser]
-    authentication_classes = [TokenAuthentication]
+    authentication_classes = [AdminAPIKeyAuthentication]
     pagination_class = None
 
     def get_queryset(self):
@@ -398,17 +448,11 @@ class ServiceCenterViewSet(viewsets.ModelViewSet):
             self.request.query_params,
         )
 
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        instance.is_active = False
-        instance.save(update_fields=["is_active"])
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
 
 @extend_schema(tags=["Reference Data"], parameters=[_is_active_param])
-class PrincipalInvestigatorViewSet(viewsets.ModelViewSet):
+class PrincipalInvestigatorViewSet(SoftDeleteMixin, viewsets.ModelViewSet):
     """
-    CRUD for principal investigators. All operations require admin token.
+    CRUD for principal investigators. All operations require admin API key.
 
     | Method | URL | Description |
     |--------|-----|-------------|
@@ -427,7 +471,7 @@ class PrincipalInvestigatorViewSet(viewsets.ModelViewSet):
 
     serializer_class = PrincipalInvestigatorAdminSerializer
     permission_classes = [IsAdminTokenUser]
-    authentication_classes = [TokenAuthentication]
+    authentication_classes = [AdminAPIKeyAuthentication]
     pagination_class = None
 
     def get_queryset(self):
@@ -435,12 +479,6 @@ class PrincipalInvestigatorViewSet(viewsets.ModelViewSet):
             PrincipalInvestigator.objects.all().order_by("last_name", "first_name"),
             self.request.query_params,
         )
-
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        instance.is_active = False
-        instance.save(update_fields=["is_active"])
-        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +551,7 @@ class BioToolsRecordViewSet(
     bio.tools integration records — locally cached snapshots linked to
     de.NBI service registrations, refreshed daily by a Celery task.
 
-    - List: requires admin token.
+    - List: requires admin API key.
     - Retrieve (by biotoolsID): public for approved submissions.
 
     **Filters:** `?submission=<uuid>`, `?biotools_id=<id>`
@@ -543,7 +581,10 @@ class BioToolsRecordViewSet(
         return [IsAdminTokenUser()]
 
     def get_authenticators(self):
-        return [TokenAuthentication(), SubmissionAPIKeyAuthentication()]
+        return [
+            AdminAPIKeyAuthentication(),
+            SubmissionAPIKeyAuthentication(),
+        ]
 
     def get_object(self):
         from apps.biotools.models import BioToolsRecord

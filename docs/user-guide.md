@@ -29,7 +29,9 @@ bioinformatics service for inclusion in the [de.NBI services catalogue](https://
 
 3. Click **Submit Registration**.
 
-4. **Save your API key immediately.** On the confirmation page you will see a box containing your unique API key. This key:
+4. **You will receive a confirmation email** at the address you provided as internal contact, acknowledging that your registration was received. Keep this email for your records — it contains your Submission ID.
+
+5. **Save your API key immediately.** On the confirmation page you will see a box containing your unique API key. This key:
    - Is shown **exactly once** — it will not be emailed to you.
    - Is required to edit your submission later.
    - If lost, contact [servicecoordination@denbi.de](mailto:servicecoordination@denbi.de) to have a new one issued.
@@ -42,9 +44,14 @@ bioinformatics service for inclusion in the [de.NBI services catalogue](https://
 2. Paste your API key into the text field and click **Retrieve My Registration**.
 3. Your form will be pre-populated with all existing values.
 4. Make your changes and click **Save Changes**.
-5. The de.NBI administration office will be notified automatically.
+5. Two emails are sent automatically:
+   - **Administration office** — notified of your changes with a summary of what was updated.
+   - **You** — a confirmation email is sent to your internal contact address listing exactly which fields changed (previous value → new value).
 
 > **Note:** If your submission was already approved and you edit it, the status will reset to "Submitted" for re-review.
+
+!!! info "Security notice"
+    If you receive a "your registration has been updated" email that you did not initiate, contact the de.NBI administration office immediately. The email will include instructions at the bottom.
 
 ---
 
@@ -229,6 +236,7 @@ The status will be set to **Deprecated** and the registry team will be notified.
 2. You will receive an email at your internal contact address when the status changes.
 3. If approved, your service will appear in the de.NBI services catalogue.
 4. You can update your submission at any time using your API key.
+5. Every time you edit your submission, you will receive a confirmation email listing exactly what changed — so you always have a record of your updates.
 
 ---
 

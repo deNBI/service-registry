@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><style>
+body    { font-family: Arial, sans-serif; font-size: 14px; color: #333; max-width: 600px; }
+h2      { color: #005b9a; }
+.meta   { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px;
+          padding: 12px 16px; margin: 1rem 0; }
+table   { border-collapse: collapse; width: 100%; margin-top: .5rem; }
+th      { padding: 6px 10px; border: 1px solid #dee2e6; text-align: left;
+          font-size: 12px; font-weight: 700; }
+td      { padding: 6px 10px; border: 1px solid #dee2e6; font-size: 13px;
+          word-break: break-word; }
+th.field  { background: #e8f0f8; }
+th.before { background: #fef2f2; }
+th.after  { background: #f0fdf4; }
+td.before { color: #991b1b; }
+td.after  { color: #166534; }
+.footer { margin-top: 2rem; font-size: 12px; color: #666;
+          border-top: 1px solid #dee2e6; padding-top: 1rem; }
+.notice { background: #fffbeb; border: 1px solid #fde68a; border-radius: 4px;
+          padding: 10px 14px; margin-top: 1rem; font-size: 13px; color: #92400e; }
+</style></head>
+<body>
+<h2>de.NBI Service Registry — Registration Updated</h2>
+
+<p>Dear {{ submission.submitter_first_name }} {{ submission.submitter_last_name }},</p>
+<p>Your service registration has been updated. A summary of what changed is shown below.</p>
+
+<div class="meta">
+  <strong>Service:</strong> {{ submission.service_name }}<br>
+  <strong>Submission ID:</strong> <code>{{ submission.id }}</code><br>
+  <strong>Updated:</strong> {{ submission.updated_at|date:"Y-m-d H:i" }} UTC
+</div>
+
+{% if changes %}
+<p style="font-weight:600;margin-bottom:.3rem">Fields changed ({{ changes|length }})</p>
+<table>
+  <thead>
+    <tr>
+      <th class="field">Field</th>
+      <th class="before">Previous value</th>
+      <th class="after">New value</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for ch in changes %}
+    <tr>
+      <td><strong>{{ ch.label }}</strong></td>
+      <td class="before">{{ ch.old }}</td>
+      <td class="after">{{ ch.new }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p style="color:#6b7280;font-style:italic">No field differences were recorded for this update.</p>
+{% endif %}
+
+<div class="notice">
+  If you did not make this change, or if something looks incorrect, please contact us immediately.
+</div>
+
+<div class="footer">
+  {{ CONTACT_ORG }} &bull; <a href="mailto:{{ CONTACT_EMAIL }}">{{ CONTACT_EMAIL }}</a>
+</div>
+</body>
+</html>

@@ -106,7 +106,6 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
-    "rest_framework.authtoken",
     "drf_spectacular",
     "corsheaders",
     "axes",
@@ -227,6 +226,9 @@ CSRF_COOKIE_SAMESITE = "Strict"
 
 X_FRAME_OPTIONS = "DENY"
 
+# Referrer Policy
+REFERRER_POLICY = "strict-origin-when-cross-origin"
+
 # EDAM OWL URL: site.toml → [edam] owl_url, overridden by EDAM_OWL_URL env var
 EDAM_OWL_URL = env("EDAM_OWL_URL", default=None) or _sc_edam.get(
     "owl_url", "https://edamontology.org/EDAM_stable.owl"
@@ -239,6 +241,8 @@ ADMIN_URL_PREFIX = env("ADMIN_URL_PREFIX", default=None) or _sc_admin.get(
 RATE_LIMIT_SUBMIT = env("RATE_LIMIT_SUBMIT", "10/h")
 RATE_LIMIT_UPDATE = env("RATE_LIMIT_UPDATE", "20/h")
 RATE_LIMIT_CHALLENGE = env("RATE_LIMIT_CHALLENGE", "60/h")
+RATE_LIMIT_BIOTOOLS = env("RATE_LIMIT_BIOTOOLS", "60/h")  # bio.tools proxy endpoints
+RATE_LIMIT_VALIDATE = env("RATE_LIMIT_VALIDATE", "120/h")  # inline field validation
 
 # ---------------------------------------------------------------------------
 # ALTCHA — self-hosted proof-of-work CAPTCHA
@@ -324,7 +328,7 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULE = {
     "cleanup-stale-drafts": {
-        "task": "apps.submissions.tasks.cleanup_stale_drafts",
+        "task": "submissions.cleanup_stale_drafts",
         "schedule": 86400,  # every 24 hours
     },
     "sync-biotools-daily": {
@@ -343,7 +347,7 @@ CELERY_BEAT_SCHEDULE = {
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "apps.api.authentication.SubmissionAPIKeyAuthentication",
-        "rest_framework.authentication.TokenAuthentication",
+        "apps.api.authentication.AdminAPIKeyAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
@@ -373,15 +377,15 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": (
         "REST API for the de.NBI & ELIXIR-DE Service Registration system.\n\n"
         "## Authentication\n\n"
-        "### Admin Token (list all submissions)\n"
-        "Create a token in the admin under **Auth Token → Tokens → Add**. "
-        "Then click **Authorize** above and enter:\n"
-        "```\nToken <paste-your-token-here>\n```\n\n"
+        "### Admin API Key (list all submissions)\n"
+        "Create an admin API key in the Django admin under **API → Admin API Keys**. "
+        "Choose scope (read-only or full) and copy the key. Then click **Authorize** "
+        "above and enter:\n"
+        "```\nAdminKey <paste-your-key-here>\n```\n\n"
         "### Submission API Key (access your own submission)\n"
         "Your API key is returned once when you submit the registration form. "
         "Click **Authorize** and enter:\n"
-        "```\n<paste-your-api-key-here>\n```\n"
-        "(no prefix needed in the Swagger UI for ApiKey)"
+        "```\nApiKey <paste-your-api-key-here>\n```\n"
     ),
     "VERSION": _sc_api.get("version", "1.0.0"),
     "SERVE_INCLUDE_SCHEMA": False,
@@ -399,34 +403,10 @@ SPECTACULAR_SETTINGS = {
     "SWAGGER_UI_DIST": "/static/swagger-ui",
     "SWAGGER_UI_FAVICON_HREF": "/static/swagger-ui/favicon-32x32.png",
     "REDOC_DIST": "/static/redoc",
-    # Expose both auth schemes in the Swagger UI Authorize dialog
-    "SECURITY_DEFINITIONS": {
-        "AdminToken": {
-            "type": "apiKey",
-            "in": "header",
-            "name": "Authorization",
-            "description": (
-                "Django REST Framework Token authentication for admin users. "
-                "Format: **Token <your-token>**  (include the word 'Token' and a space)"
-            ),
-        },
-        "SubmissionApiKey": {
-            "type": "apiKey",
-            "in": "header",
-            "name": "Authorization",
-            "description": (
-                "Submission API key issued on registration. "
-                "Format: **ApiKey <your-key>**  (include the word 'ApiKey' and a space)"
-            ),
-        },
-    },
-    # Apply both schemes globally so every endpoint shows the lock icon
-    "SECURITY": [{"AdminToken": []}, {"SubmissionApiKey": []}],
-    # Map DRF authenticator classes to the OpenAPI security schemes above
-    "AUTHENTICATION_WHITELIST": [
-        "rest_framework.authentication.TokenAuthentication",
-        "apps.api.authentication.SubmissionAPIKeyAuthentication",
-    ],
+    # Apply both schemes globally so every endpoint shows the lock icon.
+    # The scheme definitions themselves come from the OpenApiAuthenticationExtension
+    # subclasses in apps/api/spectacular_extensions.py (loaded via ApiConfig.ready).
+    "SECURITY": [{"AdminKey": []}, {"SubmissionApiKey": []}],
 }
 
 # ---------------------------------------------------------------------------

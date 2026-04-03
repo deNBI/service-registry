@@ -17,7 +17,10 @@ icon: material/rocket-launch
 
 ## Configuration
 
-All configuration is via environment variables. There are no TOML config files to edit.
+Configuration is split across two files:
+
+- **`.env`** — secrets and environment-specific overrides (database password, secret key, SMTP credentials). Copy from `.env.example`.
+- **`config/site.toml`** — non-secret settings: branding, contact email, feature flags, admin URL prefix. Edit this file for any site customisation; no image rebuild required.
 
 Copy `.env.example` to `.env` and fill in the three required values:
 
@@ -132,9 +135,11 @@ docker compose up -d
 docker compose exec web python manage.py createsuperuser
 ```
 
-!!! info "Migrations and EDAM seeding are automatic"
-    The `web` container entrypoint runs `manage.py migrate --noinput` before starting.
-    On a fresh database this also seeds the EDAM ontology (~3,400 terms, ~30 s).
+!!! info "Migrations, group sync, and EDAM seeding are automatic"
+    The `web` container entrypoint runs `manage.py migrate --noinput` before starting,
+    then immediately runs `manage.py setup_groups` to keep the three admin role groups
+    (`Registry Viewer`, `Registry Editor`, `Registry Manager`) in sync with the codebase.
+    On a fresh database, migrations also seed the EDAM ontology (~3,400 terms, ~30 s).
     Worker and beat containers set `SKIP_MIGRATE=true` so they do not race web on startup.
 
 !!! info "Static files are baked into the image"

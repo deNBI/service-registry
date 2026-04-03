@@ -14,6 +14,12 @@ Scenarios covered per model
   6. Bulk delete: allowed when NO selected record is in use
   7. Linked-submissions count column returns the correct annotation value
 
+Permission guard (get_actions)
+------------------------------
+  8. Registry Viewer does NOT see guarded_delete_selected in the action dropdown
+  9. Registry Manager DOES see guarded_delete_selected in the action dropdown
+ 10. Viewer's crafted POST of guarded_delete_selected is rejected (action not in allowed set)
+
 For single-delete tests we hit the detail delete view (GET), which should
 redirect to the changelist with an ERROR message when the record is in use,
 and return the confirmation page (200) when the record is safe.
@@ -21,9 +27,12 @@ and return the confirmation page (200) when the record is safe.
 For bulk-delete tests we POST to the changelist with action=guarded_delete_selected.
 """
 
+import re
+
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.messages import get_messages
+from django.core.management import call_command
 from django.test import Client
 from django.urls import reverse
 
@@ -49,6 +58,40 @@ def admin_client(db):
         password="adminpass123",
         email="registryadmin@example.com",
     )
+    c = Client()
+    c.force_login(user)
+    return c
+
+
+@pytest.fixture
+def groups(db):
+    """Create all three role groups via the management command."""
+    call_command("setup_groups", verbosity=0)
+
+
+@pytest.fixture
+def viewer_client(groups):
+    from django.contrib.auth.models import Group
+
+    User = get_user_model()
+    user = User.objects.create_user(
+        username="viewer", password="pass", email="viewer@example.com", is_staff=True
+    )
+    user.groups.add(Group.objects.get(name="Registry Viewer"))
+    c = Client()
+    c.force_login(user)
+    return c
+
+
+@pytest.fixture
+def manager_client(groups):
+    from django.contrib.auth.models import Group
+
+    User = get_user_model()
+    user = User.objects.create_user(
+        username="manager", password="pass", email="manager@example.com", is_staff=True
+    )
+    user.groups.add(Group.objects.get(name="Registry Manager"))
     c = Client()
     c.force_login(user)
     return c
@@ -474,3 +517,96 @@ class TestPrincipalInvestigatorDeletionGuard:
 
         assert resp.status_code == 302
         assert PrincipalInvestigator.objects.filter(pk=pi.pk).exists()
+
+
+# ===========================================================================
+# Delete-action permission guard (get_actions)
+# ===========================================================================
+
+
+def _get_action_names(client, model_label: str) -> set[str]:
+    """Return the set of action <option value="..."> strings from the changelist."""
+    # Ensure at least one row so the action form is rendered.
+    resp = client.get(_changelist_url(model_label))
+    assert resp.status_code == 200
+    return set(re.findall(r'<option value="([^"]+)"', resp.content.decode()))
+
+
+@pytest.mark.django_db
+class TestDeleteActionPermissionGuard:
+    """
+    Verify that guarded_delete_selected is only shown to users who hold
+    delete permission for the model (Registry Manager / superuser), and is
+    invisible to users without it (Registry Viewer).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _seed_rows(self, db):
+        """One unlinked record of each type so the changelist renders an action form."""
+        ServiceCategoryFactory()
+        ServiceCenterFactory()
+        PIFactory()
+
+    # ------------------------------------------------------------------
+    # Viewer — must NOT see the delete action
+    # ------------------------------------------------------------------
+
+    def test_viewer_no_delete_action_on_category_changelist(self, viewer_client):
+        actions = _get_action_names(viewer_client, "servicecategory")
+        assert "guarded_delete_selected" not in actions
+
+    def test_viewer_no_delete_action_on_center_changelist(self, viewer_client):
+        actions = _get_action_names(viewer_client, "servicecenter")
+        assert "guarded_delete_selected" not in actions
+
+    def test_viewer_no_delete_action_on_pi_changelist(self, viewer_client):
+        actions = _get_action_names(viewer_client, "principalinvestigator")
+        assert "guarded_delete_selected" not in actions
+
+    # ------------------------------------------------------------------
+    # Viewer — crafted POST must not delete the record
+    # ------------------------------------------------------------------
+
+    def test_viewer_crafted_post_does_not_delete_category(self, viewer_client):
+        cat = ServiceCategoryFactory()
+        viewer_client.post(
+            _changelist_url("servicecategory"),
+            {"action": "guarded_delete_selected", "_selected_action": [str(cat.pk)]},
+        )
+        assert ServiceCategory.objects.filter(pk=cat.pk).exists()
+
+    def test_viewer_crafted_post_does_not_delete_pi(self, viewer_client):
+        pi = PIFactory()
+        viewer_client.post(
+            _changelist_url("principalinvestigator"),
+            {"action": "guarded_delete_selected", "_selected_action": [str(pi.pk)]},
+        )
+        assert PrincipalInvestigator.objects.filter(pk=pi.pk).exists()
+
+    # ------------------------------------------------------------------
+    # Manager — MUST see the delete action
+    # ------------------------------------------------------------------
+
+    def test_manager_sees_delete_action_on_category_changelist(self, manager_client):
+        actions = _get_action_names(manager_client, "servicecategory")
+        assert "guarded_delete_selected" in actions
+
+    def test_manager_sees_delete_action_on_center_changelist(self, manager_client):
+        actions = _get_action_names(manager_client, "servicecenter")
+        assert "guarded_delete_selected" in actions
+
+    def test_manager_sees_delete_action_on_pi_changelist(self, manager_client):
+        actions = _get_action_names(manager_client, "principalinvestigator")
+        assert "guarded_delete_selected" in actions
+
+    # ------------------------------------------------------------------
+    # Manager — can actually delete unlinked records
+    # ------------------------------------------------------------------
+
+    def test_manager_can_bulk_delete_unlinked_category(self, manager_client):
+        cat = ServiceCategoryFactory()
+        manager_client.post(
+            _changelist_url("servicecategory"),
+            {"action": "guarded_delete_selected", "_selected_action": [str(cat.pk)]},
+        )
+        assert not ServiceCategory.objects.filter(pk=cat.pk).exists()

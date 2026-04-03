@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><style>
+body  { font-family: Arial, sans-serif; font-size: 14px; color: #333; max-width: 600px; }
+h2   { color: #005b9a; }
+.meta { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px;
+        padding: 12px 16px; margin: 1rem 0; }
+.footer { margin-top: 2rem; font-size: 12px; color: #666;
+          border-top: 1px solid #dee2e6; padding-top: 1rem; }
+</style></head>
+<body>
+<h2>de.NBI Service Registry — Submission Received</h2>
+
+<p>Dear {{ submission.submitter_first_name }} {{ submission.submitter_last_name }},</p>
+<p>We have received your service registration. A member of the coordination team will be in touch.</p>
+
+<div class="meta">
+  <strong>Service:</strong> {{ submission.service_name }}<br>
+  <strong>Submission ID:</strong> <code>{{ submission.id }}</code><br>
+  <strong>Submitted:</strong> {{ submission.submitted_at|date:"Y-m-d H:i" }} UTC
+</div>
+
+<p>If you have any questions, please contact us at
+  <a href="mailto:{{ CONTACT_EMAIL }}">{{ CONTACT_EMAIL }}</a>.</p>
+
+<div class="footer">
+  {{ CONTACT_ORG }} &bull; <a href="mailto:{{ CONTACT_EMAIL }}">{{ CONTACT_EMAIL }}</a>
+</div>
+</body>
+</html>

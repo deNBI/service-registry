@@ -1,10 +1,13 @@
 /**
  * de.NBI Service Registry — EDAM Tag Picker, Compact Select & bio.tools Prefill
  *
- * buildEdamPicker   — pill-zone picker for EDAM ontology fields (select.edam-autocomplete)
- * buildCompactSelect — searchable checkbox list for any <select data-compact-select="label">
- *                      (currently: responsible_pis, service_categories)
- * initBioToolsPrefill — auto-fills form fields from bio.tools on URL entry
+ * buildEdamPicker      — pill-zone picker for EDAM ontology fields (select.edam-autocomplete)
+ * buildCompactSelect   — searchable checkbox list for multi-select (select[data-compact-select="label"])
+ *                        (currently: responsible_pis, service_categories)
+ * buildCompactSelectSingle — searchable radio button list for single-select (select[data-compact-select-single="label"])
+ *                        (currently: service_center)
+ *                        Uses radio buttons to clearly communicate "pick one" to users
+ * initBioToolsPrefill  — auto-fills form fields from bio.tools on URL entry
  */
 "use strict";
 
@@ -309,6 +312,99 @@ function buildCompactSelect(sel, label) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   SINGLE-SELECT COMPACT WITH RADIO BUTTONS
+   Like buildCompactSelect but restricted to one item only.
+   Uses radio buttons (instead of checkboxes) to clearly signal single-select.
+   Used for fields like service_center.
+   ═══════════════════════════════════════════════════════════════════════════ */
+function buildCompactSelectSingle(sel, label) {
+  /* Immediately collapse the native select */
+  sel.style.cssText = "display:none!important;position:absolute;width:1px;height:1px";
+
+  const uid = "css-" + (sel.id || Math.random().toString(36).slice(2));
+  const ALL = Array.from(sel.options).map(o => ({ val: o.value, txt: o.text.trim() })).filter(o => o.val);
+  const chosen = new Set(Array.from(sel.selectedOptions).map(o => o.value));
+
+  const root = document.createElement("div");
+  root.id = uid;
+  root.style.cssText = "border:1.5px solid #d1d5db;border-radius:8px;background:#fff;font-family:inherit;overflow:hidden";
+
+  root.innerHTML =
+    /* Selected pill — top */
+    `<div id="${uid}-sel" style="min-height:36px;padding:.4rem .9rem;border-bottom:1px solid #f3f4f6;display:flex;flex-wrap:wrap;gap:.28rem;align-items:center;background:#fafafa;border-radius:8px 8px 0 0">
+       <span id="${uid}-sh" style="font-size:.78rem;color:#9ca3af;font-style:italic">No ${_esc(label)} selected</span>
+     </div>
+     <!-- Search input -->
+     <div style="padding:.5rem .9rem;border-bottom:1px solid #f3f4f6;background:#f9fafb">
+       <div style="position:relative">
+         <svg style="position:absolute;left:.55rem;top:50%;transform:translateY(-50%);color:#9ca3af" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+         <input id="${uid}-s" type="text" placeholder="Search and select ${_esc(label)}…" autocomplete="off" spellcheck="false"
+           style="width:100%;border:1px solid #e5e7eb;border-radius:5px;padding:.33rem .6rem .33rem 1.85rem;font-size:.82rem;font-family:inherit;box-sizing:border-box">
+       </div>
+     </div>
+     <!-- Scrollable options list -->
+     <div id="${uid}-list" style="max-height:160px;overflow-y:auto;overscroll-behavior:contain"></div>`;
+
+  sel.parentNode.insertBefore(root, sel.nextSibling);
+
+  const listEl  = root.querySelector("#" + uid + "-list");
+  const selEl   = root.querySelector("#" + uid + "-sel");
+  const selHint = root.querySelector("#" + uid + "-sh");
+  const searchI = root.querySelector("#" + uid + "-s");
+
+  function sync() {
+    Array.from(sel.options).forEach(o => { o.selected = chosen.has(o.value); });
+    sel.dispatchEvent(new Event("change",{bubbles:true}));
+  }
+
+  function renderList(filter) {
+    listEl.innerHTML = "";
+    const q = (filter||"").toLowerCase();
+    ALL.filter(o => !q || o.txt.toLowerCase().includes(q)).forEach(opt => {
+      const row = document.createElement("div");
+      const isSel = chosen.has(opt.val);
+      row.style.cssText = "display:flex;align-items:center;gap:.6rem;padding:.38rem .9rem;cursor:pointer;border-bottom:1px solid #f9fafb;" + (isSel?"background:#f0f7e6;":"");
+      /* Radio button: circular indicator with filled center when selected */
+      row.innerHTML =
+        `<span style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;border:2px solid ${isSel?"#5c9d25":"#d1d5db"};background:#fff;flex-shrink:0;transition:all .12s;position:relative">
+           ${isSel?`<span style="position:absolute;width:6px;height:6px;border-radius:50%;background:#5c9d25"></span>`:""}
+         </span>
+         <span style="font-size:.875rem;color:#374151;flex:1">${_hi(opt.txt,filter||"")}</span>`;
+      row.addEventListener("mousedown", e => { e.preventDefault(); });
+      row.addEventListener("click", () => {
+        /* Single-select only: clear previous selections */
+        chosen.clear();
+        chosen.add(opt.val);
+        sync(); renderList(searchI.value); renderSel(); searchI.focus();
+      });
+      listEl.appendChild(row);
+    });
+    if (!listEl.children.length) listEl.innerHTML = `<div style="padding:.7rem .9rem;font-size:.82rem;color:#9ca3af;font-style:italic">No matches</div>`;
+  }
+
+  function renderSel() {
+    selEl.querySelectorAll(".css-pill").forEach(p=>p.remove());
+    if (chosen.size === 0) { selHint.style.display=""; return; }
+    selHint.style.display = "none";
+    chosen.forEach(val => {
+      const opt = ALL.find(o=>o.val===val); if (!opt) return;
+      const pill = document.createElement("div");
+      pill.className="css-pill";
+      pill.style.cssText="display:inline-flex;align-items:center;gap:.25rem;background:#f0f7e6;border:1px solid #c8e49e;color:#3a6216;border-radius:20px;padding:2px 7px 2px 9px;font-size:.78rem;font-weight:500";
+      pill.innerHTML=`<span>${_esc(opt.txt)}</span><button type="button" aria-label="Remove" style="background:none;border:none;cursor:pointer;color:#4a7e1c;font-size:13px;padding:0;line-height:1;display:inline-flex;align-items:center">×</button>`;
+      pill.querySelector("button").addEventListener("click",()=>{ chosen.clear(); sync(); renderList(searchI.value); renderSel(); searchI.focus(); });
+      selEl.appendChild(pill);
+    });
+  }
+
+  searchI.addEventListener("input", () => renderList(searchI.value));
+  searchI.addEventListener("focus", () => { searchI.style.borderColor="#5c9d25"; searchI.style.boxShadow="0 0 0 3px rgba(92,157,37,.2)"; });
+  searchI.addEventListener("blur",  () => { searchI.style.borderColor="#e5e7eb"; searchI.style.boxShadow="none"; });
+
+  renderList(); renderSel();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    bio.tools PREFILL  (unchanged)
    ═══════════════════════════════════════════════════════════════════════════ */
 let _prefillData = null;
@@ -367,9 +463,14 @@ document.addEventListener("DOMContentLoaded", () => {
   /* EDAM pickers */
   document.querySelectorAll("select.edam-autocomplete").forEach(buildEdamPicker);
 
-  /* Compact select — any <select data-compact-select="label"> is auto-enhanced */
+  /* Compact select — multi-select */
   document.querySelectorAll("select[data-compact-select]").forEach(el => {
     buildCompactSelect(el, el.dataset.compactSelect);
+  });
+
+  /* Compact select — single-select */
+  document.querySelectorAll("select[data-compact-select-single]").forEach(el => {
+    buildCompactSelectSingle(el, el.dataset.compactSelectSingle);
   });
 
   initBioToolsPrefill();

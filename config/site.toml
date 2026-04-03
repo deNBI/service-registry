@@ -37,12 +37,14 @@ tagline = "de.NBI & ELIXIR-DE Service Registration System"
 url = "https://service-registry.bi.denbi.de"
 
 # Logo URL.  Three options:
-#   1. An absolute URL:         "https://www.denbi.de/templates/nbimaster/img/denbi-logo-color.svg"
-#   2. A local static path:     "/static/img/logo.svg"
+#   1. A local static path:     "/static/img/denbi-logo-color.svg"  ← recommended
+#      Served by nginx with Cache-Control: public, immutable (1-year browser cache).
+#      Download the file once:
+#        curl -o static/img/denbi-logo-color.svg \
+#          https://www.denbi.de/templates/nbimaster/img/denbi-logo-color.svg
+#   2. An absolute URL:         "https://www.denbi.de/templates/nbimaster/img/denbi-logo-color.svg"
+#      Browser caching depends on the external server's response headers.
 #   3. Empty string:            ""   → renders the text fallback (de.NBI coloured text)
-#
-# To use a local file, place it at  static/img/logo.svg  (or .png) and set:
-#   logo_url = "/static/img/logo.svg"
 logo_url = "https://www.denbi.de/templates/nbimaster/img/denbi-logo-color.svg"
 
 # Favicon URL.  Three options:

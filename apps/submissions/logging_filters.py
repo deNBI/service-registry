@@ -19,8 +19,10 @@ class ScrubSensitiveFilter(logging.Filter):
       - Any string matching the API key pattern (64-char URL-safe base64)
     """
 
-    _AUTH_RE = re.compile(r"(Authorization:\s*\S+\s+)\S+", re.IGNORECASE)
-    _COOKIE_RE = re.compile(r"(Cookie:\s*)\S+", re.IGNORECASE)
+    _AUTH_RE = re.compile(r"(Authorization:\s*(?:\S+\s+)+)\S+", re.IGNORECASE)
+    _COOKIE_RE = re.compile(
+        r"(Cookie:\s*(?:[^=;=\s]+\s*=\s*[^;]*;\s*)*)\S+", re.IGNORECASE
+    )
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.msg, str):

@@ -15,7 +15,11 @@ from rest_framework import serializers
 from apps.biotools.models import BioToolsFunction, BioToolsRecord
 from apps.edam.models import EdamTerm
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
-from apps.submissions.models import ServiceSubmission
+from apps.submissions.models import (
+    DESCRIPTION_MAX_LENGTH,
+    DESCRIPTION_MIN_LENGTH,
+    ServiceSubmission,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -282,22 +286,67 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
             pass
         return links
 
+    def validate_year_established(self, value):
+        """Mirror model.clean(): year must be between 1900 and the current year."""
+        if value is not None:
+            from django.utils import timezone as tz
+
+            current_year = tz.now().year
+            if not (1900 <= value <= current_year):
+                raise serializers.ValidationError(
+                    f"Year must be between 1900 and {current_year}."
+                )
+        return value
+
+    def validate_service_description(self, value):
+        """Mirror model.clean(): description must be within the allowed length range."""
+        if value:
+            desc_len = len(value.strip())
+            if desc_len < DESCRIPTION_MIN_LENGTH:
+                raise serializers.ValidationError(
+                    f"Service description must be at least {DESCRIPTION_MIN_LENGTH} characters."
+                )
+            if desc_len > DESCRIPTION_MAX_LENGTH:
+                raise serializers.ValidationError(
+                    f"Service description must not exceed {DESCRIPTION_MAX_LENGTH} characters."
+                )
+        return value
+
     def validate(self, data: dict) -> dict:
-        """Cross-field validation mirroring the form."""
-        if data.get("is_toolbox") and not data.get("toolbox_name", "").strip():
-            raise serializers.ValidationError(
-                {"toolbox_name": "Toolbox name is required when is_toolbox is True."}
-            )
+        """Cross-field validation mirroring model.clean() and the web form."""
+        errors = {}
+
+        # Toolbox name required when is_toolbox=True
+        is_toolbox = data.get("is_toolbox", getattr(self.instance, "is_toolbox", False))
+        toolbox_name = data.get(
+            "toolbox_name", getattr(self.instance, "toolbox_name", "")
+        )
+        if is_toolbox and not (toolbox_name or "").strip():
+            errors["toolbox_name"] = "Toolbox name is required when is_toolbox is True."
+
+        # KPI start year required when monitoring is active (not "planned")
+        kpi_monitoring = data.get(
+            "kpi_monitoring", getattr(self.instance, "kpi_monitoring", "")
+        )
+        kpi_start_year = data.get(
+            "kpi_start_year", getattr(self.instance, "kpi_start_year", "")
+        )
+        if kpi_monitoring and kpi_monitoring != "planned":
+            if not (kpi_start_year or "").strip():
+                errors["kpi_start_year"] = (
+                    "Please provide the year KPI monitoring started."
+                )
+
         # data_protection_consent is mandatory on create; DRF does not call
-        # Model.clean() automatically, so we enforce it here.
+        # model.clean() automatically, so we enforce it here.
         if self.instance is None and not data.get("data_protection_consent"):
-            raise serializers.ValidationError(
-                {
-                    "data_protection_consent": (
-                        "You must consent to the data protection information to submit this form."
-                    )
-                }
+            errors["data_protection_consent"] = (
+                "You must consent to the data protection information to submit this form."
             )
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
         return data
 
 

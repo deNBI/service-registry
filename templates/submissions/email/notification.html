@@ -1,15 +1,26 @@
 <!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"><style>
-body { font-family: Arial, sans-serif; font-size: 14px; color: #333; }
-h2 { color: #005b9a; }
-.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
-.badge-submitted { background: #cfe2ff; color: #0a58ca; }
-.badge-approved  { background: #d1e7dd; color: #0f5132; }
-.badge-rejected  { background: #f8d7da; color: #842029; }
-table { border-collapse: collapse; width: 100%; }
-td, th { padding: 6px 10px; border: 1px solid #dee2e6; }
-th { background: #e8f0f8; font-weight: bold; text-align: left; }
+body    { font-family: Arial, sans-serif; font-size: 14px; color: #333; max-width: 680px; }
+h2      { color: #005b9a; margin-bottom: .5rem; }
+.badge  { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+.badge-submitted    { background: #cfe2ff; color: #0a58ca; }
+.badge-approved     { background: #d1e7dd; color: #0f5132; }
+.badge-rejected     { background: #f8d7da; color: #842029; }
+.badge-under_review { background: #fff3cd; color: #856404; }
+.badge-deprecated   { background: #e5e7eb; color: #374151; }
+table   { border-collapse: collapse; width: 100%; }
+td, th  { padding: 6px 10px; border: 1px solid #dee2e6; }
+th      { background: #e8f0f8; font-weight: bold; text-align: left; }
+.diff-table th.before { background: #fef2f2; }
+.diff-table th.after  { background: #f0fdf4; }
+.diff-table td.before { color: #991b1b; }
+.diff-table td.after  { color: #166534; }
+.admin-link { margin: .75rem 0; padding: .5rem .9rem; background: #eff6ff;
+              border: 1px solid #bfdbfe; border-radius: 5px; font-size: 13px; }
+.admin-link a { color: #1d4ed8; font-weight: 600; }
+.section-label { font-size: 11px; font-weight: 700; letter-spacing: .06em;
+                 text-transform: uppercase; color: #6b7280; margin: 1.2rem 0 .35rem; }
 </style></head>
 <body>
 <h2>de.NBI Service Registry — {{ event|title }} Notification</h2>
@@ -19,6 +30,36 @@ th { background: #e8f0f8; font-weight: bold; text-align: left; }
   <strong>ID:</strong> <code>{{ submission.id }}</code><br>
   <strong>Timestamp:</strong> {{ submission.updated_at|date:"Y-m-d H:i" }} UTC
 </p>
+
+{% if admin_url %}
+<div class="admin-link">
+  🔗 <a href="{{ admin_url }}">Open in Admin Portal</a>
+</div>
+{% endif %}
+
+{% if event == "updated" and changes %}
+<p class="section-label">What changed</p>
+<table class="diff-table">
+  <thead>
+    <tr>
+      <th>Field</th>
+      <th class="before">Before</th>
+      <th class="after">After</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for ch in changes %}
+    <tr>
+      <td><strong>{{ ch.label }}</strong></td>
+      <td class="before">{{ ch.old }}</td>
+      <td class="after">{{ ch.new }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<p class="section-label">Service details</p>
 <table>
 <tr><th>Submitter</th><td>{{ submission.submitter_first_name }} {{ submission.submitter_last_name }}, {{ submission.submitter_affiliation }}</td></tr>
 <tr><th>Host Institute</th><td>{{ submission.host_institute }}</td></tr>
@@ -34,7 +75,8 @@ th { background: #e8f0f8; font-weight: bold; text-align: left; }
 <tr><th>Public Contact</th><td>{{ submission.public_contact_email }}</td></tr>
 <tr><th>Internal Contact</th><td>{{ submission.internal_contact_name }} &lt;{{ submission.internal_contact_email }}&gt;</td></tr>
 </table>
-<p style="margin-top:1rem;font-size:12px;color:#666;">
+
+<p style="margin-top:1.2rem;font-size:12px;color:#666;">
   {{ CONTACT_ORG }} &bull; <a href="mailto:{{ CONTACT_EMAIL }}">{{ CONTACT_EMAIL }}</a>
 </p>
 </body>

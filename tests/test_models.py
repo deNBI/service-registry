@@ -214,11 +214,18 @@ class TestSubmissionValidation:
         with pytest.raises(ValidationError):
             sub.clean()
 
-    def test_data_protection_consent_required(self):
+    def test_data_protection_consent_not_validated_at_model_level(self):
+        """Consent is a form-level concern — the model clean() does not raise for False."""
         sub = ServiceSubmissionFactory.build(data_protection_consent=False)
-        with pytest.raises(ValidationError) as exc:
-            sub.clean()
-        assert "data_protection_consent" in str(exc.value)
+        sub.clean()  # must not raise — admin saves on existing records must work
+
+    def test_data_protection_consent_validated_at_form_level(self):
+        """The registration form still requires consent via clean_data_protection_consent."""
+        from apps.submissions.forms import SubmissionForm
+
+        form = SubmissionForm(data={})  # empty data triggers required-field errors
+        form.is_valid()
+        assert "data_protection_consent" in form.errors
 
     def test_toolbox_name_required_when_is_toolbox_true(self):
         sub = ServiceSubmissionFactory.build(is_toolbox=True, toolbox_name="")
