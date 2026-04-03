@@ -21,11 +21,19 @@ from django.contrib import messages
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils.decorators import method_decorator
+from django.utils.timezone import now
 from django.views import View
 from django_ratelimit.decorators import ratelimit
 
+from .diff_utils import build_diff, snapshot, snapshot_m2m
 from .forms import SubmissionForm, UpdateKeyForm
-from .models import ServiceSubmission, SubmissionAPIKey, SubmissionStatus
+from .http_utils import get_client_ip, hash_user_agent
+from .models import (
+    ServiceSubmission,
+    SubmissionAPIKey,
+    SubmissionChangeLog,
+    SubmissionStatus,
+)
 from .tasks import send_submission_notification, send_update_notification
 
 logger = logging.getLogger(__name__)
@@ -34,32 +42,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _get_client_ip(request: HttpRequest) -> str:
-    """
-    Extract the real client IP when Django sits behind a reverse proxy.
-
-    Priority order (matches AXES_IPWARE_META_PRECEDENCE_ORDER in settings):
-      1. X-Real-IP     — set by nginx to $remote_addr; single value, not spoofable by clients
-      2. X-Forwarded-For — leftmost entry is the original client; may have multiple hops
-      3. REMOTE_ADDR   — the connecting IP (nginx server's IP in a two-server setup)
-    """
-    real_ip = request.META.get("HTTP_X_REAL_IP", "").strip()
-    if real_ip:
-        return real_ip
-    forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR", "").strip()
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR", "")
-
-
-def _hash_user_agent(request: HttpRequest) -> str:
-    """Return SHA-256 of the User-Agent header for abuse pattern detection."""
-    import hashlib
-
-    ua = request.META.get("HTTP_USER_AGENT", "")
-    return hashlib.sha256(ua.encode("utf-8")).hexdigest()
 
 
 def _verify_altcha(request: HttpRequest) -> bool:
@@ -167,8 +149,8 @@ class RegisterView(View):
         # Save submission
         submission: ServiceSubmission = form.save(commit=False)
         submission.status = "submitted"
-        submission.submission_ip = _get_client_ip(request)
-        submission.user_agent_hash = _hash_user_agent(request)
+        submission.submission_ip = get_client_ip(request)
+        submission.user_agent_hash = hash_user_agent(request)
         submission.save()
         form.save_m2m()  # Save ManyToMany fields
 
@@ -278,6 +260,10 @@ class UpdateView(View):
 # ---------------------------------------------------------------------------
 
 
+@method_decorator(
+    ratelimit(key="ip", rate=settings.RATE_LIMIT_UPDATE, method="POST", block=True),
+    name="dispatch",
+)
 class EditView(View):
     """
     GET  /update/edit/  — Show the pre-populated edit form.
@@ -300,9 +286,19 @@ class EditView(View):
             key = SubmissionAPIKey.objects.select_related("submission").get(
                 id=key_id, is_active=True
             )
-            return key.submission
         except SubmissionAPIKey.DoesNotExist:
             return None
+
+        # Enforce scope: read-only keys may view the form (GET) but may not
+        # submit mutations via the web form — mirrors the API's IsSubmissionOwner check.
+        if key.scope == SubmissionAPIKey.SCOPE_READ and request.method not in (
+            "GET",
+            "HEAD",
+            "OPTIONS",
+        ):
+            return None
+
+        return key.submission
 
     def _context(self, form, submission):
         return {
@@ -355,6 +351,12 @@ class EditView(View):
                 status=400,
             )
 
+        # Snapshot BEFORE the form is validated — Django's _post_clean() applies
+        # POST data to the instance during is_valid(), so we must capture the
+        # original values before any form processing touches the object.
+        before_scalar = snapshot(submission)
+        before_m2m = snapshot_m2m(submission)
+
         form = SubmissionForm(request.POST, request.FILES, instance=submission)
 
         if not form.is_valid():
@@ -374,13 +376,39 @@ class EditView(View):
         updated.save()
         form.save_m2m()
 
+        # Snapshot AFTER saving and compute the diff.
+        after_scalar = snapshot(updated)
+        # Re-fetch M2M from DB — form.save_m2m() has committed the new values.
+        after_m2m = snapshot_m2m(updated)
+
+        changes = build_diff(
+            {**before_scalar, **before_m2m}, {**after_scalar, **after_m2m}
+        )
+
+        # Persist the diff on the submission so it's always visible in the admin.
+        if changes:
+            changed_at = now()
+            updated.last_change_summary = {
+                "changed_by": "submitter",
+                "changed_at": changed_at.isoformat(),
+                "changes": changes,
+            }
+            updated.save(update_fields=["last_change_summary"])
+            SubmissionChangeLog.objects.create(
+                submission=updated,
+                changed_by="submitter",
+                changed_at=changed_at,
+                changes=changes,
+            )
+
         logger.info(
-            "Submission updated",
+            "Submission updated (%d field(s) changed)",
+            len(changes),
             extra={"submission_id": str(submission.id)},
         )
 
-        # Send async notification
-        send_update_notification.delay(str(submission.id))
+        # Send async notification (passes diff so both admin and submitter emails show it).
+        send_update_notification.delay(str(submission.id), changes=changes)
 
         # Clear edit session keys
         request.session.pop("edit_key_id", None)
@@ -397,6 +425,7 @@ class EditView(View):
 # ---------------------------------------------------------------------------
 
 
+@ratelimit(key="ip", rate=settings.RATE_LIMIT_VALIDATE, method="POST", block=True)
 def validate_field(request: HttpRequest) -> HttpResponse:
     """
     POST /register/validate/

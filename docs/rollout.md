@@ -353,7 +353,7 @@ Run through this on staging after every deployment, before promoting to producti
 - [ ] API call without auth returns 403 (not 401, not 500)
 - [ ] Invalid API key returns same 403 as revoked key
 - [ ] `GET /api/v1/edam/` returns 200 without any `Authorization` header (public endpoint)
-- [ ] `GET /api/v1/biotools/` without admin token returns 403
+- [ ] `GET /api/v1/biotools/` without admin API key returns 403
 
 ---
 

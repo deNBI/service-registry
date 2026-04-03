@@ -47,9 +47,14 @@ Usage
 Options
 ───────
   --api-url   Base URL of the registry (no trailing slash).  [required]
-  --api-key   Admin token (Authorization: Token <key>).       [required]
+  --api-key   Admin API key (Authorization: AdminKey <key>).   [required]
+              The key scope is detected automatically at startup:
+                full access  → reads and writes proceed normally.
+                read-only    → script exits with an error unless --dry-run
+                               is also passed (preview is still allowed).
   --file      Path to the .xlsx file.                         [required]
   --dry-run   Print planned changes without sending any request.
+              Works with both read-only and full-access keys.
   --verbose   Print every row, even skipped ones.
   --timeout   Per-request timeout in seconds (default: 30).
 """
@@ -207,7 +212,7 @@ class RegistryAPIClient:
         self._timeout = timeout
         self._session = requests.Session()
         self._session.headers.update({
-            "Authorization": f"Token {api_key}",
+            "Authorization": f"AdminKey {api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         })
@@ -238,18 +243,36 @@ class RegistryAPIClient:
         _raise_for_status(resp, "PATCH", url, payload)
         return resp.json()
 
-    def verify_auth(self, endpoint: str) -> None:
+    def verify_auth(self, endpoint: str) -> bool:
         """
-        Do a single GET to confirm the token is accepted.
-        Raises SystemExit on 401/403.
+        Verify the key is accepted and determine its scope.
+
+        Step 1 — GET the endpoint: confirms the key authenticates at all.
+                  401/403 here means the key is invalid or revoked.
+
+        Step 2 — PATCH a sentinel UUID: distinguishes read vs full scope.
+                  A read-only key returns 403 on any non-safe method.
+                  A full key returns 404 (record not found) — no data is touched.
+
+        Returns True if the key has full (write) access, False if read-only.
+        Raises SystemExit on authentication failure.
         """
+        # Step 1: confirm the key is accepted at all
         url = self._url(endpoint)
         resp = self._session.get(url, timeout=self._timeout)
         if resp.status_code in (401, 403):
             sys.exit(
                 f"ERROR: Authentication failed (HTTP {resp.status_code}).\n"
-                "Check that --api-key is a valid admin token."
+                "Check that --api-key is a valid AdminKey."
             )
+
+        # Step 2: probe scope with a PATCH to a non-existent record.
+        # Full key  → 404 (not found — write access confirmed, nothing modified)
+        # Read key  → 403 (scope denied before the record is even looked up)
+        _SENTINEL_UUID = "00000000-0000-0000-0000-000000000000"
+        probe_url = self._url(endpoint) + f"{_SENTINEL_UUID}/"
+        probe = self._session.patch(probe_url, json={}, timeout=self._timeout)
+        return probe.status_code != 403
 
 
 def _raise_for_status(
@@ -480,8 +503,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             The workbook must contain three sheets named exactly:
               pis, service_categories, service_centers
 
-            Authentication uses an admin API token:
-              Authorization: Token <api-key>
+            Authentication uses an Admin API Key:
+              Authorization: AdminKey <api-key>
         """),
         epilog=textwrap.dedent("""\
             Examples:
@@ -509,7 +532,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--api-key",
         required=True,
         metavar="TOKEN",
-        help="Admin API token (the value after 'Token ' in the Authorization header).",
+        help="Admin API key (the value after 'AdminKey ' in the Authorization header).",
     )
     parser.add_argument(
         "--file",
@@ -583,22 +606,41 @@ def main(argv: list[str] | None = None) -> int:
     missing_sheets = [s for s in SHEET_CONFIG if s not in wb.sheetnames]
     if missing_sheets:
         sys.exit(
-            f"ERROR: The workbook is missing required sheet(s): "
+            "ERROR: The workbook is missing required sheet(s): "
             + ", ".join(missing_sheets)
             + f"\n  Found sheets: {wb.sheetnames}"
         )
 
     # ------------------------------------------------------------------
-    # Authenticate
+    # Authenticate and check scope
     # ------------------------------------------------------------------
     client = RegistryAPIClient(args.api_url, args.api_key, timeout=args.timeout)
     first_endpoint = next(iter(SHEET_CONFIG.values()))["endpoint"]
-    print(f"Verifying admin token against {args.api_url} …")
-    client.verify_auth(first_endpoint)
-    print("  Token accepted.\n")
+    print(f"Verifying admin key against {args.api_url} …")
+    has_write_access = client.verify_auth(first_endpoint)
+
+    if has_write_access:
+        print("  Key accepted. Scope: full access — reads and writes permitted.")
+    else:
+        print("  Key accepted. Scope: read-only — only GET requests are permitted.")
+
+    if not has_write_access and not args.dry_run:
+        sys.exit(
+            "\nERROR: This Admin API Key is read-only and cannot create or update records.\n"
+            "Options:\n"
+            "  1. Use a full-access Admin API Key (create one in the Django admin\n"
+            "     under API → Admin API Keys, scope = 'Full access').\n"
+            "  2. Add --dry-run to preview planned changes without writing anything."
+        )
 
     if args.dry_run:
+        if not has_write_access:
+            print("  Running in dry-run mode with a read-only key — preview only.\n")
+        else:
+            print()
         print("*** DRY-RUN MODE — no changes will be written ***\n")
+    else:
+        print()
 
     # ------------------------------------------------------------------
     # Process each sheet

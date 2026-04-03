@@ -12,7 +12,6 @@ All required validation is enforced server-side here, even if also enforced
 client-side via HTML5 attributes. The server is always authoritative.
 """
 
-import re
 import unicodedata
 from datetime import date
 from pathlib import Path
@@ -24,8 +23,21 @@ from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
-from .models import KpiMonitoring, ServiceSubmission
-from .widgets import EdamAutocompleteWidget
+from .models import (
+    DESCRIPTION_MAX_LENGTH,
+    DESCRIPTION_MIN_LENGTH,
+    PUBLICATIONS_MAX_COUNT,
+    KpiMonitoring,
+    ServiceSubmission,
+    _DOI_RE,
+    _PMID_RE,
+)
+from .widgets import (
+    EdamAutocompleteWidget,
+    AffiliationComboboxWidget,
+    CompactSelectWidget,
+    CompactSelectSingleWidget,
+)
 
 # ---------------------------------------------------------------------------
 # Form texts — loaded once from YAML at module import time
@@ -64,10 +76,8 @@ def _sanitise(value: str) -> str:
 class PublicationsField(forms.CharField):
     """
     A CharField that validates each comma-separated entry as a PMID or DOI.
+    Uses the shared regex constants and limits from models.py.
     """
-
-    PMID_RE = re.compile(r"^\d{1,8}$")
-    DOI_RE = re.compile(r"^10\.\d{4,}/\S+$")
 
     def validate(self, value: str) -> None:
         super().validate(value)
@@ -76,11 +86,11 @@ class PublicationsField(forms.CharField):
         tokens = [t.strip() for t in value.split(",") if t.strip()]
         if not tokens:
             raise ValidationError(_("At least one PMID or DOI is required."))
-        if len(tokens) > 50:
-            raise ValidationError(_("A maximum of 50 publications may be listed."))
-        invalid = [
-            t for t in tokens if not (self.PMID_RE.match(t) or self.DOI_RE.match(t))
-        ]
+        if len(tokens) > PUBLICATIONS_MAX_COUNT:
+            raise ValidationError(
+                _(f"A maximum of {PUBLICATIONS_MAX_COUNT} publications may be listed.")
+            )
+        invalid = [t for t in tokens if not (_PMID_RE.match(t) or _DOI_RE.match(t))]
         if invalid:
             raise ValidationError(
                 _(
@@ -174,11 +184,8 @@ class SubmissionForm(forms.ModelForm):
             "submitter_last_name": forms.TextInput(
                 attrs={"class": "form-control", "placeholder": "e.g. Lovelace"}
             ),
-            "submitter_affiliation": forms.Select(
-                attrs={
-                    "class": "form-select",
-                    "data-affiliation-combobox": "true",
-                }
+            "submitter_affiliation": AffiliationComboboxWidget(
+                placeholder="e.g. Forschungszentrum Jülich"
             ),
             "register_as_elixir": forms.RadioSelect(
                 choices=[(True, "Yes"), (False, "No")]
@@ -196,9 +203,7 @@ class SubmissionForm(forms.ModelForm):
                     "placeholder": "YYYY",
                 }
             ),
-            "service_categories": forms.SelectMultiple(
-                attrs={"class": "form-select", "data-compact-select": "categories"}
-            ),
+            "service_categories": CompactSelectWidget(label="categories"),
             "is_toolbox": forms.RadioSelect(choices=[(True, "Yes"), (False, "No")]),
             "toolbox_name": forms.TextInput(
                 attrs={"class": "form-control", "id": "id_toolbox_name"}
@@ -218,9 +223,7 @@ class SubmissionForm(forms.ModelForm):
                 attrs={"data-max-items": "6"},
             ),
             # Section C
-            "responsible_pis": forms.SelectMultiple(
-                attrs={"class": "form-select", "data-compact-select": "PIs"}
-            ),
+            "responsible_pis": CompactSelectWidget(label="PIs"),
             "associated_partner_note": forms.Textarea(
                 attrs={
                     "class": "form-control",
@@ -228,8 +231,10 @@ class SubmissionForm(forms.ModelForm):
                     "id": "id_associated_partner_note",
                 }
             ),
-            "host_institute": forms.TextInput(attrs={"class": "form-control"}),
-            "service_center": forms.Select(attrs={"class": "form-select"}),
+            "host_institute": AffiliationComboboxWidget(
+                placeholder="e.g. Forschungszentrum Jülich"
+            ),
+            "service_center": CompactSelectSingleWidget(label="de.NBI Service Center"),
             "public_contact_email": forms.EmailInput(attrs={"class": "form-control"}),
             "internal_contact_name": forms.TextInput(attrs={"class": "form-control"}),
             "internal_contact_email": forms.EmailInput(attrs={"class": "form-control"}),
@@ -421,10 +426,14 @@ class SubmissionForm(forms.ModelForm):
 
     def clean_service_description(self) -> str:
         value = _sanitise(self.cleaned_data.get("service_description", ""))
-        if len(value) < 50:
-            raise ValidationError(_("Description must be at least 50 characters."))
-        if len(value) > 5000:
-            raise ValidationError(_("Description must not exceed 5000 characters."))
+        if len(value) < DESCRIPTION_MIN_LENGTH:
+            raise ValidationError(
+                _(f"Description must be at least {DESCRIPTION_MIN_LENGTH} characters.")
+            )
+        if len(value) > DESCRIPTION_MAX_LENGTH:
+            raise ValidationError(
+                _(f"Description must not exceed {DESCRIPTION_MAX_LENGTH} characters.")
+            )
         return value
 
     def clean_internal_contact_email_confirm(self) -> str:
@@ -433,18 +442,6 @@ class SubmissionForm(forms.ModelForm):
         if email and confirm and email != confirm:
             raise ValidationError(_("Email addresses do not match."))
         return confirm
-
-    def clean_website_url(self) -> str:
-        value = self.cleaned_data.get("website_url", "")
-        if value and not value.startswith("https://"):
-            raise ValidationError(_("URL must use https://."))
-        return value
-
-    def clean_terms_of_use_url(self) -> str:
-        value = self.cleaned_data.get("terms_of_use_url", "")
-        if value and not value.startswith("https://"):
-            raise ValidationError(_("URL must use https://."))
-        return value
 
     def clean_logo(self):
         f = self.cleaned_data.get("logo")

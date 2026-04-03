@@ -47,12 +47,10 @@ urlpatterns = [
     path("health/", include("apps.submissions.health_urls")),
 ]
 
-# Serve uploaded media files (logos, etc.) through Gunicorn.
-# In development: Django handles requests directly.
-# In production: nginx on the upstream VM proxy_passes all traffic to Gunicorn,
-#   including /media/ — no special nginx location block is needed.
-# Trade-off: file serving goes through Python rather than the filesystem directly;
-#   acceptable for infrequent, small logo requests.
+# Serve uploaded media files (logos) through Gunicorn.
+# Logos are non-sensitive brand assets destined for the public de.NBI catalogue.
+# Paths are UUID-based (/media/logos/<uuid4>.ext) — not enumerable without first
+# obtaining logo_url from an authenticated API response.
 urlpatterns += [
     re_path(
         r"^media/(?P<path>.*)$",

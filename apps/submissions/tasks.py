@@ -4,10 +4,23 @@ Async Tasks
 Celery tasks for background processing — primarily email notifications.
 
 Tasks:
-  - send_submission_notification : Email admin on new submission or status change;
-                                   also emails the submitter directly on status_changed
-  - send_update_notification     : Email admin when a submitter edits a submission
-  - cleanup_stale_drafts         : Periodic task to remove expired draft sessions
+  - send_submission_notification : Email admin on new/updated/status-changed submission.
+                                   Admin email never CC's the submitter (they get a
+                                   dedicated separate email for each relevant event).
+  - send_update_notification     : Email admin + submitter when a submitter edits.
+  - cleanup_stale_drafts         : Periodic task to remove expired draft sessions.
+
+Email path design
+-----------------
+Admin notifications (to=[admin], cc=SUBMISSION_NOTIFY_CC):
+  - Contain the full internal report.
+  - For "updated" events: include the field diff table and a direct admin portal link.
+  - The submitter is NEVER added to CC — they receive a separate dedicated email.
+
+Submitter notifications (to=[internal_contact_email]):
+  - "created"        → notification_created_submitter.html/txt  (receipt confirmation)
+  - "status_changed" → status_update_submitter.html/txt  (plain-language status msg)
+  - "updated"        → notification_update_submitter.html/txt  (diff of what changed)
 """
 
 import logging
@@ -19,6 +32,7 @@ from celery import shared_task
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
+from django.urls import reverse
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -40,7 +54,6 @@ def _email_subject(key: str, **kwargs) -> str:
     subjects = _EMAIL_TEXTS.get("subjects", {})
     template = subjects.get(key, "")
     if not template:
-        # Fallback if YAML is missing or key is absent
         return f"[de.NBI Registry] {kwargs.get('service_name', 'Notification')}"
     return template.format(**kwargs)
 
@@ -51,27 +64,81 @@ def _status_message(status: str) -> str:
     return messages.get(status, messages.get("default", ""))
 
 
+def _site_email_context() -> dict:
+    """
+    Return the site-level context variables used in email templates.
+
+    Django context processors (which normally inject CONTACT_ORG, CONTACT_EMAIL,
+    etc.) are not invoked when render_to_string() is called from a Celery task
+    because there is no request object.  This helper replicates the relevant
+    subset of apps.submissions.context_processors.site_context() for email use.
+    """
+    sc: dict = getattr(settings, "SITE_CONFIG", {})
+    cont = sc.get("contact", {})
+    links = sc.get("links", {})
+    return {
+        "CONTACT_EMAIL": cont.get("email", "servicecoordination@denbi.de"),
+        "CONTACT_ORG": cont.get(
+            "organisation", "German Network for Bioinformatics Infrastructure"
+        ),
+        "WEBSITE_URL": links.get("website", "https://www.denbi.de"),
+    }
+
+
+def _build_admin_url(submission_id) -> str:
+    """
+    Return the absolute admin change-view URL for a submission.
+
+    Returns an empty string if SITE_CONFIG is absent or misconfigured —
+    the templates treat an empty string as "omit the link".
+    """
+    site_url = (
+        getattr(settings, "SITE_CONFIG", {}).get("site", {}).get("url", "").rstrip("/")
+    )
+    if not site_url:
+        return ""
+    try:
+        path = reverse(
+            "admin:submissions_servicesubmission_change", args=[submission_id]
+        )
+        return f"{site_url}{path}"
+    except Exception:
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Main notification task
+# ---------------------------------------------------------------------------
+
+
 @shared_task(
     bind=True,
+    name="submissions.send_submission_notification",
     max_retries=3,
-    default_retry_delay=60,  # Retry after 60 seconds
+    default_retry_delay=60,
     autoretry_for=(Exception,),
+    time_limit=600,
+    soft_time_limit=540,
 )
 def send_submission_notification(
-    self, submission_id: str, event: str = "created"
+    self,
+    submission_id: str,
+    event: str = "created",
+    changes: list | None = None,
 ) -> None:
     """
-    Send an email notification to the internal contact for a submission.
-
-    Called:
-      - When a new submission is created (event="created")
-      - When the admin changes the submission status (event="status_changed")
-
-    The email contains the full submission summary but never the API key.
+    Send an admin notification email for a submission event.
 
     Args:
-        submission_id: UUID string of the ServiceSubmission
-        event: "created" | "status_changed"
+        submission_id: UUID string of the ServiceSubmission.
+        event:         "created" | "updated" | "status_changed"
+        changes:       List of change dicts from diff_utils.build_diff()
+                       (only meaningful for event="updated").
+
+    Email routing:
+        - Admin email → registry coordination address + SUBMISSION_NOTIFY_CC
+        - Submitter CC is intentionally NOT added here; submitter emails are
+          sent as separate dedicated messages via the helpers below.
     """
     from apps.submissions.models import ServiceSubmission
 
@@ -83,24 +150,18 @@ def send_submission_notification(
         )
     except ServiceSubmission.DoesNotExist:
         logger.error(
-            f"send_submission_notification: submission {submission_id} not found"
+            "send_submission_notification: submission %s not found", submission_id
         )
         return
 
-    # Primary recipient: admin contact from site.toml (the registry coordinators)
-    # CC the submitter's internal contact email so they also receive a copy
     admin_email = (
         getattr(settings, "SITE_CONFIG", {}).get("contact", {}).get("email", "")
     )
     override = getattr(settings, "SUBMISSION_NOTIFY_OVERRIDE", "")
     recipient = override or admin_email or settings.DEFAULT_FROM_EMAIL
 
-    # CC the internal contact of the submission so they have a record too
-    cc_submitter = submission.internal_contact_email
-
+    # SUBMISSION_NOTIFY_CC only — submitter is NOT added here.
     cc_list = list(getattr(settings, "SUBMISSION_NOTIFY_CC", []))
-    if cc_submitter and cc_submitter != recipient:
-        cc_list.append(cc_submitter)
 
     subject = _email_subject(
         event,
@@ -108,13 +169,19 @@ def send_submission_notification(
         status=submission.get_status_display(),
     )
 
+    # Build admin portal URL (included in admin email only).
+    admin_url = "" if override else _build_admin_url(submission_id)
+
     context = {
+        **_site_email_context(),
         "submission": submission,
         "event": event,
         "categories": list(
             submission.service_categories.values_list("name", flat=True)
         ),
         "pis": list(submission.responsible_pis.all()),
+        "changes": changes or [],
+        "admin_url": admin_url,
     }
 
     text_body = render_to_string("submissions/email/notification.txt", context)
@@ -133,48 +200,70 @@ def send_submission_notification(
     try:
         msg.send(fail_silently=False)
         logger.info(
-            f"Notification sent for submission {submission_id}",
-            extra={"event": event, "recipient": recipient},
+            "Notification sent for submission %s (event=%s)",
+            submission_id,
+            event,
         )
     except Exception as exc:
-        logger.error(f"Failed to send notification for {submission_id}: {exc}")
+        logger.error("Failed to send notification for %s: %s", submission_id, exc)
         raise self.retry(exc=exc)
 
-    # On status changes, also notify the submitter directly with a
-    # submitter-facing email (not the internal admin notification above).
-    if event == "status_changed" and not override:
+    # Submitter-facing emails — sent as completely separate messages.
+    if override:
+        # When an override address is set (test/staging), skip submitter emails
+        # to avoid accidentally emailing real submitters from test environments.
+        return
+
+    if event == "created":
+        _send_submitter_created_email(submission)
+    elif event == "status_changed":
         _send_submitter_status_email(submission)
+    elif event == "updated" and changes:
+        _send_submitter_updated_email(submission, changes)
 
 
-def _send_submitter_status_email(submission) -> None:
+# ---------------------------------------------------------------------------
+# Submitter-facing helpers
+# ---------------------------------------------------------------------------
+
+
+def _send_submitter_email(
+    submission,
+    *,
+    event_key: str,
+    txt_template: str,
+    html_template: str,
+    subject_kwargs: dict | None = None,
+    extra_context: dict | None = None,
+) -> None:
     """
-    Send a submitter-facing status update email to the internal contact.
+    Send a submitter-facing email using the given templates.
 
-    Kept separate from the admin notification so the submitter receives a
-    clear, plain-language message rather than the full internal report.
+    Handles the shared boilerplate: recipient guard, subject, site context,
+    rendering, sending, and logging. Each public helper below passes only the
+    parts that differ between event types.
     """
     recipient = submission.internal_contact_email
     if not recipient:
         logger.warning(
-            f"No internal_contact_email on submission {submission.id} — skipping submitter notification"
+            "No internal_contact_email on submission %s — skipping submitter %s email",
+            submission.id,
+            event_key,
         )
         return
 
     subject = _email_subject(
-        "submitter_status",
+        event_key,
         service_name=submission.service_name,
-        status=submission.get_status_display(),
+        **(subject_kwargs or {}),
     )
     context = {
+        **_site_email_context(),
         "submission": submission,
-        "status_message": _status_message(submission.status),
+        **(extra_context or {}),
     }
-    text_body = render_to_string(
-        "submissions/email/status_update_submitter.txt", context
-    )
-    html_body = render_to_string(
-        "submissions/email/status_update_submitter.html", context
-    )
+    text_body = render_to_string(txt_template, context)
+    html_body = render_to_string(html_template, context)
 
     msg = EmailMultiAlternatives(
         subject=subject,
@@ -187,36 +276,94 @@ def _send_submitter_status_email(submission) -> None:
     try:
         msg.send(fail_silently=False)
         logger.info(
-            f"Submitter status email sent for submission {submission.id} to {recipient}"
+            "Submitter %s email sent for submission %s to %s",
+            event_key,
+            submission.id,
+            recipient,
         )
     except Exception as exc:
         logger.error(
-            f"Failed to send submitter status email for {submission.id}: {exc}"
+            "Failed to send submitter %s email for %s: %s",
+            event_key,
+            submission.id,
+            exc,
         )
+
+
+def _send_submitter_created_email(submission) -> None:
+    """Receipt confirmation — no admin URL, no timeline language."""
+    _send_submitter_email(
+        submission,
+        event_key="submitter_created",
+        txt_template="submissions/email/notification_created_submitter.txt",
+        html_template="submissions/email/notification_created_submitter.html",
+    )
+
+
+def _send_submitter_status_email(submission) -> None:
+    """Plain-language status update, separate from the admin notification."""
+    _send_submitter_email(
+        submission,
+        event_key="submitter_status",
+        txt_template="submissions/email/status_update_submitter.txt",
+        html_template="submissions/email/status_update_submitter.html",
+        subject_kwargs={"status": submission.get_status_display()},
+        extra_context={"status_message": _status_message(submission.status)},
+    )
+
+
+def _send_submitter_updated_email(submission, changes: list) -> None:
+    """Notify the submitter about which fields they just changed."""
+    _send_submitter_email(
+        submission,
+        event_key="submitter_updated",
+        txt_template="submissions/email/notification_update_submitter.txt",
+        html_template="submissions/email/notification_update_submitter.html",
+        extra_context={"changes": changes},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Update notification task
+# ---------------------------------------------------------------------------
 
 
 @shared_task(
     bind=True,
+    name="submissions.send_update_notification",
     max_retries=3,
     default_retry_delay=60,
     autoretry_for=(Exception,),
+    time_limit=600,
+    soft_time_limit=540,
 )
-def send_update_notification(self, submission_id: str) -> None:
+def send_update_notification(
+    self, submission_id: str, changes: list | None = None
+) -> None:
     """
     Send notification when a submitter edits their submission via the update form.
 
-    Includes a summary of the updated values and the timestamp.
+    Delegates to send_submission_notification with event="updated" and the
+    field-level diff so both the admin email and the submitter email include
+    a "what changed" summary.
     """
-    send_submission_notification.delay(submission_id, event="updated")
+    send_submission_notification.delay(
+        submission_id, event="updated", changes=changes or []
+    )
 
 
-@shared_task
+# ---------------------------------------------------------------------------
+# Maintenance task
+# ---------------------------------------------------------------------------
+
+
+@shared_task(name="submissions.cleanup_stale_drafts")
 def cleanup_stale_drafts() -> int:
     """
-    Remove Django session entries that were used for draft auto-save and
-    have not been accessed in more than 24 hours.
+    Remove Django session entries used for draft auto-save that have not been
+    accessed in more than 24 hours.
 
-    Returns the number of sessions cleaned up.
+    Returns the number of sessions removed.
     """
     from django.contrib.sessions.models import Session
 
@@ -224,5 +371,5 @@ def cleanup_stale_drafts() -> int:
     stale = Session.objects.filter(expire_date__lt=cutoff)
     count = stale.count()
     stale.delete()
-    logger.info(f"cleanup_stale_drafts: removed {count} expired sessions")
+    logger.info("cleanup_stale_drafts: removed %d expired sessions", count)
     return count

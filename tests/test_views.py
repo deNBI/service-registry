@@ -444,6 +444,82 @@ class TestEditView:
         assert resp.status_code == 200
         assert b"Deprecate this service" in resp.content
 
+    # ── diff capture ─────────────────────────────────────────────────────────
+
+    def test_edit_post_populates_last_change_summary(self, client, settings):
+        """A successful edit should write last_change_summary to the submission."""
+        settings.ALTCHA_HMAC_KEY = ""  # disable CAPTCHA in tests
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+
+        sub = ServiceSubmissionFactory(service_name="Before Name", comments="")
+        self._setup_edit_session(client, sub)
+
+        data = self._edit_form_data(sub, service_name="After Name")
+        resp = client.post(reverse("submissions:edit"), data=data)
+        assert resp.status_code == 302
+
+        sub.refresh_from_db()
+        assert sub.last_change_summary is not None
+        summary = sub.last_change_summary
+        assert summary["changed_by"] == "submitter"
+        assert "changed_at" in summary
+        fields = {ch["field"] for ch in summary["changes"]}
+        assert "service_name" in fields
+
+    def test_edit_post_old_and_new_values_recorded(self, client, settings):
+        settings.ALTCHA_HMAC_KEY = ""
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+
+        sub = ServiceSubmissionFactory(service_name="Old Name")
+        self._setup_edit_session(client, sub)
+
+        data = self._edit_form_data(sub, service_name="New Name")
+        client.post(reverse("submissions:edit"), data=data)
+        sub.refresh_from_db()
+
+        name_change = next(
+            ch
+            for ch in sub.last_change_summary["changes"]
+            if ch["field"] == "service_name"
+        )
+        assert name_change["old"] == "Old Name"
+        assert name_change["new"] == "New Name"
+
+    def test_edit_post_no_change_does_not_write_summary(self, client, settings):
+        """Posting without changing any field leaves last_change_summary None."""
+        settings.ALTCHA_HMAC_KEY = ""
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+
+        sub = ServiceSubmissionFactory()
+        assert sub.last_change_summary is None
+        self._setup_edit_session(client, sub)
+
+        data = self._edit_form_data(sub)  # no overrides — nothing changes
+        client.post(reverse("submissions:edit"), data=data)
+        sub.refresh_from_db()
+        assert sub.last_change_summary is None
+
+    def test_edit_post_sends_submitter_updated_email_when_changed(
+        self, client, settings
+    ):
+        """A diff-producing edit fires a submitter-facing updated email."""
+        from django.core import mail
+
+        settings.ALTCHA_HMAC_KEY = ""
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        settings.CELERY_TASK_EAGER_PROPAGATES = True
+
+        sub = ServiceSubmissionFactory(
+            service_name="Old", internal_contact_email="pi@example.com"
+        )
+        self._setup_edit_session(client, sub)
+
+        data = self._edit_form_data(sub, service_name="New")
+        client.post(reverse("submissions:edit"), data=data)
+
+        recipients = [addr for m in mail.outbox for addr in m.to]
+        assert "pi@example.com" in recipients
+
 
 # ===========================================================================
 # ALTCHA challenge endpoint
@@ -883,4 +959,56 @@ class TestHealthEndpoints:
         assert resp.status_code in (200, 503)
         data = resp.json()
         assert "status" in data
-        assert "checks" in data
+        # Internal service breakdown must NOT be exposed to callers
+        assert "checks" not in data
+
+
+# ===========================================================================
+# EditView — API key scope enforcement
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestEditViewScopeEnforcement:
+    """
+    A read-only API key (SCOPE_READ) stored in the edit session must not be
+    able to submit mutations via the web form, while still being able to load
+    the form on GET.
+    """
+
+    def _setup_session(self, client, sub, scope):
+        key_obj = APIKeyFactory(submission=sub, scope=scope)
+        session = client.session
+        session["edit_key_id"] = str(key_obj.pk)
+        session["edit_submission_id"] = str(sub.pk)
+        session.save()
+
+    def test_read_only_key_can_load_edit_form(self, client):
+        """GET /update/edit/ with a SCOPE_READ key must succeed (200)."""
+        sub = ServiceSubmissionFactory()
+        self._setup_session(client, sub, scope="read")
+        resp = client.get(reverse("submissions:edit"))
+        assert resp.status_code == 200
+
+    def test_read_only_key_cannot_post_edit_form(self, client):
+        """POST /update/edit/ with a SCOPE_READ key must redirect to the key-entry page."""
+        sub = ServiceSubmissionFactory()
+        original_name = sub.service_name
+        self._setup_session(client, sub, scope="read")
+
+        resp = client.post(reverse("submissions:edit"), data={"service_name": "hacked"})
+        assert resp.status_code == 302
+        assert reverse("submissions:update") in resp["Location"]
+        sub.refresh_from_db()
+        assert sub.service_name == original_name  # no change applied
+
+    def test_write_key_can_post_edit_form(self, client):
+        """POST /update/edit/ with a SCOPE_WRITE key proceeds normally (not rejected)."""
+        sub = ServiceSubmissionFactory()
+        self._setup_session(client, sub, scope="write")
+        # A POST without a full valid form just re-renders the form (200 or 302),
+        # the key point is that it does NOT redirect to the key-entry page.
+        resp = client.post(reverse("submissions:edit"), data={})
+        assert resp.status_code not in (301, 302) or reverse(
+            "submissions:update"
+        ) not in resp.get("Location", "")

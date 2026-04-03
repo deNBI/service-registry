@@ -12,15 +12,17 @@ Features:
 import csv
 import json
 import logging
+from datetime import datetime
 
 from django.contrib import admin, messages
 from django.forms.widgets import CheckboxSelectMultiple
 from django.contrib.admin.models import CHANGE, LogEntry
 from django.http import HttpResponse
 from django.utils import timezone
-from django.utils.html import format_html, mark_safe
+from django.utils.html import escape, format_html, mark_safe
 
-from .models import ServiceSubmission, SubmissionAPIKey
+from .diff_utils import build_diff, snapshot, snapshot_m2m
+from .models import ServiceSubmission, SubmissionAPIKey, SubmissionChangeLog
 from .tasks import send_submission_notification
 
 logger = logging.getLogger(__name__)
@@ -70,6 +72,20 @@ class SubmissionAPIKeyInline(admin.TabularInline):
     def has_add_permission(self, request, obj=None):
         return False
 
+    def has_change_permission(self, request, obj=None):
+        # All fields are readonly — no in-place editing is possible.
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        # Deletion is handled through the dedicated SubmissionAPIKeyAdmin.
+        return False
+
+    def has_view_permission(self, request, obj=None):
+        # Mirror SubmissionAPIKeyAdmin: either view_submissionapikey or manage_apikeys.
+        return request.user.has_perm(
+            "submissions.view_submissionapikey"
+        ) or request.user.has_perm("submissions.manage_apikeys")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ServiceSubmission admin
@@ -94,6 +110,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         "register_as_elixir",
         "service_center",
         "service_categories",
+        "responsible_pis",
         ("submitted_at", admin.DateFieldListFilter),
     )
     search_fields = (
@@ -112,6 +129,52 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
     list_select_related = ("service_center",)
     # Two-panel filtered selector with search — needed for large option sets
     filter_horizontal = ("responsible_pis", "edam_topics", "edam_operations")
+
+    # ── Permission gates ──────────────────────────────────────────────────────
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.has_perm("submissions.view_servicesubmission")
+
+    def has_add_permission(self, request):
+        return request.user.has_perm("submissions.add_servicesubmission")
+
+    def has_change_permission(self, request, obj=None):
+        return request.user.has_perm("submissions.change_servicesubmission")
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.has_perm("submissions.delete_servicesubmission")
+
+    # These two methods are called by @admin.action(permissions=[...]) to
+    # decide whether an action is shown in the dropdown for a given user.
+
+    def has_approve_servicesubmission_permission(self, request):
+        """Called by bulk actions that approve or reject submissions."""
+        return request.user.has_perm("submissions.approve_servicesubmission")
+
+    def has_manage_apikeys_permission(self, request):
+        """Called by any admin action that issues, resets, or revokes keys."""
+        return request.user.has_perm("submissions.manage_apikeys")
+
+    # ── Permission helper ─────────────────────────────────────────────────────
+
+    def _require_perm(self, request, perm: str, action_label: str) -> bool:
+        """
+        Return True if *request.user* has *perm* (bare codename, submissions app).
+
+        If the permission is absent, emit an error message and return False so
+        the caller can bail out immediately.  Always check this before executing
+        any destructive or privileged operation in response_change().
+        """
+        if request.user.has_perm(f"submissions.{perm}"):
+            return True
+        self.message_user(
+            request,
+            f"Permission denied — you need '{perm}' to {action_label}.",
+            messages.ERROR,
+        )
+        return False
+
+    # ── Queryset ──────────────────────────────────────────────────────────────
 
     def get_queryset(self, request):
         return super().get_queryset(request).prefetch_related("api_keys")
@@ -142,6 +205,9 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             kwargs["widget"] = CheckboxSelectMultiple()
         return super().formfield_for_manytomanyfield(db_field, request, **kwargs)
 
+    class Media:
+        js = ("js/admin_submission_change.js",)
+
     inlines = [SubmissionAPIKeyInline]
 
     readonly_fields = (
@@ -153,6 +219,9 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         "status_actions",
         "key_management_panel",
         "logo_preview",
+        "last_change_summary_display",
+        "data_protection_consent",
+        "change_history_display",
     )
 
     @admin.display(description="Logo preview")
@@ -166,6 +235,349 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             )
         return "—"
 
+    @staticmethod
+    def _actor_badge(changed_by: str, font_size: str = ".78rem") -> str:
+        """Return a styled HTML badge for the actor who made a change."""
+        fs = f"font-size:{font_size}"
+        base = f"border-radius:4px;padding:1px 7px;{fs};font-weight:600"
+        if changed_by == "submitter":
+            return f'<span style="background:#eff6ff;color:#1d4ed8;{base}">Submitter</span>'
+        if changed_by.startswith("api:"):
+            label = escape(changed_by.removeprefix("api:"))
+            return f'<span style="background:#fef9c3;color:#854d0e;{base}">API: {label}</span>'
+        username = escape(
+            changed_by.removeprefix("admin:") if ":" in changed_by else changed_by
+        )
+        return f'<span style="background:#f0fdf4;color:#166534;{base}">Admin: {username}</span>'
+
+    @staticmethod
+    def _diff_table_html(
+        changes: list, padding: str = "5px 10px", font_size: str = ".82rem"
+    ) -> str:
+        """Return a styled HTML table of field-level diff rows, or a fallback message."""
+        p = f"padding:{padding}"
+        b = "border:1px solid var(--border-color)"
+        fs = f"font-size:{font_size}"
+        if not changes:
+            return (
+                f'<tr><td colspan="3" style="color:var(--body-quiet-color);'
+                f'font-style:italic;{p}">No field differences recorded.</td></tr>'
+            )
+        rows = []
+        for ch in changes:
+            label = escape(ch.get("label", ch.get("field", "")))
+            old = escape(ch.get("old", "—"))
+            new = escape(ch.get("new", "—"))
+            rows.append(
+                f"<tr>"
+                f'<td style="{p};{b};font-weight:600;white-space:nowrap;{fs}">{label}</td>'
+                f'<td style="{p};{b};color:#991b1b;{fs};word-break:break-word">{old}</td>'
+                f'<td style="{p};{b};color:#166534;{fs};word-break:break-word">{new}</td>'
+                f"</tr>"
+            )
+        th = f"{p};{b};background:{{bg}};text-align:left;{fs}"
+        header = (
+            f'<th style="{th.format(bg="var(--darkened-bg)")}">Field</th>'
+            f'<th style="{th.format(bg="#fef2f2")}">Before</th>'
+            f'<th style="{th.format(bg="#f0fdf4")}">After</th>'
+        )
+        return (
+            f'<table style="border-collapse:collapse;width:100%;max-width:700px">'
+            f"<thead><tr>{header}</tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+        )
+
+    @admin.display(description="Last change summary")
+    def last_change_summary_display(self, obj):
+        """
+        Render the last_change_summary JSON as a styled HTML table.
+
+        Shows: who made the change, when, and a field-by-field diff.
+        Visible to any admin who opens the submission — covers both
+        submitter-initiated edits and admin-initiated edits.
+        """
+        summary = obj.last_change_summary
+        if not summary:
+            return mark_safe(
+                '<span style="color:var(--body-quiet-color);font-size:.85rem">'
+                "No change history recorded yet."
+                "</span>"
+            )
+
+        changed_by = summary.get("changed_by", "unknown")
+        changed_at = summary.get("changed_at", "")
+        changes = summary.get("changes", [])
+
+        if changed_at:
+            try:
+                changed_at = datetime.fromisoformat(changed_at).strftime(
+                    "%Y-%m-%d %H:%M UTC"
+                )
+            except (ValueError, TypeError):
+                pass
+        else:
+            changed_at = "unknown time"
+
+        html = (
+            f'<div style="font-size:.85rem">'
+            f'<p style="margin:.25rem 0 .6rem">'
+            f"Changed by {self._actor_badge(changed_by)} &nbsp;·&nbsp; "
+            f'<span style="color:var(--body-quiet-color)">{escape(changed_at)}</span>'
+            f"</p>"
+            f"{self._diff_table_html(changes)}"
+            f"</div>"
+        )
+        return mark_safe(html)
+
+    @admin.display(description="Change history")
+    def change_history_display(self, obj):
+        """
+        Render the full SubmissionChangeLog for this submission.
+
+        Each entry is a <details>/<summary> row — collapsed by default,
+        expandable to show the field-level diff. Most recent entry first.
+        Covers admin saves, submitter web-form edits, and API PATCH requests.
+        """
+        entries = list(obj.change_log.all()[:50])  # cap at 50 for rendering
+        if not entries:
+            return mark_safe(
+                '<span style="color:var(--body-quiet-color);font-size:.85rem">'
+                "No change history recorded yet."
+                "</span>"
+            )
+
+        parts = []
+        for entry in entries:
+            n = len(entry.changes)
+            count_txt = f"{n} field{'s' if n != 1 else ''} changed"
+            if entry.changes:
+                table = self._diff_table_html(
+                    entry.changes, padding="4px 8px", font_size=".8rem"
+                )
+            else:
+                table = (
+                    '<p style="margin:.3rem 0;color:var(--body-quiet-color);'
+                    'font-size:.8rem;font-style:italic">No field differences recorded.</p>'
+                )
+
+            ts = escape(entry.changed_at.strftime("%Y-%m-%d %H:%M UTC"))
+            parts.append(
+                f'<details style="margin-bottom:.4rem;border:1px solid var(--border-color);'
+                f'border-radius:4px;padding:.35rem .7rem">'
+                f'<summary style="cursor:pointer;font-size:.83rem;user-select:none;list-style:none">'
+                f"<span style='margin-right:.5rem'>▶</span>"
+                f"{self._actor_badge(entry.changed_by, font_size='.75rem')} &nbsp; "
+                f'<span style="color:var(--body-quiet-color)">{ts}</span>'
+                f' &nbsp;·&nbsp; <em style="font-size:.78rem">{count_txt}</em>'
+                f"</summary>"
+                f"{table}"
+                f"</details>"
+            )
+
+        total = obj.change_log.count()
+        footer = ""
+        if total > 50:
+            footer = (
+                f'<p style="font-size:.78rem;color:var(--body-quiet-color);margin-top:.4rem">'
+                f"Showing most recent 50 of {total} entries.</p>"
+            )
+
+        return mark_safe(
+            f'<div style="font-size:.85rem">{"".join(parts)}{footer}</div>'
+        )
+
+    # ── Diff capture — save_model / save_related / response_change ─────────────
+
+    def save_model(self, request, obj, form, change):
+        """
+        Snapshot the scalar fields BEFORE the model is written to the database.
+
+        obj already has the new form values applied, so we re-fetch the original
+        from the database to get a true "before" snapshot.  The snapshot is
+        stored on the request object so save_related() can compare it after
+        M2M relations are committed.
+        """
+        if change and obj.pk:
+            try:
+                original = obj.__class__.objects.get(pk=obj.pk)
+                request._diff_before_scalar = snapshot(original)
+            except obj.__class__.DoesNotExist:
+                request._diff_before_scalar = {}
+        super().save_model(request, obj, form, change)
+
+    def save_related(self, request, form, formsets, change):
+        """
+        Snapshot M2M BEFORE super().save_related() commits the new values, then
+        compute the full diff (scalar + M2M), persist it on the model, and stash
+        it on the request so response_change() can display the diff banner.
+        """
+        if change:
+            # M2M snapshot BEFORE save_related commits new values.
+            before_m2m = snapshot_m2m(form.instance)
+
+        super().save_related(request, form, formsets, change)
+
+        if not change:
+            request._diff_changes = []
+            return
+
+        # After super() the new M2M values are in the DB — snapshot them now.
+        after_scalar = snapshot(form.instance)
+        after_m2m = snapshot_m2m(form.instance)
+
+        before_scalar = getattr(request, "_diff_before_scalar", {})
+        changes = build_diff(
+            {**before_scalar, **before_m2m},
+            {**after_scalar, **after_m2m},
+        )
+        request._diff_changes = changes
+
+        if changes:
+            username = getattr(request.user, "username", "admin")
+            changed_by = f"admin:{username}"
+            now = timezone.now()
+            form.instance.last_change_summary = {
+                "changed_by": changed_by,
+                "changed_at": now.isoformat(),
+                "changes": changes,
+            }
+            form.instance.save(update_fields=["last_change_summary"])
+            SubmissionChangeLog.objects.create(
+                submission=form.instance,
+                changed_by=changed_by,
+                changed_at=now,
+                changes=changes,
+            )
+
+    def response_change(self, request, obj):
+        # ── Privileged POST actions — permission checked before execution ──────
+        # Each branch uses _require_perm() which emits an error message and
+        # returns False when the permission is absent, so the operation is
+        # silently skipped and the user sees only the error banner.  This is the
+        # authoritative security gate regardless of what the UI shows.
+        if "_revoke_all_keys" in request.POST:
+            if self._require_perm(request, "manage_apikeys", "revoke API keys"):
+                self._revoke_all_keys(request, obj)
+        elif "_reset_key" in request.POST:
+            if self._require_perm(request, "manage_apikeys", "reset API keys"):
+                self._reset_key(request, obj)
+        elif "_issue_new_key" in request.POST:
+            if self._require_perm(request, "manage_apikeys", "issue new API keys"):
+                self._issue_new_key(request, obj)
+        elif "_approve" in request.POST:
+            if self._require_perm(
+                request, "approve_servicesubmission", "approve submissions"
+            ):
+                self._change_status(
+                    request,
+                    obj.__class__.objects.filter(pk=obj.pk),
+                    "approved",
+                    "Approved",
+                )
+        elif "_reject" in request.POST:
+            if self._require_perm(
+                request, "approve_servicesubmission", "reject submissions"
+            ):
+                self._change_status(
+                    request,
+                    obj.__class__.objects.filter(pk=obj.pk),
+                    "rejected",
+                    "Rejected",
+                )
+        elif "_under_review" in request.POST:
+            if self._require_perm(
+                request, "change_servicesubmission", "mark submissions as under review"
+            ):
+                self._change_status(
+                    request,
+                    obj.__class__.objects.filter(pk=obj.pk),
+                    "under_review",
+                    "Under Review",
+                )
+        elif "_deprecate" in request.POST:
+            if self._require_perm(
+                request, "change_servicesubmission", "deprecate submissions"
+            ):
+                self._change_status(
+                    request,
+                    obj.__class__.objects.filter(pk=obj.pk),
+                    "deprecated",
+                    "Deprecated",
+                )
+        elif "_undeprecate" in request.POST:
+            if self._require_perm(
+                request, "change_servicesubmission", "undeprecate submissions"
+            ):
+                self._change_status(
+                    request,
+                    obj.__class__.objects.filter(pk=obj.pk),
+                    "submitted",
+                    "Submitted (undeprecated)",
+                )
+        else:
+            # Regular form save — show a diff banner if fields changed.
+            changes = getattr(request, "_diff_changes", [])
+            if changes:
+                # Build a concise "field: old → new" summary for the banner.
+                # All user-controlled values are escaped via format_html().
+                lines = [
+                    format_html(
+                        "<li><strong>{}:</strong> "
+                        '<span style="color:#991b1b">{}</span> → '
+                        '<span style="color:#166534">{}</span></li>',
+                        ch["label"],
+                        ch["old"],
+                        ch["new"],
+                    )
+                    for ch in changes
+                ]
+                self.message_user(
+                    request,
+                    mark_safe(
+                        format_html(
+                            "<strong>{} field(s) changed:</strong>"
+                            '<ul style="margin:.4rem 0 0 1.2rem;padding:0">{}</ul>',
+                            len(changes),
+                            mark_safe("".join(lines)),
+                        )
+                    ),
+                    messages.INFO,
+                )
+                # Also write the diff to LogEntry.change_message for the History tab.
+                change_msg = "; ".join(
+                    f"{ch['label']}: {ch['old']!r} → {ch['new']!r}" for ch in changes
+                )
+                self._log(request, obj, change_msg)
+            elif hasattr(request, "_diff_changes"):
+                # Diff was computed but nothing changed.
+                self.message_user(
+                    request,
+                    "Saved — no field values were changed.",
+                    messages.INFO,
+                )
+
+        return super().response_change(request, obj)
+
+    def history_view(self, request, object_id, extra_context=None):
+        """Sort Django admin history newest-first."""
+        from django.contrib.admin.views.main import PAGE_VAR
+
+        response = super().history_view(request, object_id, extra_context)
+        if not hasattr(response, "context_data"):
+            return response  # redirect (obj not found) — let Django handle it
+
+        # Re-paginate with reversed ordering (base uses oldest-first).
+        qs = response.context_data["action_list"].paginator.object_list.order_by(
+            "-action_time"
+        )
+        paginator = self.get_paginator(request, qs, 100)
+        page_obj = paginator.get_page(request.GET.get(PAGE_VAR, 1))
+        response.context_data["action_list"] = page_obj
+        response.context_data["page_range"] = paginator.get_elided_page_range(
+            page_obj.number
+        )
+        return response
+
     fieldsets = (
         (
             "Status & Metadata",
@@ -176,6 +588,30 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     "submission_ip_display",
                     "status_actions",
                 ),
+            },
+        ),
+        (
+            "Last Change Summary",
+            {
+                "fields": ("last_change_summary_display",),
+                "description": (
+                    "Most recent field-level change — who made it and what was different. "
+                    "Expand to review before acting on a status decision."
+                ),
+                "classes": ("collapse",),
+            },
+        ),
+        (
+            "Change History",
+            {
+                "fields": ("change_history_display",),
+                "description": (
+                    "Field-level diff log for all edits — by submitter (web form), "
+                    "admin (this interface), or API. "
+                    "Each entry is collapsed; click to expand. "
+                    "The History button (top right) shows the narrower admin-action log."
+                ),
+                "classes": ("collapse",),
             },
         ),
         (
@@ -264,6 +700,69 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             },
         ),
     )
+
+    # ── Dynamic fieldset filtering ────────────────────────────────────────────
+
+    @staticmethod
+    def _strip_fields(fields: tuple, excluded: frozenset) -> tuple:
+        """
+        Remove *excluded* field names from a fieldset ``fields`` tuple.
+
+        Handles both plain strings and inline row-tuples like ``("f1", "f2")``.
+        Single-element row-tuples are unwrapped to plain strings so Django
+        does not render an empty grid column.
+        """
+        result = []
+        for item in fields:
+            if isinstance(item, str):
+                if item not in excluded:
+                    result.append(item)
+            else:
+                # item is a tuple of field names displayed on one row
+                filtered = tuple(f for f in item if f not in excluded)
+                if filtered:
+                    # Unwrap single-element tuples — Django renders them fine
+                    # either way but a plain string is cleaner.
+                    result.append(filtered if len(filtered) > 1 else filtered[0])
+        return tuple(result)
+
+    def get_fieldsets(self, request, obj=None):
+        """
+        Strip permission-gated display fields from the fieldsets for users
+        who lack the corresponding permissions.
+
+        Fields controlled here:
+          submission_ip_display — superuser-only (IP address is PII)
+          status_actions        — requires change_servicesubmission OR
+                                  approve_servicesubmission
+          key_management_panel  — requires manage_apikeys
+        """
+        excluded = set()
+
+        if not request.user.is_superuser:
+            excluded.add("submission_ip_display")
+
+        if not (
+            request.user.has_perm("submissions.change_servicesubmission")
+            or request.user.has_perm("submissions.approve_servicesubmission")
+        ):
+            excluded.add("status_actions")
+
+        if not request.user.has_perm("submissions.manage_apikeys"):
+            excluded.add("key_management_panel")
+
+        if not excluded:
+            return self.fieldsets
+
+        frozen = frozenset(excluded)
+        result = []
+        for title, options in self.fieldsets:
+            filtered = self._strip_fields(options["fields"], frozen)
+            if filtered:
+                result.append((title, {**options, "fields": filtered}))
+            # If filtered is empty the entire fieldset is dropped — this only
+            # happens to "🔑 API Key Management" when manage_apikeys is absent.
+        return result
 
     actions = [
         "action_approve",
@@ -457,24 +956,62 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             request, f"{updated} submission(s) marked as {label}.", messages.SUCCESS
         )
 
-    @admin.action(description="✅ Approve selected")
+    # permissions=["approve_servicesubmission"] causes Django to call
+    # self.has_approve_servicesubmission_permission(request) before showing
+    # this action in the dropdown.  The body guard handles direct POST attacks.
+    @admin.action(
+        description="✅ Approve selected",
+        permissions=["approve_servicesubmission"],
+    )
     def action_approve(self, request, queryset):
+        if not self._require_perm(
+            request, "approve_servicesubmission", "approve submissions"
+        ):
+            return
         self._change_status(request, queryset, "approved", "Approved")
 
-    @admin.action(description="❌ Reject selected")
+    @admin.action(
+        description="❌ Reject selected",
+        permissions=["approve_servicesubmission"],
+    )
     def action_reject(self, request, queryset):
+        if not self._require_perm(
+            request, "approve_servicesubmission", "reject submissions"
+        ):
+            return
         self._change_status(request, queryset, "rejected", "Rejected")
 
-    @admin.action(description="🔍 Mark as Under Review")
+    @admin.action(
+        description="🔍 Mark as Under Review",
+        permissions=["change"],
+    )
     def action_mark_under_review(self, request, queryset):
+        if not self._require_perm(
+            request, "change_servicesubmission", "mark submissions as under review"
+        ):
+            return
         self._change_status(request, queryset, "under_review", "Under Review")
 
-    @admin.action(description="🚫 Deprecate selected")
+    @admin.action(
+        description="🚫 Deprecate selected",
+        permissions=["change"],
+    )
     def action_deprecate(self, request, queryset):
+        if not self._require_perm(
+            request, "change_servicesubmission", "deprecate submissions"
+        ):
+            return
         self._change_status(request, queryset, "deprecated", "Deprecated")
 
-    @admin.action(description="♻️ Undeprecate selected (→ Submitted)")
+    @admin.action(
+        description="♻️ Undeprecate selected (→ Submitted)",
+        permissions=["change"],
+    )
     def action_undeprecate(self, request, queryset):
+        if not self._require_perm(
+            request, "change_servicesubmission", "undeprecate submissions"
+        ):
+            return
         self._change_status(request, queryset, "submitted", "Submitted (undeprecated)")
 
     def _export_queryset(self, queryset):
@@ -553,7 +1090,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             else "",
         }
 
-    @admin.action(description="📥 Export selected as CSV")
+    @admin.action(description="📥 Export selected as CSV", permissions=["view"])
     def action_export_csv(self, request, queryset):
         resp = HttpResponse(content_type="text/csv")
         resp["Content-Disposition"] = 'attachment; filename="submissions.csv"'
@@ -562,6 +1099,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             [
                 "id",
                 "status",
+                "date_of_entry",
                 "service_name",
                 "service_description",
                 "year_established",
@@ -590,6 +1128,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 "other_registry_url",
                 "kpi_monitoring",
                 "kpi_start_year",
+                "associated_partner_note",
                 "keywords_uncited",
                 "keywords_seo",
                 "register_as_elixir",
@@ -624,6 +1163,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 [
                     str(s.id),
                     s.status,
+                    s.date_of_entry.isoformat() if s.date_of_entry else "",
                     s.service_name,
                     s.service_description,
                     s.year_established,
@@ -655,6 +1195,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     s.other_registry_url,
                     s.kpi_monitoring,
                     s.kpi_start_year,
+                    s.associated_partner_note,
                     s.keywords_uncited,
                     s.keywords_seo,
                     s.register_as_elixir,
@@ -685,7 +1226,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             )
         return resp
 
-    @admin.action(description="📥 Export selected as JSON")
+    @admin.action(description="📥 Export selected as JSON", permissions=["view"])
     def action_export_json(self, request, queryset):
         resp = HttpResponse(content_type="application/json")
         resp["Content-Disposition"] = 'attachment; filename="submissions.json"'
@@ -696,6 +1237,9 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 {
                     "id": str(s.id),
                     "status": s.status,
+                    "date_of_entry": s.date_of_entry.isoformat()
+                    if s.date_of_entry
+                    else "",
                     "service_name": s.service_name,
                     "service_description": s.service_description,
                     "year_established": s.year_established,
@@ -734,6 +1278,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     "other_registry_url": s.other_registry_url,
                     "kpi_monitoring": s.kpi_monitoring,
                     "kpi_start_year": s.kpi_start_year,
+                    "associated_partner_note": s.associated_partner_note,
                     "keywords_uncited": s.keywords_uncited,
                     "keywords_seo": s.keywords_seo,
                     "register_as_elixir": s.register_as_elixir,
@@ -747,46 +1292,6 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             )
         json.dump(data, resp, indent=2)
         return resp
-
-    # ── Key management via response_change ───────────────────────────────────
-
-    def response_change(self, request, obj):
-        if "_revoke_all_keys" in request.POST:
-            self._revoke_all_keys(request, obj)
-        elif "_reset_key" in request.POST:
-            self._reset_key(request, obj)
-        elif "_issue_new_key" in request.POST:
-            self._issue_new_key(request, obj)
-        elif "_approve" in request.POST:
-            self._change_status(
-                request, obj.__class__.objects.filter(pk=obj.pk), "approved", "Approved"
-            )
-        elif "_reject" in request.POST:
-            self._change_status(
-                request, obj.__class__.objects.filter(pk=obj.pk), "rejected", "Rejected"
-            )
-        elif "_under_review" in request.POST:
-            self._change_status(
-                request,
-                obj.__class__.objects.filter(pk=obj.pk),
-                "under_review",
-                "Under Review",
-            )
-        elif "_deprecate" in request.POST:
-            self._change_status(
-                request,
-                obj.__class__.objects.filter(pk=obj.pk),
-                "deprecated",
-                "Deprecated",
-            )
-        elif "_undeprecate" in request.POST:
-            self._change_status(
-                request,
-                obj.__class__.objects.filter(pk=obj.pk),
-                "submitted",
-                "Submitted (undeprecated)",
-            )
-        return super().response_change(request, obj)
 
     def _revoke_all_keys(self, request, sub):
         n = SubmissionAPIKey.objects.filter(submission=sub, is_active=True).update(
@@ -1066,6 +1571,18 @@ class SubmissionAPIKeyAdmin(admin.ModelAdmin):
 
     def response_change(self, request, obj):
         sub = obj.submission
+        # All key-management operations require manage_apikeys.  Check here as
+        # the authoritative security gate — do not rely on UI visibility alone.
+        _key_ops = ("_revoke_all_keys", "_reset_key", "_issue_new_key")
+        if any(op in request.POST for op in _key_ops):
+            if not request.user.has_perm("submissions.manage_apikeys"):
+                self.message_user(
+                    request,
+                    "Permission denied — you need 'manage_apikeys' to manage API keys.",
+                    messages.ERROR,
+                )
+                return super().response_change(request, obj)
+
         if "_revoke_all_keys" in request.POST:
             n = SubmissionAPIKey.objects.filter(submission=sub, is_active=True).update(
                 is_active=False
@@ -1138,5 +1655,139 @@ class SubmissionAPIKeyAdmin(admin.ModelAdmin):
             change_message=message,
         )
 
+    # ── Permission gates ──────────────────────────────────────────────────────
+    # All key-management operations — viewing included — are gated on a single
+    # semantic permission to keep authorisation logic simple and auditable.
+
+    def has_view_permission(self, request, obj=None):
+        # Viewers can see key metadata (label, hash prefix, status);
+        # they cannot see plaintext keys (never stored) or perform operations.
+        return request.user.has_perm(
+            "submissions.view_submissionapikey"
+        ) or request.user.has_perm("submissions.manage_apikeys")
+
     def has_add_permission(self, request):
-        return True
+        return request.user.has_perm("submissions.manage_apikeys")
+
+    def has_change_permission(self, request, obj=None):
+        return request.user.has_perm("submissions.manage_apikeys")
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.has_perm("submissions.manage_apikeys")
+
+
+# ---------------------------------------------------------------------------
+# SubmissionChangeLog — read-only audit-log admin
+# ---------------------------------------------------------------------------
+
+
+@admin.register(SubmissionChangeLog)
+class SubmissionChangeLogAdmin(admin.ModelAdmin):
+    """
+    Read-only admin view for the field-level change audit log.
+
+    This log is append-only and written automatically by the system —
+    no human should ever add, edit, or delete entries.  The admin exposes
+    it purely for auditing purposes.
+
+    Access requires view_submissionchangelog permission (held by all three
+    standard role groups: Viewer, Editor, Manager).
+    """
+
+    list_display = (
+        "submission_link",
+        "changed_by",
+        "changed_at",
+        "field_count",
+    )
+    list_filter = ("changed_by", ("changed_at", admin.DateFieldListFilter))
+    search_fields = ("submission__service_name", "changed_by")
+    ordering = ("-changed_at",)
+    date_hierarchy = "changed_at"
+    list_per_page = 50
+    list_select_related = ("submission",)
+
+    readonly_fields = (
+        "submission",
+        "changed_by",
+        "changed_at",
+        "changes_display",
+    )
+
+    fieldsets = (
+        (
+            None,
+            {
+                "fields": ("submission", "changed_by", "changed_at"),
+            },
+        ),
+        (
+            "Changed fields",
+            {
+                "fields": ("changes_display",),
+            },
+        ),
+    )
+
+    # ── Permission gates — entirely read-only ────────────────────────────────
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.has_perm("submissions.view_submissionchangelog")
+
+    # ── List helpers ─────────────────────────────────────────────────────────
+
+    @admin.display(description="Submission", ordering="submission__service_name")
+    def submission_link(self, obj):
+        from django.urls import reverse
+
+        url = reverse(
+            "admin:submissions_servicesubmission_change", args=[obj.submission_id]
+        )
+        return format_html('<a href="{}">{}</a>', url, obj.submission)
+
+    @admin.display(description="Fields changed", ordering=None)
+    def field_count(self, obj):
+        n = len(obj.changes) if obj.changes else 0
+        return f"{n} field{'s' if n != 1 else ''}"
+
+    # ── Detail helper ─────────────────────────────────────────────────────────
+
+    @admin.display(description="Changed fields")
+    def changes_display(self, obj):
+        """Render the JSON diff as a readable HTML table."""
+        if not obj.changes:
+            return "—"
+        rows = []
+        for ch in obj.changes:
+            rows.append(
+                format_html(
+                    "<tr>"
+                    "<td style='padding:4px 10px;font-weight:600'>{}</td>"
+                    "<td style='padding:4px 10px;color:#991b1b'>{}</td>"
+                    "<td style='padding:4px 10px;color:#166534'>{}</td>"
+                    "</tr>",
+                    ch.get("label", ch.get("field", "?")),
+                    ch.get("old", "—"),
+                    ch.get("new", "—"),
+                )
+            )
+        header = mark_safe(
+            "<tr style='background:var(--darkened-bg)'>"
+            "<th style='padding:4px 10px;text-align:left'>Field</th>"
+            "<th style='padding:4px 10px;text-align:left'>Before</th>"
+            "<th style='padding:4px 10px;text-align:left'>After</th>"
+            "</tr>"
+        )
+        return mark_safe(
+            f'<table style="border-collapse:collapse;font-size:.85rem">'
+            f"{header}{''.join(rows)}</table>"
+        )

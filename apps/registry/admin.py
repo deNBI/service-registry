@@ -130,14 +130,18 @@ class _SubmissionGuardMixin:
 
     def get_actions(self, request):
         actions = super().get_actions(request)
-        # Remove Django's site-wide delete_selected; add the guarded version.
+        # Always remove the unguarded built-in so it is never shown for these models.
         actions.pop("delete_selected", None)
-        action_func = self.__class__.guarded_delete_selected
-        actions["guarded_delete_selected"] = (
-            action_func,
-            "guarded_delete_selected",
-            action_func.short_description,
-        )
+        # Only expose the guarded action to users who actually hold delete permission.
+        # Without this check any staff user (e.g. Registry Viewer) could see and
+        # execute the action against records that have no linked submissions.
+        if self.has_delete_permission(request):
+            action_func = self.__class__.guarded_delete_selected
+            actions["guarded_delete_selected"] = (
+                action_func,
+                "guarded_delete_selected",
+                action_func.short_description,
+            )
         return actions
 
     @admin.action(
@@ -261,9 +265,8 @@ class ServiceCenterAdmin(_SubmissionGuardMixin, admin.ModelAdmin):
 class PrincipalInvestigatorAdmin(_SubmissionGuardMixin, admin.ModelAdmin):
     """Admin for named PIs in the de.NBI network."""
 
-    # responsible_pis is not in the submission changelist filters,
-    # so we show the count as plain text (no hyperlink).
-    _submission_filter_param = None
+    # Submission list can be filtered by responsible_pis → provide a link
+    _submission_filter_param = "responsible_pis__id__exact"
 
     list_display = (
         "last_name",

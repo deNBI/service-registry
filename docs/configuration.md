@@ -215,10 +215,12 @@ AXES_ENABLE_ACCESS_FAILURE_LOG=true     # Record every failed login event
 Format: `<count>/<period>` where period is `s` / `m` / `h` / `d`.
 
 ```bash
-RATE_LIMIT_SUBMIT=10/h          # Registration form submissions
-RATE_LIMIT_UPDATE=20/h          # Submission update form
-RATE_LIMIT_API=60/m             # REST API create endpoint
-RATE_LIMIT_CHALLENGE=60/h       # ALTCHA challenge generation endpoint (GET /captcha/)
+RATE_LIMIT_SUBMIT=10/h          # Registration form submissions (POST /register/)
+RATE_LIMIT_UPDATE=20/h          # Key-entry and edit form submissions (POST /update/ and /update/edit/)
+RATE_LIMIT_API=60/m             # REST API (authenticated users)
+RATE_LIMIT_CHALLENGE=60/h       # ALTCHA challenge generation (GET /captcha/)
+RATE_LIMIT_BIOTOOLS=60/h        # bio.tools prefill/search proxy (GET /biotools/*)
+RATE_LIMIT_VALIDATE=120/h       # Inline field validation (POST /register/validate/)
 ```
 
 ### ALTCHA CAPTCHA
@@ -264,12 +266,39 @@ EMAIL_HOST_USER=
 EMAIL_HOST_PASSWORD=
 EMAIL_FROM=no-reply@denbi.de    # Overrides [email] from_address in site.toml
 
-# Optional CC address on every submission notification:
+# Optional CC address on every admin notification email (never added to submitter emails):
 # SUBMISSION_NOTIFY_CC=admin@denbi.de
 
-# Override all notification recipients for testing (sends all emails here):
+# Override ALL notification recipients for testing (sends every email here instead).
+# When set, submitter-facing emails (status update, edit confirmation) are suppressed
+# to prevent accidentally emailing real submitters from staging/test environments.
 # SUBMISSION_NOTIFY_OVERRIDE=test-inbox@denbi.de
 ```
+
+### Email notification texts (`apps/submissions/email_texts.yaml`)
+
+Subject lines and submitter-facing status messages are configured in `apps/submissions/email_texts.yaml`. Edit the file and rebuild the container image to apply changes.
+
+**Subject line keys:**
+
+| Key | Event | Placeholders |
+|-----|-------|-------------|
+| `created` | New submission received (admin notification) | `{service_name}` |
+| `status_changed` | Status changed (admin notification) | `{service_name}`, `{status}` |
+| `updated` | Submitter edited their service (admin notification) | `{service_name}` |
+| `submitter_created` | New submission received (submitter confirmation) | `{service_name}` |
+| `submitter_status` | Status changed (submitter notification) | `{service_name}`, `{status}` |
+| `submitter_updated` | Submitter edited their service (submitter notification) | `{service_name}` |
+
+**Email routing summary:**
+
+| Event | Admin email | Submitter email |
+|-------|-------------|-----------------|
+| New submission (`created`) | ✓ (with admin portal link) | ✓ (receipt confirmation, no admin URL) |
+| Edit submitted (`updated`) | ✓ (with diff table + admin portal link) | ✓ (with diff table, no admin URL) |
+| Status changed (`status_changed`) | ✓ | ✓ (plain-language status message) |
+
+The submitter is **never** CC'd on admin emails. All submitter communication goes through dedicated separate emails so the admin portal URL is never accidentally forwarded to submitters.
 
 ### REST API
 

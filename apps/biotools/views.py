@@ -17,14 +17,17 @@ overwritten silently. The user must confirm before applying.
 
 import logging
 
+from django.conf import settings
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET
+from django_ratelimit.decorators import ratelimit
 
 from .client import BioToolsClient, BioToolsError, BioToolsNotFound
 
 logger = logging.getLogger(__name__)
 
 
+@ratelimit(key="ip", rate=settings.RATE_LIMIT_BIOTOOLS, method="GET", block=True)
 @require_GET
 def biotools_prefill(request):
     """
@@ -152,6 +155,7 @@ def biotools_prefill(request):
     )
 
 
+@ratelimit(key="ip", rate=settings.RATE_LIMIT_BIOTOOLS, method="GET", block=True)
 @require_GET
 def biotools_search(request):
     """

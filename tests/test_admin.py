@@ -550,3 +550,147 @@ class TestExportJSON:
         sub = ServiceSubmissionFactory(status="deprecated")
         data = self._get_json(admin_client, sub)
         assert data[0]["status"] == "deprecated"
+
+
+# ===========================================================================
+# Diff capture — save_model / save_related / response_change
+# ===========================================================================
+
+
+def _change_url(sub):
+    return reverse("admin:submissions_servicesubmission_change", args=[sub.pk])
+
+
+def _edit_form_payload(sub, **overrides):
+    """Minimal admin change-view POST payload for a ServiceSubmission."""
+    payload = {
+        "date_of_entry": sub.date_of_entry.isoformat(),
+        "submitter_first_name": sub.submitter_first_name,
+        "submitter_last_name": sub.submitter_last_name,
+        "submitter_affiliation": sub.submitter_affiliation,
+        "register_as_elixir": "False",
+        "service_name": sub.service_name,
+        "service_description": sub.service_description,
+        "year_established": str(sub.year_established),
+        "service_categories": [c.pk for c in sub.service_categories.all()],
+        "is_toolbox": "False",
+        "toolbox_name": "",
+        "user_knowledge_required": sub.user_knowledge_required or "",
+        "publications_pmids": sub.publications_pmids,
+        "responsible_pis": [p.pk for p in sub.responsible_pis.all()],
+        "associated_partner_note": "",
+        "host_institute": sub.host_institute,
+        "service_center": sub.service_center.pk,
+        "public_contact_email": sub.public_contact_email,
+        "internal_contact_name": sub.internal_contact_name,
+        "internal_contact_email": sub.internal_contact_email,
+        "website_url": sub.website_url,
+        "terms_of_use_url": sub.terms_of_use_url,
+        "license": sub.license,
+        "github_url": sub.github_url or "",
+        "biotools_url": sub.biotools_url or "",
+        "fairsharing_url": sub.fairsharing_url or "",
+        "other_registry_url": sub.other_registry_url or "",
+        "kpi_monitoring": sub.kpi_monitoring,
+        "kpi_start_year": sub.kpi_start_year or "",
+        "keywords_uncited": sub.keywords_uncited or "",
+        "keywords_seo": sub.keywords_seo or "",
+        "survey_participation": "True",
+        "comments": sub.comments or "",
+        "data_protection_consent": "True",
+        # Required Django admin hidden fields
+        "_save": "Save",
+        "api_keys-TOTAL_FORMS": "0",
+        "api_keys-INITIAL_FORMS": "0",
+        "api_keys-MIN_NUM_FORMS": "0",
+        "api_keys-MAX_NUM_FORMS": "0",
+        "edam_topics": [],
+        "edam_operations": [],
+    }
+    payload.update(overrides)
+    return payload
+
+
+@pytest.mark.django_db
+class TestAdminDiffCapture:
+    def test_admin_edit_writes_last_change_summary(self, admin_client):
+        """Saving a changed field via the admin populates last_change_summary."""
+        sub = ServiceSubmissionFactory(service_name="Before", comments="")
+        payload = _edit_form_payload(sub, service_name="After")
+        resp = admin_client.post(_change_url(sub), data=payload)
+        assert resp.status_code in (200, 302)
+
+        sub.refresh_from_db()
+        assert sub.last_change_summary is not None
+        summary = sub.last_change_summary
+        assert "admin:" in summary["changed_by"]
+        assert "changed_at" in summary
+        fields = {ch["field"] for ch in summary["changes"]}
+        assert "service_name" in fields
+
+    def test_admin_edit_records_old_and_new_values(self, admin_client):
+        sub = ServiceSubmissionFactory(service_name="Old Name")
+        payload = _edit_form_payload(sub, service_name="New Name")
+        admin_client.post(_change_url(sub), data=payload)
+        sub.refresh_from_db()
+
+        name_ch = next(
+            ch
+            for ch in sub.last_change_summary["changes"]
+            if ch["field"] == "service_name"
+        )
+        assert name_ch["old"] == "Old Name"
+        assert name_ch["new"] == "New Name"
+
+    def test_admin_edit_no_change_does_not_write_summary(self, admin_client):
+        sub = ServiceSubmissionFactory()
+        assert sub.last_change_summary is None
+        payload = _edit_form_payload(sub)  # no overrides
+        admin_client.post(_change_url(sub), data=payload)
+        sub.refresh_from_db()
+        assert sub.last_change_summary is None
+
+    def test_admin_edit_diff_banner_shown_in_response(self, admin_client):
+        """response_change should include a diff summary in the messages."""
+        sub = ServiceSubmissionFactory(service_name="Before")
+        payload = _edit_form_payload(sub, service_name="After")
+        resp = admin_client.post(_change_url(sub), data=payload, follow=True)
+        content = resp.content.decode()
+        # The diff banner lists changed field labels
+        assert "Service Name" in content
+
+    def test_admin_edit_no_change_message_shown(self, admin_client):
+        """When nothing changed, a neutral informational message is shown."""
+        sub = ServiceSubmissionFactory()
+        payload = _edit_form_payload(sub)
+        resp = admin_client.post(_change_url(sub), data=payload, follow=True)
+        content = resp.content.decode()
+        assert "no field values were changed" in content.lower()
+
+    def test_last_change_summary_display_shown_in_change_view(self, admin_client):
+        """The last_change_summary fieldset is rendered in the admin change view."""
+        sub = ServiceSubmissionFactory(
+            last_change_summary={
+                "changed_by": "submitter",
+                "changed_at": "2026-01-01T10:00:00+00:00",
+                "changes": [
+                    {
+                        "field": "service_name",
+                        "label": "Service Name",
+                        "old": "A",
+                        "new": "B",
+                    }
+                ],
+            }
+        )
+        resp = admin_client.get(_change_url(sub))
+        assert resp.status_code == 200
+        content = resp.content.decode()
+        assert "Service Name" in content
+        assert "Submitter" in content
+
+    def test_last_change_summary_empty_shows_placeholder(self, admin_client):
+        sub = ServiceSubmissionFactory()
+        resp = admin_client.get(_change_url(sub))
+        assert resp.status_code == 200
+        assert b"No change history recorded yet" in resp.content

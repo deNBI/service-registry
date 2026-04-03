@@ -9,12 +9,13 @@ Coverage:
   GET    /api/v1/submissions/{id}/   own submission only, wrong key denied, full detail shape
   PATCH  /api/v1/submissions/{id}/   partial update, status reset on approved
   PUT    /api/v1/submissions/{id}/   forbidden (405)
-  GET    /api/v1/categories/         admin token required, active-only
-  GET    /api/v1/service-centers/    admin token required, active-only
-  GET    /api/v1/pis/                admin token required, active-only
+  GET    /api/v1/categories/         admin API key required, active-only
+  GET    /api/v1/service-centers/    admin API key required, active-only
+  GET    /api/v1/pis/                admin API key required, active-only
   GET    /api/schema/                always 200
   GET    /api/docs/                  always 200
   Auth:  ApiKey vs Token, revoked denial, scope enforcement, no-auth denial
+        AdminAPIKey read/full scope — GET allowed, POST/PATCH blocked for read keys
   Shape: links present, sensitive fields absent, EDAM embedded, bio.tools embedded
 """
 
@@ -44,21 +45,27 @@ def api_client():
 
 @pytest.fixture
 def admin_user(db):
-    from django.contrib.auth import get_user_model
-    from rest_framework.authtoken.models import Token
+    """Create an admin API key with full scope for testing."""
+    from apps.api.models import AdminAPIKey
+    import secrets
+    import hashlib
 
-    User = get_user_model()
-    user = User.objects.create_user(
-        username="admin_test", password="testpass123", is_staff=True, is_active=True
+    plaintext = secrets.token_urlsafe(48)
+    key_hash = hashlib.sha256(plaintext.encode()).hexdigest()
+    key = AdminAPIKey.objects.create(
+        label="Admin Test Key",
+        key_hash=key_hash,
+        scope="full",
+        is_active=True,
     )
-    token = Token.objects.create(user=user)
-    return user, token.key
+    return key, plaintext
 
 
 @pytest.fixture
 def staff_client(api_client, admin_user):
-    _, token = admin_user
-    api_client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
+    """API client authenticated with admin API key."""
+    _, plaintext = admin_user
+    api_client.credentials(HTTP_AUTHORIZATION=f"AdminKey {plaintext}")
     return api_client
 
 
@@ -351,6 +358,76 @@ class TestSubmissionUpdate:
         sub.refresh_from_db()
         assert sub.status == "submitted"
 
+    # ── diff capture ─────────────────────────────────────────────────────────
+
+    def test_patch_writes_last_change_summary(self, api_client, settings):
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        sub = ServiceSubmissionFactory(comments="")
+        key_obj, plaintext = APIKeyFactory.create_with_plaintext(
+            submission=sub, label="CI pipeline key"
+        )
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"comments": "Added via API"},
+            format="json",
+        )
+        assert resp.status_code == 200
+        sub.refresh_from_db()
+        assert sub.last_change_summary is not None
+        summary = sub.last_change_summary
+        assert summary["changed_by"] == "api:CI pipeline key"
+        assert "changed_at" in summary
+        fields = {ch["field"] for ch in summary["changes"]}
+        assert "comments" in fields
+
+    def test_patch_no_change_does_not_write_summary(self, api_client, settings):
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        sub = ServiceSubmissionFactory(comments="same value")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"comments": "same value"},
+            format="json",
+        )
+        assert resp.status_code == 200
+        sub.refresh_from_db()
+        assert sub.last_change_summary is None
+
+    def test_patch_with_change_sends_submitter_email(self, api_client, settings):
+        from django.core import mail
+
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        settings.CELERY_TASK_EAGER_PROPAGATES = True
+        sub = ServiceSubmissionFactory(
+            comments="", internal_contact_email="owner@example.com"
+        )
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"comments": "Changed via API"},
+            format="json",
+        )
+        recipients = [addr for m in mail.outbox for addr in m.to]
+        assert "owner@example.com" in recipients
+
+    def test_patch_last_change_summary_not_in_api_response(self, api_client):
+        """last_change_summary must never be exposed via the API."""
+        sub = ServiceSubmissionFactory(
+            last_change_summary={
+                "changed_by": "submitter",
+                "changed_at": "2026-01-01T00:00:00",
+                "changes": [],
+            }
+        )
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.get(f"/api/v1/submissions/{sub.pk}/")
+        assert resp.status_code == 200
+        assert "last_change_summary" not in resp.data
+
 
 # ===========================================================================
 # GET /api/v1/submissions/ — admin list, full detail
@@ -433,6 +510,15 @@ class TestReferenceDataEndpoints:
     def test_categories_requires_admin_token(self, api_client):
         resp = api_client.get("/api/v1/categories/")
         assert resp.status_code in (401, 403)
+
+    def test_categories_apikey_auth_denied(self, api_client):
+        """Submission owner ApiKey must not access reference data endpoints."""
+        sub = ServiceSubmissionFactory()
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        assert api_client.get("/api/v1/categories/").status_code in (401, 403)
+        assert api_client.get("/api/v1/service-centers/").status_code in (401, 403)
+        assert api_client.get("/api/v1/pis/").status_code in (401, 403)
 
     def test_categories_active_filter(self, staff_client):
         ServiceCategoryFactory(name="Active Cat", is_active=True)
@@ -829,6 +915,8 @@ class TestEdamEndpoint:
 
 @pytest.mark.django_db
 class TestOpenAPIEndpoints:
+    """Schema and docs are publicly readable — they document the public API surface."""
+
     def test_schema_returns_200(self, api_client):
         resp = api_client.get("/api/schema/")
         assert resp.status_code == 200
@@ -845,6 +933,15 @@ class TestOpenAPIEndpoints:
         resp = api_client.get("/api/schema/")
         assert b"ApiKey" in resp.content or b"apiKey" in resp.content
 
+    def test_schema_excludes_internal_fields(self, api_client):
+        """Sensitive internal fields must never appear in the public schema."""
+        resp = api_client.get("/api/schema/")
+        content = resp.content
+        assert b"submission_ip" not in content
+        assert b"user_agent_hash" not in content
+        assert b"internal_contact_email" not in content
+        assert b"internal_contact_name" not in content
+
 
 # ===========================================================================
 # Error envelope consistency
@@ -860,8 +957,8 @@ class TestErrorEnvelope:
         assert "request_id" in data
 
     def test_not_found_has_envelope(self, api_client, admin_user):
-        _, token = admin_user
-        api_client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
+        _, plaintext = admin_user
+        api_client.credentials(HTTP_AUTHORIZATION=f"AdminKey {plaintext}")
         resp = api_client.get(
             "/api/v1/submissions/00000000-0000-0000-0000-000000000000/"
         )
@@ -912,6 +1009,15 @@ class TestBioToolsRecordAccessControl:
         BioToolsRecordFactory(submission__status="approved")
         resp = api_client.get("/api/v1/biotools/")
         assert resp.status_code in (401, 403)
+
+    def test_list_apikey_auth_denied(self, api_client):
+        """Submission owner ApiKey must not grant access to the biotools list."""
+        sub = ServiceSubmissionFactory()
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        BioToolsRecordFactory(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.get("/api/v1/biotools/")
+        assert resp.status_code == 403
 
     def test_list_with_admin_token(self, staff_client):
         """Admin can list all records regardless of submission status."""
@@ -1051,3 +1157,397 @@ class TestLogoUpload:
         # 'logo' is write_only; 'logo_url' is the read field
         assert "logo" not in resp.json() or resp.json().get("logo") is None
         assert "logo_url" in resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Serializer validation — mirrors model.clean() for API path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestSerializerValidation:
+    """Validate that API enforces the same field rules as model.clean()."""
+
+    def test_year_established_too_early_returns_400(self, api_client):
+        payload = _valid_payload()
+        payload["year_established"] = 1800
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 400
+        assert "year_established" in str(resp.json())
+
+    def test_year_established_future_returns_400(self, api_client):
+        from django.utils import timezone as tz
+
+        payload = _valid_payload()
+        payload["year_established"] = tz.now().year + 1
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 400
+        assert "year_established" in str(resp.json())
+
+    def test_year_established_current_year_accepted(self, api_client):
+        from django.utils import timezone as tz
+
+        payload = _valid_payload()
+        payload["year_established"] = tz.now().year
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 201
+
+    def test_service_description_too_short_returns_400(self, api_client):
+        payload = _valid_payload()
+        payload["service_description"] = "Too short"
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 400
+        assert "service_description" in str(resp.json())
+
+    def test_service_description_too_long_returns_400(self, api_client):
+        payload = _valid_payload()
+        payload["service_description"] = "x" * 5001
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 400
+        assert "service_description" in str(resp.json())
+
+    def test_service_description_exactly_5000_chars_accepted(self, api_client):
+        payload = _valid_payload()
+        payload["service_description"] = "x" * 5000
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 201
+
+    def test_kpi_start_year_required_when_monitoring_is_yes(self, api_client):
+        payload = _valid_payload()
+        payload["kpi_monitoring"] = "yes"
+        payload["kpi_start_year"] = ""
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 400
+        assert "kpi_start_year" in str(resp.json())
+
+    def test_kpi_start_year_not_required_when_monitoring_is_planned(self, api_client):
+        payload = _valid_payload()
+        payload["kpi_monitoring"] = "planned"
+        payload["kpi_start_year"] = ""
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 201
+
+    def test_patch_year_established_out_of_range_returns_400(self, api_client):
+        """PATCH must also validate year_established."""
+        from tests.factories import APIKeyFactory, ServiceSubmissionFactory
+
+        sub = ServiceSubmissionFactory()
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.id}/",
+            {"year_established": 1800},
+            format="json",
+        )
+        assert resp.status_code == 400
+
+    def test_patch_service_description_too_short_returns_400(self, api_client):
+        """PATCH must also validate service_description length."""
+        from tests.factories import APIKeyFactory, ServiceSubmissionFactory
+
+        sub = ServiceSubmissionFactory()
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.id}/",
+            {"service_description": "Too short"},
+            format="json",
+        )
+        assert resp.status_code == 400
+
+    def test_patch_kpi_start_year_required_when_monitoring_active(self, api_client):
+        """PATCH: setting kpi_monitoring=yes without kpi_start_year must fail."""
+        from tests.factories import APIKeyFactory, ServiceSubmissionFactory
+
+        sub = ServiceSubmissionFactory(kpi_monitoring="planned", kpi_start_year="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.id}/",
+            {"kpi_monitoring": "yes"},
+            format="json",
+        )
+        assert resp.status_code == 400
+        assert "kpi_start_year" in str(resp.json())
+
+
+# ---------------------------------------------------------------------------
+# IP extraction and user_agent_hash — consistent across web form and API
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestIPExtraction:
+    """API must record the correct IP using the same header priority as the web form."""
+
+    def test_create_stores_x_real_ip_over_x_forwarded_for(self, api_client):
+        """X-Real-IP takes priority over X-Forwarded-For (matches nginx setup)."""
+        resp = api_client.post(
+            "/api/v1/submissions/",
+            _valid_payload(),
+            format="json",
+            HTTP_X_REAL_IP="1.2.3.4",
+            HTTP_X_FORWARDED_FOR="9.9.9.9",
+        )
+        assert resp.status_code == 201
+        from apps.submissions.models import ServiceSubmission
+
+        sub = ServiceSubmission.objects.get(id=resp.json()["id"])
+        assert str(sub.submission_ip) == "1.2.3.4"
+
+    def test_create_falls_back_to_x_forwarded_for(self, api_client):
+        """Without X-Real-IP, leftmost X-Forwarded-For entry is used."""
+        resp = api_client.post(
+            "/api/v1/submissions/",
+            _valid_payload(),
+            format="json",
+            HTTP_X_FORWARDED_FOR="5.6.7.8, 10.0.0.1",
+        )
+        assert resp.status_code == 201
+        from apps.submissions.models import ServiceSubmission
+
+        sub = ServiceSubmission.objects.get(id=resp.json()["id"])
+        assert str(sub.submission_ip) == "5.6.7.8"
+
+    def test_create_stores_user_agent_hash(self, api_client):
+        """API create must store a non-empty user_agent_hash."""
+        import hashlib
+
+        ua = "TestClient/1.0"
+        resp = api_client.post(
+            "/api/v1/submissions/",
+            _valid_payload(),
+            format="json",
+            HTTP_USER_AGENT=ua,
+        )
+        assert resp.status_code == 201
+        from apps.submissions.models import ServiceSubmission
+
+        sub = ServiceSubmission.objects.get(id=resp.json()["id"])
+        expected = hashlib.sha256(ua.encode()).hexdigest()
+        assert sub.user_agent_hash == expected
+
+    def test_create_without_user_agent_stores_empty_hash(self, api_client):
+        """Missing User-Agent should still store a deterministic hash (of empty string)."""
+        import hashlib
+
+        resp = api_client.post("/api/v1/submissions/", _valid_payload(), format="json")
+        assert resp.status_code == 201
+        from apps.submissions.models import ServiceSubmission
+
+        sub = ServiceSubmission.objects.get(id=resp.json()["id"])
+        expected = hashlib.sha256(b"").hexdigest()
+        assert sub.user_agent_hash == expected
+
+
+# ===========================================================================
+# AdminAPIKey — scoped machine-to-machine access
+# ===========================================================================
+
+
+def _admin_key_client(api_client, scope):
+    """Return an APIClient pre-authenticated with a fresh AdminAPIKey of the given scope."""
+    import hashlib
+    import secrets
+
+    from apps.api.models import AdminAPIKey
+
+    plaintext = secrets.token_urlsafe(48)
+    AdminAPIKey.objects.create(
+        key_hash=hashlib.sha256(plaintext.encode()).hexdigest(),
+        label=f"test-{scope}",
+        scope=scope,
+        is_active=True,
+    )
+    api_client.credentials(HTTP_AUTHORIZATION=f"AdminKey {plaintext}")
+    return api_client
+
+
+@pytest.mark.django_db
+class TestAdminAPIKeyAuthentication:
+    """Verify that AdminAPIKey credentials are accepted and rejected correctly."""
+
+    def test_invalid_key_returns_401(self, api_client):
+        api_client.credentials(HTTP_AUTHORIZATION="AdminKey notavalidkey")
+        resp = api_client.get("/api/v1/submissions/")
+        assert resp.status_code == 401
+
+    def test_revoked_key_returns_401(self, api_client, db):
+        import hashlib
+        import secrets
+
+        from apps.api.models import AdminAPIKey
+
+        plaintext = secrets.token_urlsafe(48)
+        AdminAPIKey.objects.create(
+            key_hash=hashlib.sha256(plaintext.encode()).hexdigest(),
+            label="revoked",
+            scope=AdminAPIKey.SCOPE_FULL,
+            is_active=False,
+        )
+        api_client.credentials(HTTP_AUTHORIZATION=f"AdminKey {plaintext}")
+        resp = api_client.get("/api/v1/submissions/")
+        assert resp.status_code == 401
+
+    def test_unrelated_auth_scheme_is_ignored(self, api_client):
+        """An unknown auth scheme is safely ignored without crashing."""
+        api_client.credentials(HTTP_AUTHORIZATION="Unknown notatoken")
+        resp = api_client.get("/api/v1/submissions/")
+        # Returns 401 (no auth) not 500 — auth dispatch doesn't crash
+        assert resp.status_code in (401, 403)
+
+
+@pytest.mark.django_db
+class TestAdminAPIKeyReadScope:
+    """A read-scope AdminAPIKey can GET but not mutate."""
+
+    def test_read_key_lists_submissions(self, api_client):
+        ServiceSubmissionFactory()
+        client = _admin_key_client(api_client, "read")
+        resp = client.get("/api/v1/submissions/")
+        assert resp.status_code == 200
+
+    def test_read_key_retrieves_submission(self, api_client):
+        sub = ServiceSubmissionFactory()
+        client = _admin_key_client(api_client, "read")
+        resp = client.get(f"/api/v1/submissions/{sub.pk}/")
+        assert resp.status_code == 200
+
+    def test_read_key_blocks_patch_submission(self, api_client):
+        sub = ServiceSubmissionFactory()
+        client = _admin_key_client(api_client, "read")
+        resp = client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"service_name": "hacked"},
+            format="json",
+        )
+        assert resp.status_code == 403
+
+    def test_read_key_lists_categories(self, api_client):
+        ServiceCategoryFactory()
+        client = _admin_key_client(api_client, "read")
+        resp = client.get("/api/v1/categories/")
+        assert resp.status_code == 200
+
+    def test_read_key_blocks_post_category(self, api_client):
+        client = _admin_key_client(api_client, "read")
+        resp = client.post("/api/v1/categories/", {"name": "New Cat"}, format="json")
+        assert resp.status_code == 403
+
+    def test_read_key_lists_service_centers(self, api_client):
+        ServiceCenterFactory()
+        client = _admin_key_client(api_client, "read")
+        resp = client.get("/api/v1/service-centers/")
+        assert resp.status_code == 200
+
+    def test_read_key_blocks_post_service_center(self, api_client):
+        client = _admin_key_client(api_client, "read")
+        resp = client.post(
+            "/api/v1/service-centers/",
+            {"short_name": "X", "full_name": "Xtra"},
+            format="json",
+        )
+        assert resp.status_code == 403
+
+    def test_read_key_lists_pis(self, api_client):
+        PIFactory()
+        client = _admin_key_client(api_client, "read")
+        resp = client.get("/api/v1/pis/")
+        assert resp.status_code == 200
+
+    def test_read_key_does_not_expose_sensitive_fields(self, api_client):
+        """Serialiser exclusions apply regardless of auth method."""
+        ServiceSubmissionFactory()
+        client = _admin_key_client(api_client, "read")
+        resp = client.get("/api/v1/submissions/")
+        assert resp.status_code == 200
+        data = resp.json()["results"][0]
+        for field in ("internal_contact_email", "submission_ip", "user_agent_hash"):
+            assert field not in data
+
+
+@pytest.mark.django_db
+class TestAdminAPIKeyFullScope:
+    """A full-scope AdminAPIKey can perform all operations."""
+
+    def test_full_key_lists_submissions(self, api_client):
+        ServiceSubmissionFactory()
+        client = _admin_key_client(api_client, "full")
+        resp = client.get("/api/v1/submissions/")
+        assert resp.status_code == 200
+
+    def test_full_key_can_patch_submission(self, api_client):
+        sub = ServiceSubmissionFactory()
+        client = _admin_key_client(api_client, "full")
+        resp = client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"service_name": sub.service_name},  # no-op patch, just verify 200
+            format="json",
+        )
+        assert resp.status_code == 200
+
+    def test_full_key_can_post_category(self, api_client):
+        client = _admin_key_client(api_client, "full")
+        resp = client.post("/api/v1/categories/", {"name": "New Cat"}, format="json")
+        assert resp.status_code == 201
+
+
+@pytest.mark.django_db
+class TestAdminAPIKeyThrottling:
+    """
+    Test that AdminAPIKey works with DRF's throttling system.
+
+    Verifies that the is_authenticated property is properly implemented
+    so that throttling middleware can check request.user.is_authenticated
+    without AttributeError.
+    """
+
+    def test_read_key_with_throttling_enabled(self, api_client, settings):
+        """
+        A read-scope AdminAPIKey can GET endpoints even with throttling enabled.
+        This verifies the is_authenticated property is properly implemented
+        so that throttling middleware can check request.user.is_authenticated
+        without AttributeError.
+        """
+        # Enable throttling (normally disabled in test settings)
+        settings.REST_FRAMEWORK["DEFAULT_THROTTLE_CLASSES"] = [
+            "rest_framework.throttling.AnonRateThrottle",
+            "rest_framework.throttling.UserRateThrottle",
+        ]
+        settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {
+            "anon": "100/day",
+            "user": "1000/day",
+        }
+
+        ServiceCenterFactory()
+        client = _admin_key_client(api_client, "read")
+
+        # This should NOT raise AttributeError: 'AdminAPIKey' object has no attribute 'is_authenticated'
+        resp = client.get("/api/v1/service-centers/")
+        assert resp.status_code == 200
+
+    def test_admin_key_is_authenticated_property(self, db):
+        """Verify AdminAPIKey.is_authenticated property returns correct value."""
+        import hashlib
+        import secrets
+
+        from apps.api.models import AdminAPIKey
+
+        plaintext = secrets.token_urlsafe(48)
+        key = AdminAPIKey.objects.create(
+            key_hash=hashlib.sha256(plaintext.encode()).hexdigest(),
+            label="test-active",
+            scope=AdminAPIKey.SCOPE_READ,
+            is_active=True,
+        )
+
+        # Active key should have is_authenticated=True
+        assert key.is_authenticated is True
+
+        # Revoke the key
+        key.is_active = False
+        key.save()
+        key.refresh_from_db()
+
+        # Revoked key should have is_authenticated=False
+        assert key.is_authenticated is False

@@ -23,7 +23,9 @@ subjects:
   created: "[de.NBI Service Registry] New service submitted: {service_name}"
   status_changed: "[de.NBI Service Registry] Status changed to '{status}': {service_name}"
   updated: "[de.NBI Service Registry] Update: {service_name}"
+  submitter_created: "Your service registration has been received: {service_name}"
   submitter_status: "Your service registration status: {status} — {service_name}"
+  submitter_updated: "Your service registration has been updated: {service_name}"
 
 # ── Submitter Status Messages ────────────────────────────────────────────────
 # Shown in the status update email sent to the submitter.

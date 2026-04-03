@@ -25,7 +25,14 @@ def liveness(request):
 
 
 def readiness(request):
-    """Check DB and Redis connectivity before declaring ready."""
+    """
+    Check DB and Redis connectivity before declaring ready.
+
+    Returns HTTP 200 (ready) or HTTP 503 (not ready).  The response body
+    contains only a top-level status string — never the per-service breakdown.
+    Detailed check results are logged server-side so ops can diagnose failures
+    without exposing internal service topology to unauthenticated callers.
+    """
     checks = {}
 
     # Database check
@@ -33,7 +40,7 @@ def readiness(request):
         connection.ensure_connection()
         checks["database"] = "ok"
     except OperationalError as e:
-        logger.error(f"Readiness: database check failed: {e}")
+        logger.error("Readiness: database check failed: %s", e)
         checks["database"] = "error"
 
     # Redis check
@@ -44,15 +51,19 @@ def readiness(request):
         val = cache.get("_health_check")
         checks["redis"] = "ok" if val == "1" else "error"
     except Exception as e:
-        logger.error(f"Readiness: Redis check failed: {e}")
+        logger.error("Readiness: Redis check failed: %s", e)
         checks["redis"] = "error"
 
     all_ok = all(v == "ok" for v in checks.values())
-    status = 200 if all_ok else 503
+    if not all_ok:
+        failed = [svc for svc, result in checks.items() if result != "ok"]
+        logger.error("Readiness: failing checks: %s", ", ".join(failed))
 
-    return JsonResponse(
-        {"status": "ok" if all_ok else "degraded", "checks": checks}, status=status
-    )
+    # Return only the top-level status — never the per-service breakdown.
+    # The HTTP status code (200/503) is sufficient for orchestrators; the
+    # detailed breakdown would reveal internal service topology to scanners.
+    http_status = 200 if all_ok else 503
+    return JsonResponse({"status": "ok" if all_ok else "degraded"}, status=http_status)
 
 
 urlpatterns = [

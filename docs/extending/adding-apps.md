@@ -13,13 +13,13 @@ new API endpoints, new reference data types) without breaking existing functiona
 
 ### When to create a new app vs adding to an existing one
 
-| Scenario | Where to put it |
-|---|---|
-| New fields on ServiceSubmission | `apps/submissions/models.py` |
-| New reference lookup table (e.g. FundingBody) | `apps/registry/models.py` |
-| New EDAM branch or ontology term type | `apps/edam/models.py` + `sync_edam` command |
+| Scenario                                              | Where to put it                                           |
+| ----------------------------------------------------- | --------------------------------------------------------- |
+| New fields on ServiceSubmission                       | `apps/submissions/models.py`                              |
+| New reference lookup table (e.g. FundingBody)         | `apps/registry/models.py`                                 |
+| New EDAM branch or ontology term type                 | `apps/edam/models.py` + `sync_edam` command               |
 | New external registry integration (bio.tools pattern) | New app: `apps/biotools/` is the reference implementation |
-| New standalone entity (e.g. ServiceUsageReport) | New app: `apps/reporting/` |
+| New standalone entity (e.g. ServiceUsageReport)       | New app: `apps/reporting/`                                |
 
 ### Steps to add a new app
 
@@ -130,10 +130,10 @@ referential integrity with existing submissions.
 
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from rest_framework import status, viewsets
-from rest_framework.authentication import TokenAuthentication
 from rest_framework.response import Response
 
-from .permissions import IsAdminTokenUser
+from .authentication import AdminAPIKeyAuthentication
+from .permissions import IsAdminOrOwner
 
 @extend_schema(
     tags=["Reference Data"],
@@ -141,13 +141,13 @@ from .permissions import IsAdminTokenUser
 )
 class FundingBodyViewSet(viewsets.ModelViewSet):
     """
-    CRUD for funding bodies. All operations require admin token.
+    CRUD for funding bodies. All operations require admin API key.
     DELETE performs a soft-delete (sets is_active=False).
     Filter: ?is_active=true|false
     """
     serializer_class = FundingBodyAdminSerializer
-    permission_classes = [IsAdminTokenUser]
-    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAdminOrOwner]
+    authentication_classes = [AdminAPIKeyAuthentication]
     pagination_class = None
 
     def get_queryset(self):
@@ -308,6 +308,7 @@ apps/fairsharing/
 ```
 
 Steps:
+
 1. Copy the `apps/biotools/` directory structure and rename throughout.
 2. Implement `client.py` for the target API.
 3. Define a `FairSharingRecord` model with a `OneToOne` to `ServiceSubmission`.
@@ -432,6 +433,7 @@ mypy apps/ config/
 ```
 
 ### Model conventions
+
 - `id` as `UUIDField` for new top-level entities
 - `is_active` soft-delete on all reference data
 - `created_at = DateTimeField(auto_now_add=True)` and `updated_at = DateTimeField(auto_now=True)` on mutable entities
@@ -440,11 +442,13 @@ mypy apps/ config/
 - Email subject lines and status messages live in `apps/submissions/email_texts.yaml` — update if adding new notification types
 
 ### Serialiser conventions
+
 - Always use an explicit `fields = [...]` list — never `fields = "__all__"`
 - Exclude all internal/sensitive fields by omission (not by `exclude`)
 - Add `_links` block via `SerializerMethodField` on all top-level serialisers
 
 ### Test conventions
+
 - All new model code needs corresponding `test_models.py` tests
 - All new views need corresponding `test_views.py` tests
 - All new API endpoints need corresponding `test_api.py` tests
@@ -454,14 +458,14 @@ mypy apps/ config/
 
 **Always tune new querysets for N+1.** The rules applied throughout this codebase:
 
-| Situation | Do | Don't |
-|---|---|---|
-| ViewSet base queryset | `select_related` for FK/OneToOne; `prefetch_related` for M2M / reverse FK | Leave relations unresolved |
-| Admin `list_display` accesses FK | Set `list_select_related = ("field",)` | Access `obj.fk.attr` without it |
-| Counting a prefetched relation | `len(obj.relation.all())` | `obj.relation.count()` |
-| Listing values from a prefetched relation | `[x.field for x in obj.relation.all()]` | `obj.relation.values_list(...)` |
-| Resolving a list of IDs/URIs against the DB | `Model.objects.filter(field__in=ids)` → dict | `Model.objects.get(field=id)` in a loop |
-| Iterating in an admin action | Call `.select_related()` / `.prefetch_related()` on the passed `queryset` | Rely on the class-level queryset |
+| Situation                                   | Do                                                                        | Don't                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------- | --------------------------------------- |
+| ViewSet base queryset                       | `select_related` for FK/OneToOne; `prefetch_related` for M2M / reverse FK | Leave relations unresolved              |
+| Admin `list_display` accesses FK            | Set `list_select_related = ("field",)`                                    | Access `obj.fk.attr` without it         |
+| Counting a prefetched relation              | `len(obj.relation.all())`                                                 | `obj.relation.count()`                  |
+| Listing values from a prefetched relation   | `[x.field for x in obj.relation.all()]`                                   | `obj.relation.values_list(...)`         |
+| Resolving a list of IDs/URIs against the DB | `Model.objects.filter(field__in=ids)` → dict                              | `Model.objects.get(field=id)` in a loop |
+| Iterating in an admin action                | Call `.select_related()` / `.prefetch_related()` on the passed `queryset` | Rely on the class-level queryset        |
 
 **Add `db_index=True` to any field used in `filter()` or `order_by()`** in views, the API, or admin `list_filter`.
 Add compound `Meta.indexes` when two fields are filtered or sorted together (e.g. `["-submitted_at", "status"]`).

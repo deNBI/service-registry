@@ -1,0 +1,27 @@
+de.NBI Service Registry — Registration Updated
+================================================
+
+Dear {{ submission.submitter_first_name }} {{ submission.submitter_last_name }},
+
+Your service registration has been updated.
+
+Service:      {{ submission.service_name }}
+Submission ID: {{ submission.id }}
+Updated:      {{ submission.updated_at|date:"Y-m-d H:i" }} UTC
+
+{% if changes %}--- FIELDS CHANGED ({{ changes|length }}) ---
+{% for ch in changes %}
+  {{ ch.label }}:
+    Previous: {{ ch.old }}
+    New:      {{ ch.new }}
+{% endfor %}
+{% else %}No field differences were recorded for this update.
+{% endif %}
+---
+
+If you did not make this change, or if something looks incorrect,
+please contact us immediately at {{ CONTACT_EMAIL }}.
+
+{{ CONTACT_ORG }}
+{{ CONTACT_EMAIL }}
+{{ WEBSITE_URL }}
