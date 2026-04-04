@@ -4,7 +4,7 @@ from django.apps import AppConfig
 class ApiConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "apps.api"
-    verbose_name = "REST API"
+    verbose_name = "API Keys"
 
     def ready(self):
         # Register drf-spectacular OpenAPI auth extensions so Swagger UI
