@@ -137,6 +137,16 @@
     if (!actionEl || actionEl.value !== "action_assign_maturity_tags") return;
     e.preventDefault();
 
+    // Guard: if nothing is selected Django returns HTML (not JSON), which
+    // causes a JSON.parse error.  Catch it here before making the request.
+    var checked = this.querySelectorAll("[name=_selected_action]:checked");
+    var selectAcross = this.querySelector("[name=select_across]");
+    var allSelected = selectAcross && selectAcross.value === "1";
+    if (checked.length === 0 && !allSelected) {
+      showErrorOnly("{% trans "Please select at least one submission before applying this action." %}");
+      return;
+    }
+
     ajaxPost(new FormData(this), function (data) {
       if (data.status === "error") { showErrorOnly(data.message); return; }
 
