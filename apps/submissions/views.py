@@ -29,6 +29,8 @@ from .diff_utils import build_diff, snapshot, snapshot_m2m
 from .forms import SubmissionForm, UpdateKeyForm
 from .http_utils import get_client_ip, hash_user_agent
 from .models import (
+    PRIMARY_MATURITY_TAG_CHOICES,
+    SECONDARY_MATURITY_TAG_CHOICES,
     ServiceSubmission,
     SubmissionAPIKey,
     SubmissionChangeLog,
@@ -329,6 +331,13 @@ class EditView(View):
         # Handle deprecation request (separate action, not a form save)
         if "_deprecate" in request.POST:
             if submission.status != SubmissionStatus.DEPRECATED:
+                # Capture display values before mutation so the diff shows human labels.
+                old_status_display = (
+                    submission.get_status_display() or submission.status
+                )
+                old_primary_tag = submission.primary_maturity_tag
+                old_secondary_tags = list(submission.secondary_maturity_tags or [])
+
                 submission.status = SubmissionStatus.DEPRECATED
                 # Maturity tags are only valid on approved services; clear them
                 # so the service doesn't get stuck in an invalid state.
@@ -341,6 +350,60 @@ class EditView(View):
                         "secondary_maturity_tags",
                     ]
                 )
+
+                # Build field-level diff for the audit log (mirrors build_diff format
+                # and the admin _change_status pattern).
+                new_status_display = (
+                    submission.get_status_display() or SubmissionStatus.DEPRECATED
+                )
+                changes = [
+                    {
+                        "field": "status",
+                        "label": "Status",
+                        "old": old_status_display,
+                        "new": new_status_display,
+                    }
+                ]
+                if old_primary_tag:
+                    changes.append(
+                        {
+                            "field": "primary_maturity_tag",
+                            "label": "Primary Maturity Tag",
+                            "old": str(
+                                dict(PRIMARY_MATURITY_TAG_CHOICES).get(
+                                    old_primary_tag, old_primary_tag
+                                )
+                            ),
+                            "new": "—",
+                        }
+                    )
+                if old_secondary_tags:
+                    changes.append(
+                        {
+                            "field": "secondary_maturity_tags",
+                            "label": "Secondary Maturity Tags",
+                            "old": ", ".join(
+                                str(dict(SECONDARY_MATURITY_TAG_CHOICES).get(t, t))
+                                for t in old_secondary_tags
+                            ),
+                            "new": "—",
+                        }
+                    )
+
+                changed_at = now()
+                submission.last_change_summary = {
+                    "changed_by": "submitter",
+                    "changed_at": changed_at.isoformat(),
+                    "changes": changes,
+                }
+                submission.save(update_fields=["last_change_summary"])
+                SubmissionChangeLog.objects.create(
+                    submission=submission,
+                    changed_by="submitter",
+                    changed_at=changed_at,
+                    changes=changes,
+                )
+
                 send_submission_notification.delay(
                     str(submission.id), event="status_changed"
                 )
