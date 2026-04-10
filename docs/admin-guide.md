@@ -38,17 +38,17 @@ with access to that admin section.
 
 #### Registry Viewer
 
-| Resource                      | Permissions        |
-| ----------------------------- | ------------------ |
-| Service Submissions           | View               |
-| Submission Change Logs        | View               |
-| Submission API Keys           | View               |
-| Service Categories            | View               |
-| Service Centres               | View               |
-| Principal Investigators       | View               |
-| EDAM Terms                    | View               |
-| bio.tools Records & Functions | View               |
-| Celery Task Results           | View               |
+| Resource                      | Permissions |
+| ----------------------------- | ----------- |
+| Service Submissions           | View        |
+| Submission Change Logs        | View        |
+| Submission API Keys           | View        |
+| Service Categories            | View        |
+| Service Centres               | View        |
+| Principal Investigators       | View        |
+| EDAM Terms                    | View        |
+| bio.tools Records & Functions | View        |
+| Celery Task Results           | View        |
 
 #### Registry Editor
 
@@ -170,26 +170,47 @@ panel and the **Key Management** panel from users who lack the relevant
 permissions. This is a UI convenience, not a security boundary — the inner
 guards are the security boundary.
 
+Specifically: the **Status Actions** panel is shown to any user who has **either**
+`change_servicesubmission` **or** `approve_servicesubmission`. A user with only
+`change_servicesubmission` will see the buttons, but the Approve and Reject
+buttons are still blocked by the inner `_require_perm` guard if that permission
+is absent — only Under Review, Deprecate, and Undeprecate will succeed.
+The **Key Management** panel is shown only to users with `manage_apikeys`.
+
 ---
 
 ## Managing Submissions
 
 ### Submission List View
 
-The list shows: service name, submitter, status badge, service centre, ELIXIR-DE flag, submission date.
+**Columns:** Service name (link), Submitter (`LAST, First — Affiliation`), Status badge (colour-coded pill), **Maturity** tag (primary bold + secondary muted), Service Centre, ELIXIR-DE flag, Submission date, **API Keys** (active/total count), **Keys** (🔑 Manage link to the key list filtered for that submission).
 
-**Filters** (right sidebar): status, category, service centre, ELIXIR-DE flag, date range.
-**Search** (top): service name, submitter name, PI name, host institute.
+**Filters** (right sidebar): Status, Primary maturity tag, ELIXIR-DE flag, Service Centre, Service Categories, Responsible PIs, Submission date (date-drill-down calendar).
+
+**Search** (top): service name, submitter first/last name, submitter affiliation, host institute, responsible PI name.
+
+**Default sort:** newest first. **Page size:** 30.
 
 ### Submission Detail View
 
-The detail view shows all form sections A–G plus:
+The detail view is organised into collapsible fieldsets. The fieldset layout is:
 
-- Submission metadata (ID, timestamps, IP — IP visible only to superusers)
-- EDAM Topics and EDAM Operations annotations selected by the submitter
-- **Logo** — inline preview and upload field (see [Service Logos](#service-logos))
-- **bio.tools Record** section (if a bio.tools URL was entered) — see [bio.tools Records](#biotools-records)
-- API key management section at the bottom
+| Fieldset | Collapsed by default | Contents |
+|---|---|---|
+| **Status & Metadata** | No | ID, Status (read-only display), submitted/updated timestamps, Submission IP (superusers only), **Status action buttons**, Primary maturity tag (radio), Secondary maturity tags (checkboxes) |
+| **Last Change Summary** | Yes | Most recent field-level diff |
+| **Change History** | Yes | Full diff log (most recent 50 entries, each collapsible); a footer line shows the total count when the log exceeds 50 entries |
+| **A — General** | No | Date of entry, submitter name/affiliation, ELIXIR-DE flag |
+| **B — Service Master Data** | No | Service name, description, year, categories, toolbox, EDAM, publications, logo + preview |
+| **C — Responsibilities** | No | Responsible PIs, host institute, service centre, contact details |
+| **D — Websites & Links** | No | All URL fields |
+| **E — KPIs** | No | KPI monitoring, start year |
+| **F — Discoverability & Outreach** | No | Keywords, survey, comments |
+| **G — Consent** | No | Data protection consent (read-only) |
+| **🔑 API Key Management** | No | Inline key list + Revoke / Reset / Issue controls (hidden if user lacks `manage_apikeys`) |
+
+!!! note "Status is read-only"
+    The `Status` field is displayed for information only — it cannot be edited directly. All status transitions are made via the **Status action buttons** panel in the same fieldset (see below).
 
 ### Changing Submission Status
 
@@ -198,31 +219,50 @@ The detail view shows all form sections A–G plus:
 - **Admin notification** — full internal report with a direct link to the admin change view sent to the registry coordination address.
 - **Submitter confirmation** — a brief receipt confirmation ("We have received your service registration") sent to `internal_contact_email`. Contains no admin URL or internal details.
 
-**Individual status change:** Open a submission, change the Status field, and save. Two emails are sent automatically:
+**Individual status change (change view):** Open a submission. The **Status & Metadata** fieldset contains a row of action buttons — the current status is highlighted and its button is disabled. Click any other button to trigger the transition:
+
+| Button | Required permission | Result |
+|---|---|---|
+| **Approve** | `approve_servicesubmission` | → `Approved` |
+| **Reject** | `approve_servicesubmission` | → `Rejected` |
+| **Mark Under Review** | `change_servicesubmission` | → `Under Review` |
+| **Deprecate** | `change_servicesubmission` | → `Deprecated` |
+| **Undeprecate → Submitted** | `change_servicesubmission` | → `Submitted` (re-enters review queue) |
+
+!!! note "Status actions bypass the form diff"
+    Status button clicks are processed separately from the regular form save — they do **not** produce a field-level diff entry in the **Last Change Summary** or **Change History**. They are recorded in the **Django LogEntry** (History tab) with a plain text message.
+
+Two emails are sent automatically on every status transition:
 
 - **Admin notification** — sent to the registry coordination address (`[contact] email` in `site.toml`), CC'd to `SUBMISSION_NOTIFY_CC` if configured. Contains a direct link to the admin change view. **The submitter is never CC'd on this email.**
-- **Submitter notification** — sent directly to the `internal_contact_email` of the submission with a plain-language status update ("Your service has been approved / was not approved at this time"). This is a completely separate email from the admin notification so the submitter receives a clear, action-oriented message rather than the full internal report — and never sees the admin portal URL.
+- **Submitter notification** — sent directly to the `internal_contact_email` of the submission with a plain-language status update ("Your service has been approved / was not approved at this time"). This is a completely separate email so the submitter receives a clear, action-oriented message and never sees the admin portal URL.
 
-**Bulk:** Select submissions in the list view, then choose an action from the dropdown:
+**Bulk status changes:** Select submissions in the list view, then choose an action from the dropdown:
 
-| Action                        | Result                                              |
-| ----------------------------- | --------------------------------------------------- |
-| Approve selected              | Sets status → `Approved`                            |
-| Reject selected               | Sets status → `Rejected`                            |
-| Mark selected as Under Review | Sets status → `Under Review`                        |
-| Deprecate selected            | Sets status → `Deprecated`                          |
-| Undeprecate selected          | Sets status → `Submitted` (returns to review queue) |
+| Action | Required permission | Result |
+|---|---|---|
+| Approve selected | `approve_servicesubmission` | → `Approved` |
+| Reject selected | `approve_servicesubmission` | → `Rejected` |
+| Mark selected as Under Review | `change_servicesubmission` | → `Under Review` |
+| Deprecate selected | `change_servicesubmission` | → `Deprecated` |
+| Undeprecate selected | `change_servicesubmission` | → `Submitted` (returns to review queue) |
 
-All transitions fire the standard admin + submitter email notifications via Celery.
+All bulk transitions fire the admin + submitter email notifications via Celery and are logged to Django's LogEntry.
 
-**Individual (change view):** Open a submission — the "Change Status" panel shows buttons for all transitions including **Deprecate** and **Undeprecate**. The current status is highlighted and its button is disabled.
+!!! note "Maturity tags are auto-cleared on any non-approved transition"
+    Both individual buttons and bulk actions call the same underlying `_change_status` function, which clears maturity tags whenever moving away from `Approved`. See [Assigning Maturity Tags](#assigning-maturity-tags) for details.
 
 !!! note "Deprecation is owner-reversible only by admins"
 Service owners can mark their own service as deprecated via the edit form. Only admins can reverse a deprecation (via bulk action or the change view button), which resets status to `Submitted` for re-review.
 
+!!! note "Draft status"
+    `draft` is defined in the data model but is not set by the submission form
+    or any automated workflow. It can only be assigned via direct admin edit
+    and is reserved for a future "save as draft" feature.
+
 ## Audit Logging
 
-The system maintains two complementary audit trails for tracking changes to submissions.
+The system maintains three complementary audit trails for tracking changes to submissions.
 
 ### Submission Change Log
 
@@ -230,7 +270,7 @@ The system maintains two complementary audit trails for tracking changes to subm
 
 **Location 2:** Admin → Service Submissions → **Change Log** (sidebar menu)
 
-A dedicated append-only table (`SubmissionChangeLog`) that captures **all** field-level changes to a submission, regardless of source:
+A dedicated append-only table (`SubmissionChangeLog`) that captures **all** field-level changes to a submission, regardless of source. The Change Log admin list is **read-only** — add, edit, and delete are all blocked at the admin level. Entries can never be modified or removed through the admin UI.
 
 | Source                  | `changed_by` value   |
 | ----------------------- | -------------------- |
@@ -250,11 +290,10 @@ A dedicated append-only table (`SubmissionChangeLog`) that captures **all** fiel
 - One row per edit event (never updated or deleted)
 - **Change History fieldset** (on each submission page) shows entries collapsibly per submission
 - **Dedicated Change Log view** (sidebar menu) shows a list of all entries system-wide with:
-  - Submission link (click to jump to the submission)
+  - **Submission link** — click the service name to filter the Change Log to all entries for that submission
   - Who changed it (submitter/admin/API)
-  - When it changed
+  - **Changed at** — click the timestamp to open that specific entry's read-only detail view showing the full before/after diff
   - Number of fields changed
-  - Click to see full before/after diff
 
 ### Django LogEntry (History tab)
 
@@ -268,14 +307,31 @@ Django's built-in `LogEntry` table that records **admin-initiated actions only**
 
 **Not covered:** Submitter edits or API PATCH requests.
 
+### Deletion Audit Log
+
+**Location:** Admin → Service Submissions → **Deletion Audits** (sidebar menu)
+
+When a `ServiceSubmission` is hard-deleted, a `SubmissionDeletionAudit` record is written **before** the cascade. This record is never linked by FK to the submission so it is never cascade-deleted itself — it persists indefinitely.
+
+Each record captures:
+
+- Key submission fields at time of deletion: service name, status, submitter info, contact email
+- Who deleted it (`admin:<username>`)
+- When it was deleted
+- The number of change log entries that were cascade-deleted
+- A full snapshot of every `SubmissionChangeLog` entry (changed_by, changed_at, fields changed)
+
+**Delete confirmation warning:** When deleting a submission that has change log entries, the admin confirmation page displays a warning showing how many entries will be lost and suggests marking the submission as **Deprecated** instead (which preserves all history while hiding it from active listings).
+
 ### Which to use?
 
-| Use Case                                                          | Recommended                       |
-| ----------------------------------------------------------------- | --------------------------------- |
-| Track ALL changes to a submission (submitter + admin + API)       | **Submission Change Log**         |
-| Quick audit of admin actions only                                 | **Django LogEntry (History tab)** |
+| Use Case                                                           | Recommended                       |
+| ------------------------------------------------------------------ | --------------------------------- |
+| Track ALL changes to a submission (submitter + admin + API)        | **Submission Change Log**         |
+| Quick audit of admin actions only                                  | **Django LogEntry (History tab)** |
 | Query changes programmatically (e.g., "who changed X on date Y?") | **Submission Change Log**         |
-| Simple overview of admin activity                                 | **Django LogEntry**               |
+| Simple overview of admin activity                                  | **Django LogEntry**               |
+| Audit trail for hard-deleted submissions                           | **Deletion Audit Log**            |
 
 ---
 
@@ -285,11 +341,14 @@ Every submission change view includes a collapsible **Last Change Summary** sect
 
 | Column         | Description                                                    |
 | -------------- | -------------------------------------------------------------- |
-| **Changed by** | `Submitter` (edit form) or `Admin: <username>` (admin backend) |
+| **Changed by** | `submitter` (edit form), `admin:<username>` (admin backend), or `api:<key_label>` (REST API PATCH) |
 | **Changed at** | UTC timestamp of the edit                                      |
 | **Field**      | Human-readable field name                                      |
 | **Before**     | Previous value (shown in red)                                  |
 | **After**      | New value (shown in green)                                     |
+
+!!! note "Status button clicks are not captured here"
+    The **Last Change Summary** (and **Change History**) only reflect field-level edits saved through the regular form. Status transitions triggered by the action buttons (Approve, Reject, etc.) do **not** produce a `SubmissionChangeLog` entry and will not appear here. Those actions are recorded in the **Django LogEntry** (History tab) instead.
 
 ### Email notifications for edits (updated event)
 
@@ -317,8 +376,8 @@ Both formats include all submission fields:
 
 | Category               | Fields included                                                                                                                                                                                  |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Identity               | `id`, `status`, `submitted_at`, `updated_at`                                                                                                                                                     |
-| Submitter              | `submitter_first_name/last_name/affiliation`, `host_institute`, `public_contact_email`, `internal_contact_name/email`                                                                            |
+| Identity               | `id`, `status`, `submitted_at`, `updated_at`, `date_of_entry`, `primary_maturity_tag`, `secondary_maturity_tags`                                                                                 |
+| Submitter              | `submitter_first_name/last_name/affiliation`, `host_institute`, `public_contact_email`, `internal_contact_name/email`, `associated_partner_note`                                                 |
 | Service                | `service_name`, `service_description`, `year_established`, `is_toolbox`, `toolbox_name`, `user_knowledge_required`, `publications_pmids`                                                         |
 | Relations              | `service_categories`, `responsible_pis` (semicolons in CSV, arrays in JSON)                                                                                                                      |
 | EDAM                   | `edam_topics`, `edam_operations` — label + URI (semicolons in CSV, objects in JSON)                                                                                                              |
@@ -331,6 +390,53 @@ Both formats include all submission fields:
 | bio.tools (EDAM)       | `biotools_edam_topic_uris`, `biotools_edam_operation_uris` — semicolons in CSV, arrays in JSON                                                                                                   |
 | bio.tools (structured) | `biotools_functions`, `biotools_publications`, `biotools_documentation`, `biotools_download`, `biotools_links` — JSON strings in CSV, arrays of objects in JSON                                  |
 | bio.tools (sync)       | `biotools_last_synced_at` — ISO datetime of last successful sync, or empty                                                                                                                       |
+
+!!! note "JSON export uses a nested submitter object"
+    In the JSON export, submitter fields are grouped under a `"submitter"` key:
+    `{"submitter": {"first_name": "…", "last_name": "…", "affiliation": "…"}, …}`.
+    The CSV export keeps these fields flat (`submitter_first_name`, `submitter_last_name`, `submitter_affiliation`).
+
+---
+
+## Assigning Maturity Tags
+
+Maturity tags categorize services by lifecycle state. Tags can **only be assigned to approved services**.
+
+### Tag types
+
+| Tag Type                 | Values                   | Notes                               |
+| ------------------------ | ------------------------ | ----------------------------------- |
+| **Primary** (optional)   | Mature, Emerging, Legacy | Mutually exclusive; one per service |
+| **Secondary** (optional) | Unstable, etc.           | Zero or more per service            |
+
+### Tag lifecycle and auto-clear on unapproval
+
+Tags are bound to approved status. **Any status transition away from Approved automatically clears all maturity tags** — this covers single-service status buttons and bulk actions (Reject, Mark Under Review, Deprecate, Undeprecate → Submitted).
+
+When a tagged service is about to be unapproved, the change form shows a yellow warning banner listing which tags will be cleared. An info message is also shown after the action confirms how many services had tags cleared.
+
+To re-tag a service after re-approval, use the change form or bulk action again.
+
+### Single service: Edit in change form
+
+1. Open an approved submission's detail page
+2. Scroll to the **Status & Metadata** section
+3. Select a primary tag (radio buttons) or leave blank
+4. Check secondary tags (checkboxes) as needed
+5. Save
+
+!!! note
+Using a status button (Reject, Deprecate, etc.) in the same section will automatically clear any selected tags — the warning banner indicates this before you act.
+
+### Bulk assignment: List action
+
+1. Filter the submission list by status = Approved (optional)
+2. Select multiple approved submissions
+3. From the **Action** dropdown, select **Assign maturity tags to selected submissions**
+4. In the popup form, select tags
+5. Click **Assign Tags**
+
+Non-approved submissions are filtered out automatically with a warning. Mixed selections (approved + non-approved) result in tags applied only to the approved subset.
 
 ---
 
@@ -346,11 +452,28 @@ Each submission detail page shows the **Submission API Keys** section. This show
 | **Reset key**            | Revokes all keys and issues one new one. The new plaintext key is shown **once** in a banner. Communicate it to the submitter securely (e.g. encrypted email, phone). |
 | **Issue additional key** | Creates a new active key alongside existing ones. Useful for CI/CD pipelines or team members. Enter a descriptive label.                                              |
 
+**Auto-generated labels:** If the label field is left blank, the system fills it automatically — `"Admin key YYYY-MM-DD by <username>"` for Issue, `"Admin reset YYYY-MM-DD by <username>"` for Reset.
+
+**Key scope:** All keys issued from the submission change page have **write** scope. To issue a **read-only** key, use the standalone **Submission API Keys** list view (see below) where a scope selector is available.
+
+!!! note "Key operations do not email the submitter"
+    Revoke, Reset, and Issue actions are silent — no notification is sent to the submitter. Communicate the new key manually (e.g. encrypted email, phone).
+
 !!! warning "Key shown once only"
-Key plaintexts are shown once in the admin interface and are never stored anywhere.
-If you accidentally close the browser before copying the key, you must reset it again.
+    Key plaintexts are shown once in the admin interface and are never stored anywhere.
+    If you accidentally close the browser before copying the key, you must reset it again.
 
 All key operations are logged in Django's admin audit log (**History** tab, top right of the submission change view).
+
+### Standalone Submission API Keys list
+
+**Location:** Admin → Submissions → Submission API Keys
+
+This view lists **all keys across all submissions** in one place. Use it to:
+
+- Filter by active/inactive status or submission status
+- Search by service name, key label, or the username of the staff member who created the key
+- Set or change a key's **scope** (read or write) — the scope selector is only available here, not on the submission change page
 
 See [Audit Logging](#audit-logging) above for a comparison of the two audit trails.
 
@@ -562,6 +685,24 @@ docker compose up -d web
 ```
 
 No code changes, no migrations, no template edits required.
+
+### Adding or updating a license option
+
+To add a new license to the submission form, edit `apps/submissions/form_texts.yaml`
+and add a line under `license.choices`:
+
+```yaml
+license:
+  choices:
+    myslug: "My License Name"   # ← add here
+```
+
+Open a PR with this change. **No migration, no model edit, no schema change required.**
+The new option appears on the form after the next deployment.
+
+To rename a label, update the value. To remove a choice, delete the line
+(note: existing submissions that stored the old slug will still display the raw
+slug in the change log — they do not need to be updated).
 
 ---
 

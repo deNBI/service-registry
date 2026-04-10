@@ -37,8 +37,7 @@ an explicit scope. Create as many as needed — one per consumer, rotate individ
 If you give a `read` key to a third-party website that renders registry data, leaking
 the key is low-risk: the worst-case outcome is that someone reads data that might
 already be public. They **cannot** modify submissions, create or delete reference
-data, or access any field that the serialisers already exclude (`internal_contact_email`,
-`submission_ip`, etc.).
+data, or access any field that the serialisers exclude from responses (`submission_ip`, etc.).
 
 **Creating a key** (see [Admin Guide → Admin API Keys](admin-guide.md#admin-api-keys)):
 
@@ -84,6 +83,8 @@ Two scopes are available (set by admins via the API Key admin):
 | `write` | GET + PATCH | View and submit changes         |
 
 Scope is enforced consistently in both the REST API and the web edit form.
+
+**Note:** The `scope` field on `SubmissionAPIKey` defaults to `write`. Read-only keys can only be set via the standalone Submission API Keys list view in the admin.
 A `read` key stored in the update session can load the pre-populated form
 for inspection but any POST attempt is rejected and redirected to the key-entry page.
 
@@ -272,6 +273,35 @@ Old logos are **not deleted** when a logo is replaced — previous files remain 
 
 ---
 
+### Maturity Tags
+
+Approved services can be tagged with a **primary maturity stage** (Mature, Emerging, Legacy) and optional **secondary tags** (Unstable, etc.). Tags provide lifecycle metadata for users browsing the registry.
+
+**Response fields (read-only):**
+
+- `primary_maturity_tag`: `"mature"` | `"emerging"` | `"legacy"` | `null`
+- `secondary_maturity_tags`: array of strings (e.g., `["unstable"]` or `[]`)
+
+!!! warning "Admin-only — read-only in the API"
+    Maturity tags are assigned exclusively by admins via the Django admin backend. Any `primary_maturity_tag` or `secondary_maturity_tags` values included in a `POST` or `PATCH` request body are **silently ignored**. Tags appear in GET responses so consumers can read the admin-assigned lifecycle stage.
+
+**Filter by maturity:**
+
+```bash
+# List all approved Mature services
+curl https://service-registry.bi.denbi.de/api/v1/submissions/?primary_maturity_tag=mature \
+  -H "Authorization: AdminKey <your-key>"
+
+# List all services tagged Unstable
+curl https://service-registry.bi.denbi.de/api/v1/submissions/?secondary_maturity_tags=unstable \
+  -H "Authorization: AdminKey <your-key>"
+```
+
+!!! info "Tags are cleared on unapproval"
+    When an admin changes a service's status away from Approved (via the admin backend), all maturity tags are automatically cleared. The API will return `null` / `[]` for the tag fields on such services. Tags can be reassigned after the service is re-approved.
+
+---
+
 ### Reference data {#reference-data-categories-service-centres-pis}
 
 All reference data endpoints require an admin API Key. All three resources support
@@ -417,24 +447,27 @@ header and in error bodies. Use it when reporting issues.
 
 ---
 
-## Excluded fields
+## Field visibility
 
-The following fields are **never** included in any API response regardless of authentication level:
-
-- `internal_contact_email`
-- `internal_contact_name`
-- `submission_ip`
-- `user_agent_hash`
+| Field                   | POST/PATCH | GET response | Notes                                          |
+| ----------------------- | ---------- | ------------ | ---------------------------------------------- |
+| `internal_contact_name` | required   | never        | Write-only; stored for admin use only          |
+| `internal_contact_email`| required   | never        | Write-only; stored for admin use only          |
+| `primary_maturity_tag`  | ignored    | yes          | Read-only in API; set by admins via backend    |
+| `secondary_maturity_tags`| ignored   | yes          | Read-only in API; set by admins via backend    |
+| `submission_ip`         | —          | never        | Server-generated; not exposed via API          |
+| `user_agent_hash`       | —          | never        | Server-generated; not exposed via API          |
 
 ---
 
 ## curl examples
 
 ```bash
-# Register a new service (public)
+# Register a new service (public) — internal_contact_* are required
 curl -X POST https://service-registry.bi.denbi.de/api/v1/submissions/ \
   -H "Content-Type: application/json" \
   -d @submission.json
+# submission.json must include internal_contact_name and internal_contact_email
 
 # List all submissions (admin key)
 curl https://service-registry.bi.denbi.de/api/v1/submissions/ \

@@ -73,6 +73,9 @@ extra_javascript:
 extra_css:
   - stylesheets/extra.css
 
+exclude_docs: |
+  superpowers/
+
 nav:
   - Home: index.md
   - Getting Started:

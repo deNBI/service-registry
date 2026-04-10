@@ -1,0 +1,35 @@
+{% extends "admin/delete_confirmation.html" %}
+{% load i18n %}
+
+{% block delete_confirm %}
+{% if changelog_count %}
+<div style="
+    background:#fffbeb;
+    border:1px solid #fde68a;
+    border-radius:6px;
+    padding:.75rem 1rem;
+    margin-bottom:1.2rem;
+    font-size:.9rem;
+">
+    <strong style="color:#92400e;">⚠ Permanent data loss:</strong>
+    <span style="color:#78350f;">
+        This submission has
+        <strong>{{ changelog_count }} change log
+        entr{{ changelog_count|pluralize:"y,ies" }}</strong>
+        that will be permanently deleted along with the submission.
+        A deletion audit record will be preserved, but the full field-level
+        history will no longer be browsable from the Change Log.
+    </span>
+    <br>
+    <span style="display:block;margin-top:.4rem;color:#78350f;">
+        Consider
+        <a href="{{ deprecated_url }}" style="color:#92400e;font-weight:600;">
+            marking this submission as Deprecated
+        </a>
+        instead — this preserves all history while hiding the service from
+        active listings.
+    </span>
+</div>
+{% endif %}
+{{ block.super }}
+{% endblock %}

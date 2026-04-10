@@ -17,10 +17,31 @@ imports at module level) so they can be unit-tested without a database.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+import yaml
 
 if TYPE_CHECKING:
     from apps.submissions.models import ServiceSubmission
+
+# ---------------------------------------------------------------------------
+# YAML-based label lookup for license field
+# ---------------------------------------------------------------------------
+_FORM_TEXTS_PATH = Path(__file__).resolve().parent / "form_texts.yaml"
+try:
+    _ft = yaml.safe_load(_FORM_TEXTS_PATH.read_text(encoding="utf-8")) or {}
+except FileNotFoundError:
+    _ft = {}
+
+# Fields whose display labels are defined in form_texts.yaml choices dicts.
+# Maps field name → {slug: label} for lookup in snapshot().
+_YAML_CHOICE_FIELDS: dict[str, dict[str, str]] = {
+    "license": dict((_ft.get("license", {}).get("choices") or {}).items()),
+}
+# _ft is a temporary variable used only to build _YAML_CHOICE_FIELDS above.
+# Delete it to avoid it leaking into the module namespace.
+del _ft
 
 # ---------------------------------------------------------------------------
 # Field definitions
@@ -64,6 +85,8 @@ DIFFABLE_FIELDS: list[tuple[str, str]] = [
     ("survey_participation", "Survey Participation"),
     ("register_as_elixir", "Register as ELIXIR"),
     ("comments", "Comments"),
+    ("primary_maturity_tag", "Primary Maturity Tag"),
+    ("secondary_maturity_tags", "Secondary Maturity Tags"),
 ]
 
 # M2M fields included in the diff.
@@ -77,7 +100,7 @@ DIFFABLE_M2M: list[tuple[str, str]] = [
 ]
 
 # Fields that have a get_FOO_display() method (choice fields).
-_CHOICE_FIELDS = {"status", "license", "kpi_monitoring"}
+_CHOICE_FIELDS = {"status", "kpi_monitoring", "primary_maturity_tag"}
 
 # Fields that are FKs — compare via _id attribute, display via str().
 _FK_FIELDS = {"service_center"}
@@ -87,6 +110,18 @@ _BOOL_FIELDS = {"is_toolbox", "survey_participation", "register_as_elixir"}
 
 # File/image fields — display just the basename of the stored file, or "—".
 _FILE_FIELDS = {"logo"}
+
+# JSON list fields — snapshotted as sorted lists of str values (like M2M but stored in a JSONField).
+_LIST_FIELDS = {"secondary_maturity_tags"}
+
+# snapshot() checks _CHOICE_FIELDS before _YAML_CHOICE_FIELDS in its elif chain.
+# A field present in both would silently use the wrong branch. Guard against this.
+_overlap = _CHOICE_FIELDS & set(_YAML_CHOICE_FIELDS)
+assert not _overlap, (
+    f"Fields {_overlap} appear in both _CHOICE_FIELDS and _YAML_CHOICE_FIELDS. "
+    "Remove them from _CHOICE_FIELDS so the YAML label lookup takes precedence."
+)
+del _overlap
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +144,10 @@ def snapshot(instance: "ServiceSubmission") -> dict:
     for field, _label in DIFFABLE_FIELDS:
         if field in _CHOICE_FIELDS:
             display_method = f"get_{field}_display"
-            value = getattr(instance, display_method, lambda: "")()
+            value = getattr(instance, display_method, lambda: "")() or ""
+        elif field in _YAML_CHOICE_FIELDS:
+            slug = getattr(instance, field, "") or ""
+            value = _YAML_CHOICE_FIELDS[field].get(slug, slug)
         elif field in _FK_FIELDS:
             related = getattr(instance, field, None)
             value = str(related) if related is not None else ""
@@ -119,6 +157,9 @@ def snapshot(instance: "ServiceSubmission") -> dict:
             file_field = getattr(instance, field, None)
             name = getattr(file_field, "name", None)
             value = name.split("/")[-1] if name else ""
+        elif field in _LIST_FIELDS:
+            raw = getattr(instance, field, None)
+            value = sorted(str(v) for v in raw) if raw else []
         else:
             raw = getattr(instance, field, None)
             value = str(raw).strip() if raw is not None else ""

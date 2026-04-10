@@ -50,6 +50,11 @@ try:
 except FileNotFoundError:
     pass  # Graceful fallback — fields keep their model help_text
 
+# License choices derived from form_texts.yaml at module load time
+_LICENSE_CHOICES: list[tuple[str, str]] = list(
+    (_FORM_TEXTS.get("license", {}).get("choices") or {}).items()
+)
+
 
 # ---------------------------------------------------------------------------
 # Bleach sanitiser — strips HTML tags from free-text fields
@@ -160,6 +165,13 @@ class SubmissionForm(forms.ModelForm):
         ),
     )
 
+    # License field with YAML-driven choices
+    license = forms.ChoiceField(
+        choices=_LICENSE_CHOICES,
+        widget=forms.Select(attrs={"class": "form-select"}),
+        help_text=_("License governing use of this service."),
+    )
+
     class Meta:
         model = ServiceSubmission
         exclude = [
@@ -245,7 +257,6 @@ class SubmissionForm(forms.ModelForm):
             "terms_of_use_url": forms.URLInput(
                 attrs={"class": "form-control", "placeholder": "https://"}
             ),
-            "license": forms.Select(attrs={"class": "form-select"}),
             "github_url": forms.URLInput(
                 attrs={"class": "form-control", "placeholder": "https://github.com/..."}
             ),
@@ -452,8 +463,14 @@ class SubmissionForm(forms.ModelForm):
     def clean_internal_contact_email_confirm(self) -> str:
         email = self.cleaned_data.get("internal_contact_email")
         confirm = self.cleaned_data.get("internal_contact_email_confirm")
-        if email and confirm and email != confirm:
-            raise ValidationError(_("Email addresses do not match."))
+        # Only validate confirmation when the primary email itself passed validation.
+        # If `email` is absent it failed field-level validation and Django will
+        # already show that error — no need to add a confirmation mismatch on top.
+        if email:
+            if not confirm:
+                raise ValidationError(_("Please confirm your email address."))
+            if email != confirm:
+                raise ValidationError(_("Email addresses do not match."))
         return confirm
 
     def clean_logo(self):
@@ -514,8 +531,7 @@ class SubmissionForm(forms.ModelForm):
                 )
         else:
             # Clear any "required" error Django may have raised on this optional-when-planned field
-            if "kpi_start_year" in self._errors:
-                del self._errors["kpi_start_year"]
+            self.errors.pop("kpi_start_year", None)
             cleaned["kpi_start_year"] = ""
 
         return cleaned

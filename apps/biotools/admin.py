@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.urls import reverse
 from django.utils.html import format_html
 
 from .models import BioToolsFunction, BioToolsRecord
@@ -93,7 +94,9 @@ class BioToolsRecordAdmin(admin.ModelAdmin):
     inlines = [BioToolsFunctionInline]
 
     def submission_link(self, obj):
-        url = f"/admin/submissions/servicesubmission/{obj.submission_id}/change/"
+        url = reverse(
+            "admin:submissions_servicesubmission_change", args=[obj.submission_id]
+        )
         return format_html('<a href="{}">{}</a>', url, obj.submission.service_name)
 
     submission_link.short_description = "Submission"

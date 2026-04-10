@@ -27,6 +27,12 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
+from apps.submissions.validation import (
+    validate_description_length as _validate_desc,
+    validate_kpi_start_year as _validate_kpi,
+    validate_toolbox_name as _validate_toolbox,
+    validate_year_established as _validate_year,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +134,9 @@ def _validate_publications(value: str) -> None:
 
 
 class SubmissionStatus(models.TextChoices):
+    # DRAFT is intentionally not set by any view or form — it is reserved for
+    # future "save as draft" functionality and can only be assigned via direct
+    # admin edit. Do not remove it; migrations reference this value.
     DRAFT = "draft", _("Draft")
     SUBMITTED = "submitted", _("Submitted")
     UNDER_REVIEW = "under_review", _("Under Review")
@@ -136,23 +145,31 @@ class SubmissionStatus(models.TextChoices):
     DEPRECATED = "deprecated", _("Deprecated")
 
 
+class SubmissionMaturityTags(models.TextChoices):
+    # Primary tags (mutually exclusive — one per approved service)
+    MATURE = "mature", _("Mature")
+    EMERGING = "emerging", _("Emerging")
+    LEGACY = "legacy", _("Legacy")
+    # Secondary tags (additive — zero or more per service)
+    UNSTABLE = "unstable", _("Unstable")
+
+
+# Named partitions — use these instead of choices[:3] / choices[3:] slicing.
+# Slicing is fragile: inserting a new member at the wrong position silently
+# reclassifies it.  These lists make the primary/secondary boundary explicit.
+PRIMARY_MATURITY_TAG_CHOICES = [
+    (SubmissionMaturityTags.MATURE, SubmissionMaturityTags.MATURE.label),
+    (SubmissionMaturityTags.EMERGING, SubmissionMaturityTags.EMERGING.label),
+    (SubmissionMaturityTags.LEGACY, SubmissionMaturityTags.LEGACY.label),
+]
+SECONDARY_MATURITY_TAG_CHOICES = [
+    (SubmissionMaturityTags.UNSTABLE, SubmissionMaturityTags.UNSTABLE.label),
+]
+
+
 class KpiMonitoring(models.TextChoices):
     YES = "yes", _("Yes")
     PLANNED = "planned", _("Planned")
-
-
-LICENSE_CHOICES = [
-    ("agpl3", "GNU AGPLv3"),
-    ("gpl3", "GNU GPLv3"),
-    ("lgpl3", "GNU LGPLv3"),
-    ("mpl2", "Mozilla Public License 2.0"),
-    ("apache2", "Apache License 2.0"),
-    ("mit", "MIT License"),
-    ("boost", "Boost Software License 1.0"),
-    ("unlicense", "The Unlicense"),
-    ("other", "None of the above"),
-    ("na", "Not applicable"),
-]
 
 
 class ServiceSubmission(models.Model):
@@ -179,6 +196,20 @@ class ServiceSubmission(models.Model):
         max_length=20,
         choices=SubmissionStatus.choices,
         default=SubmissionStatus.SUBMITTED,
+    )
+    primary_maturity_tag = models.CharField(
+        max_length=20,
+        choices=PRIMARY_MATURITY_TAG_CHOICES,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Primary maturity stage (Mature, Emerging, or Legacy). Only assignable to approved services.",
+    )
+    secondary_maturity_tags = models.JSONField(
+        blank=True,
+        null=True,
+        default=list,
+        help_text="Optional secondary tags (Unstable, etc.). Only assignable to approved services.",
     )
     submitted_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -217,6 +248,13 @@ class ServiceSubmission(models.Model):
         if self.submitter_affiliation:
             parts.append(self.submitter_affiliation)
         return ", ".join(parts)
+
+    def get_secondary_maturity_tag_display_list(self):
+        """Return display labels for all secondary tags (safe on NULL field)."""
+        if not self.secondary_maturity_tags:
+            return []
+        tag_dict = dict(SECONDARY_MATURITY_TAG_CHOICES)
+        return [str(tag_dict.get(tag, tag)) for tag in self.secondary_maturity_tags]
 
     register_as_elixir = models.BooleanField(
         default=False,
@@ -342,8 +380,7 @@ class ServiceSubmission(models.Model):
         help_text="URL to the service's terms of use (must use https://).",
     )
     license = models.CharField(
-        max_length=20,
-        choices=LICENSE_CHOICES,
+        max_length=50,
         help_text="License governing use of this service.",
     )
     github_url = models.URLField(
@@ -480,41 +517,60 @@ class ServiceSubmission(models.Model):
         """Cross-field validation called by forms and serialisers."""
         errors = {}
 
-        # Toolbox name required when is_toolbox=True
-        if self.is_toolbox and not self.toolbox_name:
-            errors["toolbox_name"] = _(
-                "Please provide the toolbox name since this service is part of a toolbox."
-            )
-
-        # KPI start year required when monitoring is active (not "planned")
-        if self.kpi_monitoring and self.kpi_monitoring != "planned":
-            if not (self.kpi_start_year or "").strip():
-                errors["kpi_start_year"] = _(
-                    "Please provide the year KPI monitoring started."
+        # Tags can only be assigned to approved services
+        if self.status != SubmissionStatus.APPROVED:
+            if self.primary_maturity_tag:
+                errors["primary_maturity_tag"] = _(
+                    "⚠ Maturity tags can only be assigned to approved services."
+                )
+            if self.secondary_maturity_tags:
+                errors["secondary_maturity_tags"] = _(
+                    "⚠ Maturity tags can only be assigned to approved services."
                 )
 
-        # Year range check
-        from django.utils import timezone as tz
+        # Validate tag choices if present
+        if self.primary_maturity_tag:
+            valid_primary = dict(PRIMARY_MATURITY_TAG_CHOICES)
+            if self.primary_maturity_tag not in valid_primary:
+                errors["primary_maturity_tag"] = _("Invalid primary maturity tag.")
 
-        current_year = tz.now().year
-        if self.year_established and not (
-            1900 <= self.year_established <= current_year
-        ):
-            errors["year_established"] = _(
-                f"Year must be between 1900 and {current_year}."
-            )
+        if self.secondary_maturity_tags:
+            valid_secondary = dict(SECONDARY_MATURITY_TAG_CHOICES)
+            for tag in self.secondary_maturity_tags:
+                if tag not in valid_secondary:
+                    errors["secondary_maturity_tags"] = _(
+                        f"'{tag}' is not a valid secondary maturity tag."
+                    )
+
+        # Toolbox name required when is_toolbox=True
+        try:
+            _validate_toolbox(self.is_toolbox, self.toolbox_name or "")
+        except ValidationError as e:
+            errors.update(e.message_dict)
+
+        # KPI start year required when monitoring is active (not "planned")
+        try:
+            _validate_kpi(self.kpi_monitoring or "", self.kpi_start_year or "")
+        except ValidationError as e:
+            errors.update(e.message_dict)
+
+        # Year range check
+        if self.year_established:
+            try:
+                _validate_year(self.year_established)
+            except ValidationError as e:
+                errors["year_established"] = e.message
 
         # Description length bounds
         if self.service_description:
-            desc_len = len(self.service_description.strip())
-            if desc_len < DESCRIPTION_MIN_LENGTH:
-                errors["service_description"] = _(
-                    f"Service description must be at least {DESCRIPTION_MIN_LENGTH} characters."
+            try:
+                _validate_desc(
+                    self.service_description,
+                    DESCRIPTION_MIN_LENGTH,
+                    DESCRIPTION_MAX_LENGTH,
                 )
-            elif desc_len > DESCRIPTION_MAX_LENGTH:
-                errors["service_description"] = _(
-                    f"Service description must not exceed {DESCRIPTION_MAX_LENGTH} characters."
-                )
+            except ValidationError as e:
+                errors["service_description"] = e.message
 
         if errors:
             raise ValidationError(errors)
@@ -763,3 +819,63 @@ class SubmissionAPIKey(models.Model):
         """Revoke this key. Revoked keys cannot be re-activated."""
         self.is_active = False
         self.save(update_fields=["is_active"])
+
+
+# ---------------------------------------------------------------------------
+# SubmissionDeletionAudit
+# ---------------------------------------------------------------------------
+
+
+class SubmissionDeletionAudit(models.Model):
+    """
+    Persisted record written immediately before a ServiceSubmission is hard-deleted.
+
+    Because SubmissionChangeLog entries are cascade-deleted with the submission,
+    this record preserves:
+      - Key identity fields of the submission at the time of deletion.
+      - A full snapshot of all SubmissionChangeLog entries.
+
+    The record is append-only and survives the cascade — it is never linked via
+    FK to the submission so it cannot itself be cascade-deleted.
+    """
+
+    # Identity — kept as plain fields so they survive after the submission is gone.
+    submission_id = models.UUIDField(
+        editable=False,
+        db_index=True,
+        help_text="PK of the deleted ServiceSubmission.",
+    )
+    service_name = models.CharField(max_length=300)
+    status = models.CharField(
+        max_length=20,
+        help_text="Status of the submission at the time of deletion.",
+    )
+    submitter_first_name = models.CharField(max_length=100, blank=True)
+    submitter_last_name = models.CharField(max_length=100, blank=True)
+    submitter_affiliation = models.CharField(max_length=300, blank=True)
+    public_contact_email = models.EmailField(blank=True)
+
+    # Deletion metadata
+    deleted_by = models.CharField(
+        max_length=200,
+        help_text='Who performed the deletion. Format: "admin:<username>" or "system".',
+    )
+    deleted_at = models.DateTimeField(auto_now_add=True)
+
+    # Changelog snapshot
+    changelog_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of SubmissionChangeLog entries that were cascade-deleted.",
+    )
+    changelog_snapshot = models.JSONField(
+        default=list,
+        help_text="Full snapshot of all SubmissionChangeLog entries at time of deletion.",
+    )
+
+    class Meta:
+        ordering = ["-deleted_at"]
+        verbose_name = "Deletion Audit"
+        verbose_name_plural = "Deletion Audits"
+
+    def __str__(self) -> str:
+        return f"{self.service_name} (deleted {self.deleted_at:%Y-%m-%d} by {self.deleted_by})"

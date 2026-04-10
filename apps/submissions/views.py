@@ -66,7 +66,7 @@ def _verify_altcha(request: HttpRequest) -> bool:
         return False
     try:
         payload = json.loads(base64.b64decode(payload_b64))
-    except Exception:
+    except (ValueError, TypeError):
         return False
     ok, _ = verify_solution(payload, hmac_key, check_expires=True)
     return ok
@@ -330,7 +330,17 @@ class EditView(View):
         if "_deprecate" in request.POST:
             if submission.status != SubmissionStatus.DEPRECATED:
                 submission.status = SubmissionStatus.DEPRECATED
-                submission.save(update_fields=["status"])
+                # Maturity tags are only valid on approved services; clear them
+                # so the service doesn't get stuck in an invalid state.
+                submission.primary_maturity_tag = None
+                submission.secondary_maturity_tags = []
+                submission.save(
+                    update_fields=[
+                        "status",
+                        "primary_maturity_tag",
+                        "secondary_maturity_tags",
+                    ]
+                )
                 send_submission_notification.delay(
                     str(submission.id), event="status_changed"
                 )

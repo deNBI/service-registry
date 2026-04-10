@@ -234,6 +234,13 @@ class TestUpdateKeyForm:
         form = UpdateKeyForm({"api_key": "short"})
         assert not form.is_valid()
 
+    def test_too_long_key_rejected(self):
+        """Keys longer than 200 characters must be rejected."""
+        from apps.submissions.forms import UpdateKeyForm
+
+        form = UpdateKeyForm({"api_key": "x" * 201})
+        assert not form.is_valid()
+
     def test_valid_length_key_accepted(self):
         import secrets
         from apps.submissions.forms import UpdateKeyForm
@@ -289,11 +296,14 @@ class TestFormTextsYAML:
     _NON_FIELD_KEYS = {"sections"}
 
     def test_every_entry_has_required_keys(self):
-        """Each field entry must have 'help' and 'tooltip' keys; 'label' is optional."""
+        """Each field entry must have 'help' and 'tooltip' keys; 'label' is optional.
+
+        The 'license' field may also have a 'choices' block for YAML-driven options.
+        """
         from apps.submissions.forms import _FORM_TEXTS
 
         required_keys = {"help", "tooltip"}
-        allowed_keys = {"help", "tooltip", "label"}
+        allowed_keys = {"help", "tooltip", "label", "choices"}
         for field_name, entry in _FORM_TEXTS.items():
             if field_name in self._NON_FIELD_KEYS:
                 continue
@@ -879,7 +889,14 @@ class TestSectionDescriptionsYAML:
             {"form": form},
             request=request,
         )
-        assert "<script>" not in content, "HTML script tag was not escaped."
+        # The injected <script> tag must be HTML-escaped, not rendered literally.
+        # Note: form_body.html contains its own legitimate <script> blocks, so we
+        # check for the specific injection string being escaped rather than the
+        # absence of any <script> tag.
+        assert '<script>alert("xss")</script>' not in content, (
+            "Injected script tag was not escaped."
+        )
+        assert "&lt;script&gt;" in content, "Script tag was not HTML-escaped in output."
         assert "Plain text." in content, "Plain text portion was dropped."
 
     @pytest.mark.django_db
@@ -1122,3 +1139,45 @@ class TestAffiliationCombobox:
         form = SubmissionForm(data)
         assert not form.is_valid()
         assert "submitter_affiliation" in form.errors
+
+
+# ===========================================================================
+# License field — YAML-driven choices
+# ===========================================================================
+
+
+class TestLicenseChoices:
+    def test_license_choices_loaded_from_yaml(self):
+        """_LICENSE_CHOICES must be derived from form_texts.yaml at module load."""
+        from apps.submissions.forms import _LICENSE_CHOICES
+
+        slugs = [slug for slug, _ in _LICENSE_CHOICES]
+        assert "mit" in slugs
+        assert "agpl3" in slugs
+        assert "eupl12" in slugs  # new entry not in old hardcoded list
+        assert len(slugs) >= 21
+
+    def test_license_choices_include_labels(self):
+        from apps.submissions.forms import _LICENSE_CHOICES
+
+        label_map = dict(_LICENSE_CHOICES)
+        assert label_map["mit"] == "MIT License"
+        assert label_map["na"] == "Not applicable"
+        assert label_map["other"] == "None of the above"
+
+    @pytest.mark.django_db
+    def test_license_form_rejects_unknown_slug(self):
+        from apps.submissions.forms import SubmissionForm
+
+        data = _base_form_data({"license": "unknown_license_xyz"})
+        form = SubmissionForm(data=data)
+        assert not form.is_valid()
+        assert "license" in form.errors
+
+    @pytest.mark.django_db
+    def test_license_form_accepts_new_yaml_slug(self):
+        from apps.submissions.forms import SubmissionForm
+
+        data = _base_form_data({"license": "eupl12"})
+        form = SubmissionForm(data=data)
+        assert form.is_valid(), form.errors

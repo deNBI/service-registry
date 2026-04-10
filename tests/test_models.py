@@ -366,3 +366,133 @@ class TestSubmissionStatusChoices:
             "deprecated",
         }
         assert expected == set(SubmissionStatus.values)
+
+
+# ===========================================================================
+# ServiceSubmission - Maturity Tags
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestServiceMaturityTags:
+    """Test primary + secondary maturity tag validation."""
+
+    def test_approved_service_can_have_primary_tag(self):
+        sub = ServiceSubmissionFactory(status="approved", primary_maturity_tag="mature")
+        sub.clean()
+        assert sub.primary_maturity_tag == "mature"
+
+    def test_approved_service_can_have_secondary_tags(self):
+        sub = ServiceSubmissionFactory(
+            status="approved", secondary_maturity_tags=["unstable"]
+        )
+        sub.clean()
+        assert "unstable" in sub.secondary_maturity_tags
+
+    def test_non_approved_cannot_have_tags(self):
+        for status in ["draft", "submitted", "under_review", "deprecated"]:
+            sub = ServiceSubmissionFactory(status=status, primary_maturity_tag="mature")
+            with pytest.raises(ValidationError) as exc:
+                sub.clean()
+            assert "Maturity tags can only be assigned to approved services" in str(
+                exc.value
+            )
+
+    def test_rejected_cannot_have_tags(self):
+        sub = ServiceSubmissionFactory(
+            status="rejected", primary_maturity_tag="emerging"
+        )
+        with pytest.raises(ValidationError) as exc:
+            sub.clean()
+        assert "Maturity tags can only be assigned to approved services" in str(
+            exc.value
+        )
+
+    def test_invalid_primary_tag_raises_error(self):
+        sub = ServiceSubmissionFactory(status="approved")
+        sub.primary_maturity_tag = "invalid_tag"
+        with pytest.raises(ValidationError) as exc:
+            sub.clean()
+        assert "Invalid primary maturity tag" in str(exc.value)
+
+    def test_invalid_secondary_tag_raises_error(self):
+        sub = ServiceSubmissionFactory(status="approved")
+        sub.secondary_maturity_tags = ["invalid_secondary"]
+        with pytest.raises(ValidationError) as exc:
+            sub.clean()
+        assert "not a valid secondary maturity tag" in str(exc.value)
+
+    def test_approved_with_no_tags_is_valid(self):
+        sub = ServiceSubmissionFactory(
+            status="approved", primary_maturity_tag=None, secondary_maturity_tags=[]
+        )
+        sub.clean()
+        assert sub.primary_maturity_tag is None
+        assert sub.secondary_maturity_tags == []
+
+
+# ===========================================================================
+# License field — YAML-driven choices
+# ===========================================================================
+
+
+class TestLicenseField:
+    def test_license_field_has_no_hardcoded_choices(self):
+        """After migration, the model field must carry no choices."""
+        from apps.submissions.models import ServiceSubmission
+
+        field = ServiceSubmission._meta.get_field("license")
+        assert not field.choices
+
+    def test_license_field_max_length_is_50(self):
+        from apps.submissions.models import ServiceSubmission
+
+        field = ServiceSubmission._meta.get_field("license")
+        assert field.max_length == 50
+
+    @pytest.mark.django_db
+    def test_license_accepts_new_slug_not_in_old_list(self, db):
+        """eupl12 was not in the old hardcoded list — must save cleanly now."""
+        from tests.factories import ServiceSubmissionFactory
+
+        sub = ServiceSubmissionFactory(license="eupl12")
+        sub.refresh_from_db()
+        assert sub.license == "eupl12"
+
+
+# ===========================================================================
+# _sanitise_text — edge cases
+# ===========================================================================
+
+
+class TestSanitiseText:
+    """Unit tests for the _sanitise_text helper applied on ServiceSubmission.save()."""
+
+    def _make(self, **kwargs):
+        """Create a minimal submission with overridden fields."""
+        from tests.factories import ServiceSubmissionFactory
+
+        sub = ServiceSubmissionFactory(**kwargs)
+        sub.refresh_from_db()
+        return sub
+
+    @pytest.mark.django_db
+    def test_null_bytes_stripped_from_service_name(self):
+        sub = self._make(service_name="Hello\x00World")
+        assert "\x00" not in sub.service_name
+        assert sub.service_name == "HelloWorld"
+
+    @pytest.mark.django_db
+    def test_nfc_normalisation_applied(self):
+        import unicodedata
+
+        # café — NFD form (e + combining acute) vs NFC (é as single codepoint)
+        nfd = "cafe\u0301"  # NFD: e + combining accent
+        nfc = unicodedata.normalize("NFC", nfd)
+        sub = self._make(service_name=nfd)
+        assert sub.service_name == nfc
+
+    @pytest.mark.django_db
+    def test_leading_trailing_whitespace_stripped(self):
+        sub = self._make(service_name="  My Service  ")
+        assert sub.service_name == "My Service"
