@@ -15,7 +15,7 @@ from django.test import Client
 from django.urls import reverse
 
 from apps.edam.models import EdamTerm
-from apps.submissions.models import SubmissionChangeLog
+from apps.submissions.models import CHANGELOG_ACTOR_ADMIN_PREFIX, SubmissionChangeLog
 from tests.factories import (
     BioToolsFunctionFactory,
     BioToolsRecordFactory,
@@ -1235,7 +1235,7 @@ class TestChangeLogAdminNavigation:
             sub = ServiceSubmissionFactory()
         return SubmissionChangeLog.objects.create(
             submission=sub,
-            changed_by="testadmin",
+            changed_by=f"{CHANGELOG_ACTOR_ADMIN_PREFIX}testadmin",
             changed_at=timezone.now(),
             changes=[{"field": "comments", "before": "a", "after": "b"}],
         )

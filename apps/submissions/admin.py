@@ -26,6 +26,9 @@ from django.utils.html import escape, format_html, format_html_join, mark_safe
 
 from .diff_utils import build_diff, snapshot, snapshot_m2m
 from .models import (
+    CHANGELOG_ACTOR_ADMIN_PREFIX,
+    CHANGELOG_ACTOR_API_PREFIX,
+    CHANGELOG_ACTOR_SUBMITTER,
     PRIMARY_MATURITY_TAG_CHOICES,
     SECONDARY_MATURITY_TAG_CHOICES,
     ServiceSubmission,
@@ -322,13 +325,15 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         """Return a styled HTML badge for the actor who made a change."""
         fs = f"font-size:{font_size}"
         base = f"border-radius:4px;padding:1px 7px;{fs};font-weight:600"
-        if changed_by == "submitter":
+        if changed_by == CHANGELOG_ACTOR_SUBMITTER:
             return f'<span style="background:#eff6ff;color:#1d4ed8;{base}">Submitter</span>'
-        if changed_by.startswith("api:"):
-            label = escape(changed_by.removeprefix("api:"))
+        if changed_by.startswith(CHANGELOG_ACTOR_API_PREFIX):
+            label = escape(changed_by.removeprefix(CHANGELOG_ACTOR_API_PREFIX))
             return f'<span style="background:#fef9c3;color:#854d0e;{base}">API: {label}</span>'
         username = escape(
-            changed_by.removeprefix("admin:") if ":" in changed_by else changed_by
+            changed_by.removeprefix(CHANGELOG_ACTOR_ADMIN_PREFIX)
+            if ":" in changed_by
+            else changed_by
         )
         return f'<span style="background:#f0fdf4;color:#166534;{base}">Admin: {username}</span>'
 
@@ -516,7 +521,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
 
         if changes:
             username = getattr(request.user, "username", "admin")
-            changed_by = f"admin:{username}"
+            changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
             now = timezone.now()
             form.instance.last_change_summary = {
                 "changed_by": changed_by,
@@ -883,7 +888,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 )
 
             username = getattr(request.user, "username", "admin")
-            changed_by = f"admin:{username}"
+            changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
             now = timezone.now()
             updated = 0
 
@@ -1222,9 +1227,10 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 update_fields += ["primary_maturity_tag", "secondary_maturity_tags"]
                 log_parts.append("maturity tags cleared")
                 tags_cleared += 1
-            sub.save(update_fields=update_fields)
 
             # Build field-level diff for the audit log (mirrors build_diff format).
+            # Done before save() so last_change_summary is written atomically with
+            # the status mutation in a single round-trip.
             new_status_display = sub.get_status_display() or new_status
             changes = [
                 {
@@ -1263,14 +1269,15 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 )
 
             username = getattr(request.user, "username", "admin")
-            changed_by = f"admin:{username}"
+            changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
             now = timezone.now()
             sub.last_change_summary = {
                 "changed_by": changed_by,
                 "changed_at": now.isoformat(),
                 "changes": changes,
             }
-            sub.save(update_fields=["last_change_summary"])
+            update_fields.append("last_change_summary")
+            sub.save(update_fields=update_fields)
             SubmissionChangeLog.objects.create(
                 submission=sub,
                 changed_by=changed_by,
@@ -1813,6 +1820,60 @@ class SubmissionAPIKeyAdmin(admin.ModelAdmin):
     ordering = ("-created_at",)
     save_on_top = True
     list_select_related = ("submission",)
+
+    def get_fieldsets(self, request, obj=None):
+        if obj is None:
+            # Simplified fieldset for the Add form — sibling_key_panel requires
+            # an existing pk and is meaningless before the key is created.
+            return [
+                (
+                    "New API Key",
+                    {
+                        "description": (
+                            "The plaintext key will be displayed once after saving. "
+                            "Copy it immediately — it cannot be retrieved later."
+                        ),
+                        "fields": ("submission", "label", "scope", "created_by"),
+                    },
+                ),
+            ]
+        return super().get_fieldsets(request, obj)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            # The standard save path leaves key_hash="" (the field is non-editable
+            # so the form never sets it), which violates the unique constraint on
+            # the second key created.  Route through create_for_submission() so the
+            # plaintext is generated and only its SHA-256 hash is persisted.
+            key_obj, plaintext = SubmissionAPIKey.create_for_submission(
+                submission=obj.submission,
+                label=obj.label,
+                created_by=obj.created_by or request.user.username,
+                scope=obj.scope,
+            )
+            # Sync the in-memory instance so Django's post-save steps
+            # (LogEntry creation, response_add redirect) see the real object.
+            obj.pk = key_obj.pk
+            obj.key_hash = key_obj.key_hash
+            obj.created_at = key_obj.created_at
+            # Stash the plaintext so response_add can surface it to the admin.
+            request._new_api_key_plaintext = plaintext
+        else:
+            super().save_model(request, obj, form, change)
+
+    def response_add(self, request, obj, post_url_continue=None):
+        plaintext = getattr(request, "_new_api_key_plaintext", None)
+        if plaintext:
+            self.message_user(
+                request,
+                format_html(
+                    "API key created. <strong>Copy this key now — it will not be shown again:</strong>"
+                    "<br><code style='font-size:1.1em;user-select:all'>{}</code>",
+                    plaintext,
+                ),
+                messages.WARNING,
+            )
+        return super().response_add(request, obj, post_url_continue)
 
     # ── List helpers ─────────────────────────────────────────────────────────
 

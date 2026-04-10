@@ -111,7 +111,9 @@ _BOOL_FIELDS = {"is_toolbox", "survey_participation", "register_as_elixir"}
 # File/image fields — display just the basename of the stored file, or "—".
 _FILE_FIELDS = {"logo"}
 
-# JSON list fields — snapshotted as sorted lists of str values (like M2M but stored in a JSONField).
+# JSON list fields stored in a JSONField (not M2M).
+# Each field in this set MUST have a corresponding get_FOO_display_list() model
+# method that returns human-readable labels, matching the _CHOICE_FIELDS pattern.
 _LIST_FIELDS = {"secondary_maturity_tags"}
 
 # snapshot() checks _CHOICE_FIELDS before _YAML_CHOICE_FIELDS in its elif chain.
@@ -158,8 +160,12 @@ def snapshot(instance: "ServiceSubmission") -> dict:
             name = getattr(file_field, "name", None)
             value = name.split("/")[-1] if name else ""
         elif field in _LIST_FIELDS:
-            raw = getattr(instance, field, None)
-            value = sorted(str(v) for v in raw) if raw else []
+            display_method = f"get_{field}_display_list"
+            if hasattr(instance, display_method):
+                value = sorted(getattr(instance, display_method)())
+            else:
+                raw = getattr(instance, field, None)
+                value = sorted(str(v) for v in raw) if raw else []
         else:
             raw = getattr(instance, field, None)
             value = str(raw).strip() if raw is not None else ""

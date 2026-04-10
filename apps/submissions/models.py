@@ -469,9 +469,9 @@ class ServiceSubmission(models.Model):
         blank=True,
         help_text=(
             "Structured record of the most recent field-level change. "
-            "Written by EditView (submitter edits) and ServiceSubmissionAdmin "
-            "(admin edits). Schema: "
-            '{"changed_by": "submitter|admin:<username>", '
+            "Written by EditView (submitter), ServiceSubmissionAdmin (admin), "
+            "or API PATCH (api key). Schema: "
+            '{"changed_by": "submitter|admin:<username>|api:<key_label>", '
             '"changed_at": "<ISO-8601>", '
             '"changes": [{"field":…, "label":…, "old":…, "new":…}]}'
         ),
@@ -603,6 +603,16 @@ class ServiceSubmission(models.Model):
 # ---------------------------------------------------------------------------
 # SubmissionChangeLog
 # ---------------------------------------------------------------------------
+
+# Canonical values for SubmissionChangeLog.changed_by.
+# All writers must use these constants so the format stays consistent and the
+# admin display layer (_actor_badge) can parse them reliably.
+#   "submitter"          — change made via the submitter's public web form
+#   "admin:<username>"   — change made by a staff user in the Django admin
+#   "api:<key_label>"    — change made via an authenticated REST API key
+CHANGELOG_ACTOR_SUBMITTER = "submitter"
+CHANGELOG_ACTOR_ADMIN_PREFIX = "admin:"
+CHANGELOG_ACTOR_API_PREFIX = "api:"
 
 
 class SubmissionChangeLog(models.Model):

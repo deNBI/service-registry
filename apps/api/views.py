@@ -28,6 +28,7 @@ from apps.registry.models import PrincipalInvestigator, ServiceCategory, Service
 from apps.submissions.diff_utils import build_diff, snapshot, snapshot_m2m
 from apps.submissions.http_utils import get_client_ip, hash_user_agent
 from apps.submissions.models import (
+    CHANGELOG_ACTOR_API_PREFIX,
     ServiceSubmission,
     SubmissionAPIKey,
     SubmissionChangeLog,
@@ -373,7 +374,7 @@ class SubmissionViewSet(
             # Identify who made the change via the API key label (request.auth
             # is the SubmissionAPIKey instance set by SubmissionAPIKeyAuthentication).
             key_label = getattr(request.auth, "label", "api")
-            changed_by = f"api:{key_label}"
+            changed_by = f"{CHANGELOG_ACTOR_API_PREFIX}{key_label}"
             changed_at = now()
             instance.last_change_summary = {
                 "changed_by": changed_by,

@@ -29,6 +29,7 @@ from .diff_utils import build_diff, snapshot, snapshot_m2m
 from .forms import SubmissionForm, UpdateKeyForm
 from .http_utils import get_client_ip, hash_user_agent
 from .models import (
+    CHANGELOG_ACTOR_SUBMITTER,
     PRIMARY_MATURITY_TAG_CHOICES,
     SECONDARY_MATURITY_TAG_CHOICES,
     ServiceSubmission,
@@ -392,14 +393,14 @@ class EditView(View):
 
                 changed_at = now()
                 submission.last_change_summary = {
-                    "changed_by": "submitter",
+                    "changed_by": CHANGELOG_ACTOR_SUBMITTER,
                     "changed_at": changed_at.isoformat(),
                     "changes": changes,
                 }
                 submission.save(update_fields=["last_change_summary"])
                 SubmissionChangeLog.objects.create(
                     submission=submission,
-                    changed_by="submitter",
+                    changed_by=CHANGELOG_ACTOR_SUBMITTER,
                     changed_at=changed_at,
                     changes=changes,
                 )
@@ -462,14 +463,14 @@ class EditView(View):
         if changes:
             changed_at = now()
             updated.last_change_summary = {
-                "changed_by": "submitter",
+                "changed_by": CHANGELOG_ACTOR_SUBMITTER,
                 "changed_at": changed_at.isoformat(),
                 "changes": changes,
             }
             updated.save(update_fields=["last_change_summary"])
             SubmissionChangeLog.objects.create(
                 submission=updated,
-                changed_by="submitter",
+                changed_by=CHANGELOG_ACTOR_SUBMITTER,
                 changed_at=changed_at,
                 changes=changes,
             )
