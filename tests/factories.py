@@ -131,6 +131,8 @@ class ServiceSubmissionFactory(DjangoModelFactory):
 
     # Meta
     status = "submitted"
+    primary_maturity_tag = None
+    secondary_maturity_tags = factory.LazyFunction(lambda: [])
 
     @factory.post_generation
     def service_categories(self, create, extracted, **kwargs):

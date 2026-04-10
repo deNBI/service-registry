@@ -14,15 +14,29 @@ import json
 import logging
 from datetime import datetime
 
+from django import forms
 from django.contrib import admin, messages
 from django.forms.widgets import CheckboxSelectMultiple
 from django.contrib.admin.models import CHANGE, LogEntry
-from django.http import HttpResponse
+from django.db import transaction
+from django.http import HttpResponse, JsonResponse
+from django.template import loader
 from django.utils import timezone
-from django.utils.html import escape, format_html, mark_safe
+from django.utils.html import escape, format_html, format_html_join, mark_safe
 
 from .diff_utils import build_diff, snapshot, snapshot_m2m
-from .models import ServiceSubmission, SubmissionAPIKey, SubmissionChangeLog
+from .models import (
+    CHANGELOG_ACTOR_ADMIN_PREFIX,
+    CHANGELOG_ACTOR_API_PREFIX,
+    CHANGELOG_ACTOR_SUBMITTER,
+    PRIMARY_MATURITY_TAG_CHOICES,
+    SECONDARY_MATURITY_TAG_CHOICES,
+    ServiceSubmission,
+    SubmissionAPIKey,
+    SubmissionChangeLog,
+    SubmissionDeletionAudit,
+    SubmissionStatus,
+)
 from .tasks import send_submission_notification
 
 logger = logging.getLogger(__name__)
@@ -99,6 +113,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         "service_name_link",
         "submitter_display",
         "status_badge",
+        "maturity_tag_display",
         "service_center",
         "elixir_badge",
         "submitted_at",
@@ -107,6 +122,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
     )
     list_filter = (
         "status",
+        "primary_maturity_tag",
         "register_as_elixir",
         "service_center",
         "service_categories",
@@ -180,7 +196,12 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         return super().get_queryset(request).prefetch_related("api_keys")
 
     def get_form(self, request, obj=None, **kwargs):
-        form = super().get_form(request, obj, **kwargs)
+        # Stash obj so formfield_for_dbfield can inject legacy license slugs.
+        self._form_obj = obj
+        try:
+            form = super().get_form(request, obj, **kwargs)
+        finally:
+            self._form_obj = None
         # Override textarea row counts — Django's default vLargeTextField CSS
         # sets height:26em which makes empty fields enormous. Setting rows here
         # takes precedence once we disable the CSS height override in base_site.html.
@@ -204,6 +225,49 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         if db_field.name == "service_categories":
             kwargs["widget"] = CheckboxSelectMultiple()
         return super().formfield_for_manytomanyfield(db_field, request, **kwargs)
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        if db_field.name == "license":
+            # Model field no longer carries choices= (YAML-driven); render as Select.
+            # If the record being edited has a legacy slug not in the current YAML
+            # choices, inject it first so ChoiceField validation does not reject the
+            # form when the admin saves without changing the license field.
+            from apps.submissions.forms import _LICENSE_CHOICES
+
+            choices = list(_LICENSE_CHOICES)
+            obj = getattr(self, "_form_obj", None)
+            if obj and obj.license:
+                known_slugs = {slug for slug, _ in choices}
+                if obj.license not in known_slugs:
+                    choices = [
+                        (obj.license, f"{obj.license} (legacy — please update)"),
+                    ] + choices
+            return forms.ChoiceField(
+                choices=choices,
+                widget=forms.Select(),
+                label="License",
+                help_text="License governing use of this service.",
+            )
+        if db_field.name == "primary_maturity_tag":
+            # Get the default form field then swap in RadioSelect + relabel empty option.
+            # Do NOT pass empty_label — TypedChoiceField does not accept it.
+            kwargs.setdefault("widget", forms.RadioSelect())
+            field = super().formfield_for_dbfield(db_field, request, **kwargs)
+            if field is not None:
+                # Replace the default "---------" blank label with something clearer.
+                field.choices = [("", "None")] + list(PRIMARY_MATURITY_TAG_CHOICES)
+            return field
+        if db_field.name == "secondary_maturity_tags":
+            # JSONField has no built-in choices support; return a full custom field.
+            return forms.TypedMultipleChoiceField(
+                choices=SECONDARY_MATURITY_TAG_CHOICES,
+                widget=forms.CheckboxSelectMultiple(),
+                required=False,
+                coerce=str,
+                label="Secondary maturity tags",
+                help_text="Optional secondary tags (Unstable, etc.). Only assignable to approved services.",
+            )
+        return super().formfield_for_dbfield(db_field, request, **kwargs)
 
     class Media:
         js = ("js/admin_submission_change.js",)
@@ -235,18 +299,41 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             )
         return "—"
 
+    @admin.display(description="Maturity")
+    def maturity_tag_display(self, obj):
+        if not obj.primary_maturity_tag:
+            return "—"
+        primary = obj.get_primary_maturity_tag_display()
+        secondary = (
+            ", ".join(obj.get_secondary_maturity_tag_display_list())
+            if obj.secondary_maturity_tags
+            else ""
+        )
+        if secondary:
+            return format_html(
+                '<span style="color:var(--link-fg);font-weight:600">{}</span> '
+                '<span style="color:var(--body-quiet-color);font-size:.85rem">({})</span>',
+                primary,
+                secondary,
+            )
+        return format_html(
+            '<span style="color:var(--link-fg);font-weight:600">{}</span>', primary
+        )
+
     @staticmethod
     def _actor_badge(changed_by: str, font_size: str = ".78rem") -> str:
         """Return a styled HTML badge for the actor who made a change."""
         fs = f"font-size:{font_size}"
         base = f"border-radius:4px;padding:1px 7px;{fs};font-weight:600"
-        if changed_by == "submitter":
+        if changed_by == CHANGELOG_ACTOR_SUBMITTER:
             return f'<span style="background:#eff6ff;color:#1d4ed8;{base}">Submitter</span>'
-        if changed_by.startswith("api:"):
-            label = escape(changed_by.removeprefix("api:"))
+        if changed_by.startswith(CHANGELOG_ACTOR_API_PREFIX):
+            label = escape(changed_by.removeprefix(CHANGELOG_ACTOR_API_PREFIX))
             return f'<span style="background:#fef9c3;color:#854d0e;{base}">API: {label}</span>'
         username = escape(
-            changed_by.removeprefix("admin:") if ":" in changed_by else changed_by
+            changed_by.removeprefix(CHANGELOG_ACTOR_ADMIN_PREFIX)
+            if ":" in changed_by
+            else changed_by
         )
         return f'<span style="background:#f0fdf4;color:#166534;{base}">Admin: {username}</span>'
 
@@ -434,7 +521,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
 
         if changes:
             username = getattr(request.user, "username", "admin")
-            changed_by = f"admin:{username}"
+            changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
             now = timezone.now()
             form.instance.last_change_summary = {
                 "changed_by": changed_by,
@@ -587,6 +674,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     ("submitted_at", "updated_at"),
                     "submission_ip_display",
                     "status_actions",
+                    ("primary_maturity_tag", "secondary_maturity_tags"),
                 ),
             },
         ),
@@ -764,12 +852,164 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             # happens to "🔑 API Key Management" when manage_apikeys is absent.
         return result
 
+    @admin.action(
+        description="Assign maturity tags to selected submissions",
+        permissions=["change"],
+    )
+    def action_assign_maturity_tags(self, request, queryset):
+        """Bulk action: open a modal to assign maturity tags (AJAX only)."""
+        approved_queryset = queryset.filter(status=SubmissionStatus.APPROVED)
+        non_approved_count = queryset.count() - approved_queryset.count()
+
+        if "_assign_tags" in request.POST:
+            primary = request.POST.get("primary_maturity_tag", "").strip() or None
+            secondary = request.POST.getlist("secondary_maturity_tags") or []
+
+            if primary:
+                valid_primary = dict(PRIMARY_MATURITY_TAG_CHOICES)
+                if primary not in valid_primary:
+                    return JsonResponse(
+                        {"status": "error", "message": "Invalid primary tag selection."}
+                    )
+
+            valid_secondary = dict(SECONDARY_MATURITY_TAG_CHOICES)
+            for tag in secondary:
+                if tag not in valid_secondary:
+                    return JsonResponse(
+                        {"status": "error", "message": f"Invalid secondary tag: {tag}."}
+                    )
+
+            if not approved_queryset.exists():
+                return JsonResponse(
+                    {
+                        "status": "error",
+                        "message": "No approved submissions selected. Tags can only be assigned to approved services.",
+                    }
+                )
+
+            username = getattr(request.user, "username", "admin")
+            changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
+            now = timezone.now()
+            updated = 0
+
+            with transaction.atomic():
+                # Re-filter inside the transaction so any race-condition status
+                # change between the outer filter and this update is excluded.
+                approved_subs = queryset.filter(
+                    status=SubmissionStatus.APPROVED
+                ).select_for_update()
+                primary_choices_dict = dict(PRIMARY_MATURITY_TAG_CHOICES)
+                secondary_choices_dict = dict(SECONDARY_MATURITY_TAG_CHOICES)
+
+                for sub in approved_subs:
+                    changes = []
+                    old_primary = sub.primary_maturity_tag
+                    old_secondary = list(sub.secondary_maturity_tags or [])
+
+                    if old_primary != primary:
+                        changes.append(
+                            {
+                                "field": "primary_maturity_tag",
+                                "label": "Primary Maturity Tag",
+                                "old": str(
+                                    primary_choices_dict.get(
+                                        old_primary, old_primary or "—"
+                                    )
+                                ),
+                                "new": str(
+                                    primary_choices_dict.get(primary, primary or "—")
+                                ),
+                            }
+                        )
+                    if old_secondary != secondary:
+                        changes.append(
+                            {
+                                "field": "secondary_maturity_tags",
+                                "label": "Secondary Maturity Tags",
+                                "old": ", ".join(
+                                    str(secondary_choices_dict.get(t, t))
+                                    for t in old_secondary
+                                )
+                                or "—",
+                                "new": ", ".join(
+                                    str(secondary_choices_dict.get(t, t))
+                                    for t in secondary
+                                )
+                                or "—",
+                            }
+                        )
+
+                    sub.primary_maturity_tag = primary
+                    sub.secondary_maturity_tags = secondary
+                    sub.save(
+                        update_fields=[
+                            "primary_maturity_tag",
+                            "secondary_maturity_tags",
+                        ]
+                    )
+
+                    if changes:
+                        sub.last_change_summary = {
+                            "changed_by": changed_by,
+                            "changed_at": now.isoformat(),
+                            "changes": changes,
+                        }
+                        sub.save(update_fields=["last_change_summary"])
+                        SubmissionChangeLog.objects.create(
+                            submission=sub,
+                            changed_by=changed_by,
+                            changed_at=now,
+                            changes=changes,
+                        )
+
+                    updated += 1
+
+            return JsonResponse(
+                {
+                    "status": "success",
+                    "updated": updated,
+                    "message": f"Maturity tags assigned to {updated} approved submission(s).",
+                }
+            )
+
+        # First POST: validate queryset and return form fragment
+        if not approved_queryset.exists():
+            return JsonResponse(
+                {
+                    "status": "error",
+                    "message": "No approved submissions selected. Tags can only be assigned to approved services.",
+                }
+            )
+
+        primary_choices = [("", "None")] + list(PRIMARY_MATURITY_TAG_CHOICES)
+        secondary_choices = list(SECONDARY_MATURITY_TAG_CHOICES)
+        selected_pks = list(queryset.values_list("pk", flat=True))
+
+        form_html = loader.render_to_string(
+            "admin/submissions/assign_maturity_tags_partial.html",
+            {
+                "primary_choices": primary_choices,
+                "secondary_choices": secondary_choices,
+                "selected_pks": selected_pks,
+            },
+            request=request,
+        )
+
+        return JsonResponse(
+            {
+                "status": "form",
+                "warning_count": non_approved_count,
+                "form_html": form_html,
+            }
+        )
+
     actions = [
         "action_approve",
         "action_reject",
         "action_mark_under_review",
         "action_deprecate",
         "action_undeprecate",
+        "action_assign_maturity_tags",
         "action_export_csv",
         "action_export_json",
     ]
@@ -852,7 +1092,8 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             obj.api_keys.all()
         )  # len() uses prefetched cache; .count() does not
         return format_html(
-            '<a href="{}" style="font-size:.8rem;white-space:nowrap">🔑 Manage ({})</a>',
+            '<a href="{}" style="font-size:.8rem;white-space:nowrap"'
+            ' title="Manage API keys for this submission">🔑 Manage ({})</a>',
             url,
             count,
         )
@@ -899,10 +1140,30 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 f'<button type="submit" name="{name}" value="1" style="{style}" {"disabled" if active else ""}>'
                 f"{check}{label}</button>"
             )
-        return mark_safe(
-            '<div style="display:flex;gap:.5rem;flex-wrap:wrap">'
-            + "".join(buttons)
-            + "</div>"
+        tag_warning = ""
+        if current == "approved" and (
+            obj.primary_maturity_tag or obj.secondary_maturity_tags
+        ):
+            primary_label = obj.get_primary_maturity_tag_display() or ""
+            secondary_labels = ", ".join(obj.get_secondary_maturity_tag_display_list())
+            tag_summary = primary_label
+            if secondary_labels:
+                tag_summary += (
+                    f" ({secondary_labels})" if primary_label else secondary_labels
+                )
+            tag_warning = format_html(
+                '<p style="margin:.6rem 0 0;font-size:.78rem;color:#92400e;'
+                "background:#fffbeb;border:1px solid #fde68a;border-radius:4px;"
+                'padding:.3rem .6rem;">'
+                "⚠ Unapproving will automatically clear maturity tags: "
+                "<strong>{}</strong></p>",
+                tag_summary,
+            )
+
+        return format_html(
+            '<div style="display:flex;gap:.5rem;flex-wrap:wrap">{}</div>{}',
+            mark_safe("".join(buttons)),
+            tag_warning,
         )
 
     @admin.display(description="API Key Actions")
@@ -943,18 +1204,100 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
 
     def _change_status(self, request, queryset, new_status, label):
         updated = 0
+        tags_cleared = 0
         for sub in queryset:
             if sub.status == new_status:
                 continue
             old = sub.status
+            # Capture display values before mutation so the diff shows human labels.
+            old_status_display = sub.get_status_display() or old
+            old_primary_tag = sub.primary_maturity_tag
+            old_secondary_tags = list(sub.secondary_maturity_tags or [])
+
             sub.status = new_status
-            sub.save(update_fields=["status"])
+            update_fields = ["status"]
+            log_parts = [f"Status changed {old} → {new_status}"]
+            # Auto-clear maturity tags when moving away from approved — tags are
+            # only valid on approved services and should not persist after de-approval.
+            if new_status != SubmissionStatus.APPROVED and (
+                sub.primary_maturity_tag or sub.secondary_maturity_tags
+            ):
+                sub.primary_maturity_tag = None
+                sub.secondary_maturity_tags = []
+                update_fields += ["primary_maturity_tag", "secondary_maturity_tags"]
+                log_parts.append("maturity tags cleared")
+                tags_cleared += 1
+
+            # Build field-level diff for the audit log (mirrors build_diff format).
+            # Done before save() so last_change_summary is written atomically with
+            # the status mutation in a single round-trip.
+            new_status_display = sub.get_status_display() or new_status
+            changes = [
+                {
+                    "field": "status",
+                    "label": "Status",
+                    "old": old_status_display,
+                    "new": new_status_display,
+                }
+            ]
+            if old_primary_tag:
+                old_primary_display = str(
+                    dict(PRIMARY_MATURITY_TAG_CHOICES).get(
+                        old_primary_tag, old_primary_tag
+                    )
+                )
+                changes.append(
+                    {
+                        "field": "primary_maturity_tag",
+                        "label": "Primary Maturity Tag",
+                        "old": old_primary_display,
+                        "new": "—",
+                    }
+                )
+            if old_secondary_tags:
+                old_secondary_display = ", ".join(
+                    str(dict(SECONDARY_MATURITY_TAG_CHOICES).get(t, t))
+                    for t in old_secondary_tags
+                )
+                changes.append(
+                    {
+                        "field": "secondary_maturity_tags",
+                        "label": "Secondary Maturity Tags",
+                        "old": old_secondary_display,
+                        "new": "—",
+                    }
+                )
+
+            username = getattr(request.user, "username", "admin")
+            changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
+            now = timezone.now()
+            sub.last_change_summary = {
+                "changed_by": changed_by,
+                "changed_at": now.isoformat(),
+                "changes": changes,
+            }
+            update_fields.append("last_change_summary")
+            sub.save(update_fields=update_fields)
+            SubmissionChangeLog.objects.create(
+                submission=sub,
+                changed_by=changed_by,
+                changed_at=now,
+                changes=changes,
+            )
+
             send_submission_notification.delay(str(sub.id), event="status_changed")
-            self._log(request, sub, f"Status changed {old} → {new_status}")
+            self._log(request, sub, "; ".join(log_parts))
             updated += 1
         self.message_user(
             request, f"{updated} submission(s) marked as {label}.", messages.SUCCESS
         )
+        if tags_cleared:
+            self.message_user(
+                request,
+                f"⚠ Maturity tags automatically cleared on {tags_cleared} submission(s) "
+                "that were moved away from Approved status.",
+                messages.WARNING,
+            )
 
     # permissions=["approve_servicesubmission"] causes Django to call
     # self.has_approve_servicesubmission_permission(request) before showing
@@ -1099,6 +1442,8 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             [
                 "id",
                 "status",
+                "primary_maturity_tag",
+                "secondary_maturity_tags",
                 "date_of_entry",
                 "service_name",
                 "service_description",
@@ -1163,6 +1508,12 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 [
                     str(s.id),
                     s.status,
+                    str(s.get_primary_maturity_tag_display())
+                    if s.primary_maturity_tag
+                    else "",
+                    "; ".join(s.get_secondary_maturity_tag_display_list())
+                    if s.secondary_maturity_tags
+                    else "",
                     s.date_of_entry.isoformat() if s.date_of_entry else "",
                     s.service_name,
                     s.service_description,
@@ -1237,6 +1588,8 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 {
                     "id": str(s.id),
                     "status": s.status,
+                    "primary_maturity_tag": s.primary_maturity_tag,
+                    "secondary_maturity_tags": s.secondary_maturity_tags,
                     "date_of_entry": s.date_of_entry.isoformat()
                     if s.date_of_entry
                     else "",
@@ -1364,6 +1717,51 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             change_message=message,
         )
 
+    # ── Deletion — audit trail + confirmation warning ─────────────────────────
+
+    def _write_deletion_audit(self, request, obj):
+        """Snapshot the submission and its changelog before cascade-deletion."""
+        changelog_entries = list(
+            obj.change_log.values("changed_by", "changed_at", "changes")
+        )
+        # Convert datetime objects to ISO strings for JSON serialisation.
+        for entry in changelog_entries:
+            if hasattr(entry.get("changed_at"), "isoformat"):
+                entry["changed_at"] = entry["changed_at"].isoformat()
+        SubmissionDeletionAudit.objects.create(
+            submission_id=obj.pk,
+            service_name=obj.service_name,
+            status=obj.status,
+            submitter_first_name=obj.submitter_first_name,
+            submitter_last_name=obj.submitter_last_name,
+            submitter_affiliation=obj.submitter_affiliation,
+            public_contact_email=obj.public_contact_email,
+            deleted_by=f"admin:{request.user.username}",
+            changelog_count=len(changelog_entries),
+            changelog_snapshot=changelog_entries,
+        )
+
+    def delete_model(self, request, obj):
+        self._write_deletion_audit(request, obj)
+        super().delete_model(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        for obj in queryset.prefetch_related("change_log"):
+            self._write_deletion_audit(request, obj)
+        super().delete_queryset(request, queryset)
+
+    def delete_view(self, request, object_id, extra_context=None):
+        from django.urls import reverse
+
+        obj = self.get_object(request, object_id)
+        extra = extra_context or {}
+        if obj is not None:
+            extra["changelog_count"] = obj.change_log.count()
+            extra["deprecated_url"] = reverse(
+                "admin:submissions_servicesubmission_change", args=[obj.pk]
+            )
+        return super().delete_view(request, object_id, extra_context=extra)
+
 
 @admin.register(SubmissionAPIKey)
 class SubmissionAPIKeyAdmin(admin.ModelAdmin):
@@ -1423,6 +1821,60 @@ class SubmissionAPIKeyAdmin(admin.ModelAdmin):
     save_on_top = True
     list_select_related = ("submission",)
 
+    def get_fieldsets(self, request, obj=None):
+        if obj is None:
+            # Simplified fieldset for the Add form — sibling_key_panel requires
+            # an existing pk and is meaningless before the key is created.
+            return [
+                (
+                    "New API Key",
+                    {
+                        "description": (
+                            "The plaintext key will be displayed once after saving. "
+                            "Copy it immediately — it cannot be retrieved later."
+                        ),
+                        "fields": ("submission", "label", "scope", "created_by"),
+                    },
+                ),
+            ]
+        return super().get_fieldsets(request, obj)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            # The standard save path leaves key_hash="" (the field is non-editable
+            # so the form never sets it), which violates the unique constraint on
+            # the second key created.  Route through create_for_submission() so the
+            # plaintext is generated and only its SHA-256 hash is persisted.
+            key_obj, plaintext = SubmissionAPIKey.create_for_submission(
+                submission=obj.submission,
+                label=obj.label,
+                created_by=obj.created_by or request.user.username,
+                scope=obj.scope,
+            )
+            # Sync the in-memory instance so Django's post-save steps
+            # (LogEntry creation, response_add redirect) see the real object.
+            obj.pk = key_obj.pk
+            obj.key_hash = key_obj.key_hash
+            obj.created_at = key_obj.created_at
+            # Stash the plaintext so response_add can surface it to the admin.
+            request._new_api_key_plaintext = plaintext
+        else:
+            super().save_model(request, obj, form, change)
+
+    def response_add(self, request, obj, post_url_continue=None):
+        plaintext = getattr(request, "_new_api_key_plaintext", None)
+        if plaintext:
+            self.message_user(
+                request,
+                format_html(
+                    "API key created. <strong>Copy this key now — it will not be shown again:</strong>"
+                    "<br><code style='font-size:1.1em;user-select:all'>{}</code>",
+                    plaintext,
+                ),
+                messages.WARNING,
+            )
+        return super().response_add(request, obj, post_url_continue)
+
     # ── List helpers ─────────────────────────────────────────────────────────
 
     @admin.display(description="Submission", ordering="submission__service_name")
@@ -1433,7 +1885,7 @@ class SubmissionAPIKeyAdmin(admin.ModelAdmin):
             "admin:submissions_servicesubmission_change", args=[obj.submission_id]
         )
         return format_html(
-            '<a href="{}">{}</a>',
+            '<a href="{}" title="Open this submission">{}</a>',
             url,
             obj.submission,
         )
@@ -1697,9 +2149,10 @@ class SubmissionChangeLogAdmin(admin.ModelAdmin):
     list_display = (
         "submission_link",
         "changed_by",
-        "changed_at",
+        "changed_at_link",
         "field_count",
     )
+    list_display_links = None
     list_filter = ("changed_by", ("changed_at", admin.DateFieldListFilter))
     search_fields = ("submission__service_name", "changed_by")
     ordering = ("-changed_at",)
@@ -1738,7 +2191,12 @@ class SubmissionChangeLogAdmin(admin.ModelAdmin):
         return False
 
     def has_delete_permission(self, request, obj=None):
-        return False
+        # Defer to Django's standard model-permission check so that cascade
+        # deletions (when a parent submission is deleted) are not blocked for
+        # superusers.  Regular role groups (Viewer/Editor/Manager) do not hold
+        # delete_submissionchangelog, so individual entry deletion remains
+        # blocked for them.
+        return super().has_delete_permission(request, obj)
 
     def has_view_permission(self, request, obj=None):
         return request.user.has_perm("submissions.view_submissionchangelog")
@@ -1749,10 +2207,25 @@ class SubmissionChangeLogAdmin(admin.ModelAdmin):
     def submission_link(self, obj):
         from django.urls import reverse
 
-        url = reverse(
-            "admin:submissions_servicesubmission_change", args=[obj.submission_id]
+        url = reverse("admin:submissions_submissionchangelog_changelist")
+        return format_html(
+            '<a href="{}?submission__id={}" title="View all change log entries for this submission">{}</a>',
+            url,
+            obj.submission_id,
+            obj.submission,
         )
-        return format_html('<a href="{}">{}</a>', url, obj.submission)
+
+    @admin.display(description="Changed at", ordering="-changed_at")
+    def changed_at_link(self, obj):
+        from django.urls import reverse
+        from django.utils.formats import localize
+
+        url = reverse("admin:submissions_submissionchangelog_change", args=[obj.pk])
+        return format_html(
+            '<a href="{}" title="View diff for this change">{}</a>',
+            url,
+            localize(obj.changed_at),
+        )
 
     @admin.display(description="Fields changed", ordering=None)
     def field_count(self, obj):
@@ -1766,20 +2239,22 @@ class SubmissionChangeLogAdmin(admin.ModelAdmin):
         """Render the JSON diff as a readable HTML table."""
         if not obj.changes:
             return "—"
-        rows = []
-        for ch in obj.changes:
-            rows.append(
-                format_html(
-                    "<tr>"
-                    "<td style='padding:4px 10px;font-weight:600'>{}</td>"
-                    "<td style='padding:4px 10px;color:#991b1b'>{}</td>"
-                    "<td style='padding:4px 10px;color:#166534'>{}</td>"
-                    "</tr>",
+        rows_html = format_html_join(
+            "",
+            "<tr>"
+            "<td style='padding:4px 10px;font-weight:600'>{}</td>"
+            "<td style='padding:4px 10px;color:#991b1b'>{}</td>"
+            "<td style='padding:4px 10px;color:#166534'>{}</td>"
+            "</tr>",
+            (
+                (
                     ch.get("label", ch.get("field", "?")),
                     ch.get("old", "—"),
                     ch.get("new", "—"),
                 )
-            )
+                for ch in obj.changes
+            ),
+        )
         header = mark_safe(
             "<tr style='background:var(--darkened-bg)'>"
             "<th style='padding:4px 10px;text-align:left'>Field</th>"
@@ -1787,7 +2262,127 @@ class SubmissionChangeLogAdmin(admin.ModelAdmin):
             "<th style='padding:4px 10px;text-align:left'>After</th>"
             "</tr>"
         )
-        return mark_safe(
-            f'<table style="border-collapse:collapse;font-size:.85rem">'
-            f"{header}{''.join(rows)}</table>"
+        return format_html(
+            '<table style="border-collapse:collapse;font-size:.85rem">{}{}</table>',
+            header,
+            rows_html,
+        )
+
+
+# ---------------------------------------------------------------------------
+# SubmissionDeletionAudit — read-only audit log for hard-deleted submissions
+# ---------------------------------------------------------------------------
+
+
+@admin.register(SubmissionDeletionAudit)
+class SubmissionDeletionAuditAdmin(admin.ModelAdmin):
+    """
+    Read-only view of the deletion audit log.  One record is written for each
+    hard-deleted ServiceSubmission, capturing the submission state and the full
+    SubmissionChangeLog at the time of deletion.
+    """
+
+    list_display = (
+        "service_name",
+        "status",
+        "deleted_by",
+        "deleted_at",
+        "changelog_count",
+    )
+    list_display_links = None
+    list_filter = ("status", "deleted_by", ("deleted_at", admin.DateFieldListFilter))
+    search_fields = ("service_name", "deleted_by", "submitter_last_name")
+    ordering = ("-deleted_at",)
+    date_hierarchy = "deleted_at"
+    list_per_page = 50
+
+    readonly_fields = (
+        "submission_id",
+        "service_name",
+        "status",
+        "submitter_first_name",
+        "submitter_last_name",
+        "submitter_affiliation",
+        "public_contact_email",
+        "deleted_by",
+        "deleted_at",
+        "changelog_count",
+        "changelog_snapshot_display",
+    )
+
+    fieldsets = (
+        (
+            "Deleted submission",
+            {
+                "fields": (
+                    "submission_id",
+                    "service_name",
+                    "status",
+                    "submitter_first_name",
+                    "submitter_last_name",
+                    "submitter_affiliation",
+                    "public_contact_email",
+                ),
+            },
+        ),
+        (
+            "Deletion metadata",
+            {
+                "fields": ("deleted_by", "deleted_at"),
+            },
+        ),
+        (
+            "Change log at time of deletion",
+            {
+                "fields": ("changelog_count", "changelog_snapshot_display"),
+            },
+        ),
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.has_perm("submissions.view_submissiondeletionaudit")
+
+    @admin.display(description="Change log snapshot")
+    def changelog_snapshot_display(self, obj):
+        if not obj.changelog_snapshot:
+            return "—"
+        rows_html = format_html_join(
+            "",
+            "<tr>"
+            "<td style='padding:4px 10px;font-weight:600'>{}</td>"
+            "<td style='padding:4px 10px;color:var(--body-quiet-color);font-size:.8rem'>{}</td>"
+            "<td style='padding:4px 10px'>{}</td>"
+            "<td style='padding:4px 10px'>{}</td>"
+            "</tr>",
+            (
+                (
+                    entry.get("changed_by", ""),
+                    entry.get("changed_at", ""),
+                    len(entry.get("changes", [])),
+                    ", ".join(c.get("field", "") for c in entry.get("changes", [])),
+                )
+                for entry in obj.changelog_snapshot
+            ),
+        )
+        header = mark_safe(
+            "<tr style='background:var(--darkened-bg)'>"
+            "<th style='padding:4px 10px;text-align:left'>Changed by</th>"
+            "<th style='padding:4px 10px;text-align:left'>Changed at</th>"
+            "<th style='padding:4px 10px;text-align:left'># Fields</th>"
+            "<th style='padding:4px 10px;text-align:left'>Fields</th>"
+            "</tr>"
+        )
+        return format_html(
+            '<table style="border-collapse:collapse;font-size:.85rem">{}{}</table>',
+            header,
+            rows_html,
         )

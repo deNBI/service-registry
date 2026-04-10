@@ -1,0 +1,34 @@
+{# Partial — no {% extends %}. Rendered to string and embedded in JSON form_html. #}
+{% load i18n %}
+
+<input type="hidden" name="action" value="action_assign_maturity_tags" />
+<input type="hidden" name="select_across" value="0" />
+{% for pk in selected_pks %}
+<input type="hidden" name="_selected_action" value="{{ pk }}" />
+{% endfor %}
+
+<fieldset class="module aligned" style="margin-bottom:1rem;">
+  <h2 style="padding:.5rem 1rem;margin:0;font-size:.75rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;">{% trans "Primary Tag" %}</h2>
+  <div style="padding:.75rem 1rem;">
+    <p style="margin:0 0 .6rem;font-size:.875rem;color:var(--body-quiet-color,#666);">{% trans "Select one stage — leave as None to clear." %}</p>
+    {% for value, label in primary_choices %}
+    <label style="display:flex;align-items:center;gap:.5rem;margin:.35rem 0;font-size:.875rem;cursor:pointer;">
+      <input type="radio" name="primary_maturity_tag" value="{{ value }}"{% if value == "" %} checked{% endif %} />
+      {{ label }}
+    </label>
+    {% endfor %}
+  </div>
+</fieldset>
+
+<fieldset class="module aligned">
+  <h2 style="padding:.5rem 1rem;margin:0;font-size:.75rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;">{% trans "Secondary Tags" %}</h2>
+  <div style="padding:.75rem 1rem;">
+    <p style="margin:0 0 .6rem;font-size:.875rem;color:var(--body-quiet-color,#666);">{% trans "Select zero or more additional tags." %}</p>
+    {% for value, label in secondary_choices %}
+    <label style="display:flex;align-items:center;gap:.5rem;margin:.35rem 0;font-size:.875rem;cursor:pointer;">
+      <input type="checkbox" name="secondary_maturity_tags" value="{{ value }}" />
+      {{ label }}
+    </label>
+    {% endfor %}
+  </div>
+</fieldset>

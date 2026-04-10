@@ -32,7 +32,7 @@ from celery import shared_task
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,10 @@ try:
     with open(_EMAIL_TEXTS_PATH, encoding="utf-8") as f:
         _EMAIL_TEXTS = yaml.safe_load(f) or {}
 except FileNotFoundError:
-    pass  # Graceful fallback — hardcoded defaults used below
+    logger.warning(
+        "Email texts file not found at %s; falling back to hardcoded defaults.",
+        _EMAIL_TEXTS_PATH,
+    )
 
 
 def _email_subject(key: str, **kwargs) -> str:
@@ -102,7 +105,8 @@ def _build_admin_url(submission_id) -> str:
             "admin:submissions_servicesubmission_change", args=[submission_id]
         )
         return f"{site_url}{path}"
-    except Exception:
+    except NoReverseMatch:
+        logger.warning("Could not build admin URL for submission %s", submission_id)
         return ""
 
 

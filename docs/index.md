@@ -140,7 +140,7 @@ A structured registration platform for de.NBI and ELIXIR-DE bioinformatics servi
 | Layer | Technology |
 |---|---|
 | Language | Python 3.12 |
-| Framework | Django 6.0 |
+| Framework | Django |
 | API | Django REST Framework + drf-spectacular |
 | Database | PostgreSQL |
 | Cache / Broker | Redis |

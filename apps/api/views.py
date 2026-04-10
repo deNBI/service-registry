@@ -28,6 +28,7 @@ from apps.registry.models import PrincipalInvestigator, ServiceCategory, Service
 from apps.submissions.diff_utils import build_diff, snapshot, snapshot_m2m
 from apps.submissions.http_utils import get_client_ip, hash_user_agent
 from apps.submissions.models import (
+    CHANGELOG_ACTOR_API_PREFIX,
     ServiceSubmission,
     SubmissionAPIKey,
     SubmissionChangeLog,
@@ -112,7 +113,12 @@ class SubmissionViewSet(
     )
 
     filter_backends = [filters.OrderingFilter]
-    ordering_fields = ["submitted_at", "updated_at", "service_name"]
+    ordering_fields = [
+        "submitted_at",
+        "updated_at",
+        "service_name",
+        "primary_maturity_tag",
+    ]
 
     # ── Auth / permission — safe to call before self.action is set ───────────
 
@@ -168,6 +174,23 @@ class SubmissionViewSet(
 
     # ── Queryset scoping ─────────────────────────────────────────────────────
 
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                name="primary_maturity_tag",
+                description="Filter by primary maturity tag (mature, emerging, legacy)",
+                required=False,
+                type=str,
+                enum=["mature", "emerging", "legacy"],
+            ),
+            OpenApiParameter(
+                name="secondary_maturity_tags",
+                description="Filter by secondary tag (unstable, etc.). Comma-separated for multiple tags.",
+                required=False,
+                type=str,
+            ),
+        ]
+    )
     def get_queryset(self):
         qs = super().get_queryset()
 
@@ -195,6 +218,21 @@ class SubmissionViewSet(
             qs = qs.filter(register_as_elixir=True)
         elif elixir in ("false", "0"):
             qs = qs.filter(register_as_elixir=False)
+
+        # Filter by primary maturity tag
+        primary_tag = params.get("primary_maturity_tag")
+        if primary_tag:
+            qs = qs.filter(primary_maturity_tag=primary_tag)
+
+        # Filter by secondary maturity tags (comma-separated; any match).
+        # icontains on the JSON text representation works on both SQLite and PostgreSQL.
+        # Surrounding the slug with quotes prevents false positives for the fixed set
+        # of admin-controlled tag values (e.g. '"unstable"' won't match '"stable"').
+        secondary_tags = params.get("secondary_maturity_tags")
+        if secondary_tags:
+            tags = [t.strip() for t in secondary_tags.split(",") if t.strip()]
+            for tag in tags:
+                qs = qs.filter(secondary_maturity_tags__icontains=f'"{tag}"')
 
         return qs
 
@@ -262,7 +300,9 @@ class SubmissionViewSet(
             "- `?service_center=<short_name>`\n"
             "- `?year_established=<year>`\n"
             "- `?register_as_elixir=true|false`\n"
-            "- `?ordering=submitted_at|updated_at|service_name` (prefix `-` for descending)"
+            "- `?primary_maturity_tag=mature|emerging|legacy`\n"
+            "- `?secondary_maturity_tags=unstable` (comma-separated)\n"
+            "- `?ordering=submitted_at|updated_at|service_name|primary_maturity_tag` (prefix `-` for descending)"
         ),
         parameters=[
             OpenApiParameter("status", str, description="Filter by status"),
@@ -276,6 +316,17 @@ class SubmissionViewSet(
                 "register_as_elixir",
                 str,
                 description="Filter by ELIXIR registration (true/false)",
+            ),
+            OpenApiParameter(
+                "primary_maturity_tag",
+                str,
+                description="Filter by primary maturity tag (mature, emerging, legacy)",
+                enum=["mature", "emerging", "legacy"],
+            ),
+            OpenApiParameter(
+                "secondary_maturity_tags",
+                str,
+                description="Filter by secondary maturity tags (comma-separated, e.g., unstable)",
             ),
         ],
         responses={200: SubmissionListSerializer(many=True)},
@@ -303,11 +354,13 @@ class SubmissionViewSet(
 
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
 
+        # Reset status to "submitted" in the same save() to avoid a window
+        # where the submission is briefly saved as "approved" with new data.
         if instance.status == "approved":
-            instance.status = "submitted"
-            instance.save(update_fields=["status"])
+            serializer.save(status="submitted")
+        else:
+            serializer.save()
 
         # Compute field-level diff and persist it on the submission.
         after_scalar = snapshot(instance)
@@ -321,7 +374,7 @@ class SubmissionViewSet(
             # Identify who made the change via the API key label (request.auth
             # is the SubmissionAPIKey instance set by SubmissionAPIKeyAuthentication).
             key_label = getattr(request.auth, "label", "api")
-            changed_by = f"api:{key_label}"
+            changed_by = f"{CHANGELOG_ACTOR_API_PREFIX}{key_label}"
             changed_at = now()
             instance.last_change_summary = {
                 "changed_by": changed_by,
@@ -377,10 +430,18 @@ class SoftDeleteMixin:
     DELETE sets ``is_active=False`` and returns 204 — the row is never removed.
     """
 
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
+    def perform_destroy(self, instance):
         instance.is_active = False
         instance.save(update_fields=["is_active"])
+        logger.info(
+            "%s deactivated (soft-delete) via API. id=%s",
+            instance.__class__.__name__,
+            instance.pk,
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -419,6 +480,18 @@ class ServiceCategoryViewSet(SoftDeleteMixin, viewsets.ModelViewSet):
             self.request.query_params,
         )
 
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        logger.info(
+            "ServiceCategory created via API. id=%s name=%r", instance.pk, instance.name
+        )
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        logger.info(
+            "ServiceCategory updated via API. id=%s name=%r", instance.pk, instance.name
+        )
+
 
 @extend_schema(tags=["Reference Data"], parameters=[_is_active_param])
 class ServiceCenterViewSet(SoftDeleteMixin, viewsets.ModelViewSet):
@@ -446,6 +519,22 @@ class ServiceCenterViewSet(SoftDeleteMixin, viewsets.ModelViewSet):
         return _active_filter(
             ServiceCenter.objects.all().order_by("full_name"),
             self.request.query_params,
+        )
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        logger.info(
+            "ServiceCenter created via API. id=%s name=%r",
+            instance.pk,
+            instance.full_name,
+        )
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        logger.info(
+            "ServiceCenter updated via API. id=%s name=%r",
+            instance.pk,
+            instance.full_name,
         )
 
 
@@ -478,6 +567,22 @@ class PrincipalInvestigatorViewSet(SoftDeleteMixin, viewsets.ModelViewSet):
         return _active_filter(
             PrincipalInvestigator.objects.all().order_by("last_name", "first_name"),
             self.request.query_params,
+        )
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        logger.info(
+            "PrincipalInvestigator created via API. id=%s name=%r",
+            instance.pk,
+            instance.display_name,
+        )
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        logger.info(
+            "PrincipalInvestigator updated via API. id=%s name=%r",
+            instance.pk,
+            instance.display_name,
         )
 
 
@@ -588,6 +693,7 @@ class BioToolsRecordViewSet(
 
     def get_object(self):
         from apps.biotools.models import BioToolsRecord
+        from django.http import Http404
 
         lookup = self.kwargs.get(self.lookup_field)
         try:
@@ -598,4 +704,4 @@ class BioToolsRecordViewSet(
                 .get(biotools_id=lookup)
             )
         except BioToolsRecord.DoesNotExist:
-            return super().get_object()
+            raise Http404

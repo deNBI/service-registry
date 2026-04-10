@@ -146,27 +146,5 @@
 {% endblock %}
 
 {% block extra_js %}
-<script src="{% static 'js/tom-select.complete.min.js' %}"></script>
-<script>
-"use strict";
-// Affiliation combobox — Tom Select with create
-// Support multiple fields (submitter_affiliation, host_institute)
-(function() {
-  document.querySelectorAll('[data-affiliation-combobox="true"]').forEach(function(el) {
-    if (typeof TomSelect === 'undefined') return;
-    new TomSelect(el, {
-      create: true,
-      maxItems: 1,
-      createOnBlur: true,
-      persist: false,
-      placeholder: el.dataset.placeholder || 'e.g. Forschungszentrum Jülich',
-      render: {
-        option_create: function(data, escape) {
-          return '<div class="create">Use "<strong>' + escape(data.input) + '</strong>"</div>';
-        }
-      }
-    });
-  });
-})();
-</script>
+{% include "submissions/partials/form_scripts.html" %}
 {% endblock %}

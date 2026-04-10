@@ -15,6 +15,7 @@ from django.test import Client
 from django.urls import reverse
 
 from apps.edam.models import EdamTerm
+from apps.submissions.models import CHANGELOG_ACTOR_ADMIN_PREFIX, SubmissionChangeLog
 from tests.factories import (
     BioToolsFunctionFactory,
     BioToolsRecordFactory,
@@ -97,6 +98,105 @@ class TestUndeprecateBulkAction:
         for sub in subs:
             sub.refresh_from_db()
             assert sub.status == "submitted"
+
+
+# ===========================================================================
+# Status transition audit logging
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestStatusTransitionAuditLog:
+    """Status transitions via bulk actions are recorded in SubmissionChangeLog
+    and last_change_summary — not only in Django's LogEntry."""
+
+    def test_deprecate_creates_changelog_entry(self, admin_client):
+        sub = ServiceSubmissionFactory(status="approved")
+        _run_action(admin_client, "action_deprecate", sub)
+        sub.refresh_from_db()
+        log = SubmissionChangeLog.objects.get(submission=sub)
+        assert log.changes[0]["field"] == "status"
+        assert log.changes[0]["old"] == "Approved"
+        assert log.changes[0]["new"] == "Deprecated"
+
+    def test_deprecate_updates_last_change_summary(self, admin_client):
+        sub = ServiceSubmissionFactory(status="approved")
+        _run_action(admin_client, "action_deprecate", sub)
+        sub.refresh_from_db()
+        assert sub.last_change_summary is not None
+        assert sub.last_change_summary["changes"][0]["field"] == "status"
+        assert sub.last_change_summary["changed_by"] == "admin:testadmin"
+
+    def test_undeprecate_creates_changelog_entry(self, admin_client):
+        sub = ServiceSubmissionFactory(status="deprecated")
+        _run_action(admin_client, "action_undeprecate", sub)
+        sub.refresh_from_db()
+        log = SubmissionChangeLog.objects.get(submission=sub)
+        assert log.changes[0]["field"] == "status"
+        assert log.changes[0]["old"] == "Deprecated"
+        assert log.changes[0]["new"] == "Submitted"
+
+    def test_approve_creates_changelog_entry(self, admin_client):
+        sub = ServiceSubmissionFactory(status="submitted")
+        _run_action(admin_client, "action_approve", sub)
+        sub.refresh_from_db()
+        log = SubmissionChangeLog.objects.get(submission=sub)
+        assert log.changes[0]["field"] == "status"
+        assert log.changes[0]["old"] == "Submitted"
+        assert log.changes[0]["new"] == "Approved"
+
+    def test_reject_creates_changelog_entry(self, admin_client):
+        sub = ServiceSubmissionFactory(status="under_review")
+        _run_action(admin_client, "action_reject", sub)
+        sub.refresh_from_db()
+        log = SubmissionChangeLog.objects.get(submission=sub)
+        assert log.changes[0]["field"] == "status"
+        assert log.changes[0]["old"] == "Under Review"
+        assert log.changes[0]["new"] == "Rejected"
+
+    def test_no_changelog_when_status_already_matches(self, admin_client):
+        sub = ServiceSubmissionFactory(status="deprecated")
+        _run_action(admin_client, "action_deprecate", sub)
+        assert SubmissionChangeLog.objects.filter(submission=sub).count() == 0
+        sub.refresh_from_db()
+        assert sub.last_change_summary is None
+
+    def test_changelog_changed_by_contains_admin_username(self, admin_client):
+        sub = ServiceSubmissionFactory(status="approved")
+        _run_action(admin_client, "action_deprecate", sub)
+        log = SubmissionChangeLog.objects.get(submission=sub)
+        assert log.changed_by == "admin:testadmin"
+
+    def test_maturity_tag_clearing_recorded_in_changelog(self, admin_client):
+        sub = ServiceSubmissionFactory(status="approved", primary_maturity_tag="mature")
+        _run_action(admin_client, "action_deprecate", sub)
+        sub.refresh_from_db()
+        log = SubmissionChangeLog.objects.get(submission=sub)
+        fields_changed = {ch["field"] for ch in log.changes}
+        assert "status" in fields_changed
+        assert "primary_maturity_tag" in fields_changed
+        tag_entry = next(
+            ch for ch in log.changes if ch["field"] == "primary_maturity_tag"
+        )
+        assert tag_entry["old"] == "Mature"
+        assert tag_entry["new"] == "—"
+
+    def test_secondary_maturity_tag_clearing_recorded_in_changelog(self, admin_client):
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=["unstable"],
+        )
+        _run_action(admin_client, "action_deprecate", sub)
+        sub.refresh_from_db()
+        log = SubmissionChangeLog.objects.get(submission=sub)
+        fields_changed = {ch["field"] for ch in log.changes}
+        assert "secondary_maturity_tags" in fields_changed
+        sec_entry = next(
+            ch for ch in log.changes if ch["field"] == "secondary_maturity_tags"
+        )
+        assert "Unstable" in sec_entry["old"]
+        assert sec_entry["new"] == "—"
 
 
 # ===========================================================================
@@ -606,6 +706,8 @@ def _edit_form_payload(sub, **overrides):
         "api_keys-MAX_NUM_FORMS": "0",
         "edam_topics": [],
         "edam_operations": [],
+        "primary_maturity_tag": sub.primary_maturity_tag or "",
+        "secondary_maturity_tags": sub.secondary_maturity_tags or [],
     }
     payload.update(overrides)
     return payload
@@ -659,6 +761,22 @@ class TestAdminDiffCapture:
         # The diff banner lists changed field labels
         assert "Service Name" in content
 
+    def test_admin_edit_maturity_tag_change_tracked_in_diff(self, admin_client):
+        """Changing primary_maturity_tag via the change form creates a ChangeLog entry and diff banner."""
+        from apps.submissions.models import SubmissionChangeLog
+
+        sub = ServiceSubmissionFactory(status="approved", primary_maturity_tag=None)
+        payload = _edit_form_payload(sub, primary_maturity_tag="emerging")
+        resp = admin_client.post(_change_url(sub), data=payload, follow=True)
+        content = resp.content.decode()
+        # Diff banner must mention the field label
+        assert "Primary Maturity Tag" in content
+        # A ChangeLog entry must have been written
+        assert SubmissionChangeLog.objects.filter(submission=sub).exists()
+        entry = SubmissionChangeLog.objects.get(submission=sub)
+        changed_fields = [ch["field"] for ch in entry.changes]
+        assert "primary_maturity_tag" in changed_fields
+
     def test_admin_edit_no_change_message_shown(self, admin_client):
         """When nothing changed, a neutral informational message is shown."""
         sub = ServiceSubmissionFactory()
@@ -694,3 +812,629 @@ class TestAdminDiffCapture:
         resp = admin_client.get(_change_url(sub))
         assert resp.status_code == 200
         assert b"No change history recorded yet" in resp.content
+
+
+# ---------------------------------------------------------------------------
+# Admin Maturity Tags Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestServiceSubmissionAdminTags:
+    """Test admin list view and bulk action for maturity tag assignment."""
+
+    def test_list_view_displays_maturity_tag_column(self, admin_client):
+        """Maturity tag column appears in admin list view."""
+        ServiceSubmissionFactory(status="approved", primary_maturity_tag="mature")
+        response = admin_client.get(_changelist_url())
+        assert response.status_code == 200
+        assert b"Maturity" in response.content
+
+    def test_list_view_filters_by_primary_tag(self, admin_client):
+        """Filter ?primary_maturity_tag=mature shows only mature-tagged submissions."""
+        sub1 = ServiceSubmissionFactory(
+            status="approved", primary_maturity_tag="mature"
+        )
+        sub2 = ServiceSubmissionFactory(
+            status="approved", primary_maturity_tag="emerging"
+        )
+        response = admin_client.get(_changelist_url() + "?primary_maturity_tag=mature")
+        assert response.status_code == 200
+        assert sub1.service_name.encode() in response.content
+        assert sub2.service_name.encode() not in response.content
+
+    def test_status_action_clears_tags_on_reject(self, admin_client):
+        """Rejecting an approved+tagged submission auto-clears maturity tags."""
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=["unstable"],
+        )
+        admin_client.post(_change_url(sub), _edit_form_payload(sub, _reject="1"))
+        sub.refresh_from_db()
+        assert sub.status == "rejected"
+        assert sub.primary_maturity_tag is None
+        assert not sub.secondary_maturity_tags
+
+    def test_status_action_clears_tags_on_deprecate(self, admin_client):
+        """Deprecating an approved+tagged submission auto-clears maturity tags."""
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="legacy",
+            secondary_maturity_tags=["unstable"],
+        )
+        admin_client.post(_change_url(sub), _edit_form_payload(sub, _deprecate="1"))
+        sub.refresh_from_db()
+        assert sub.status == "deprecated"
+        assert sub.primary_maturity_tag is None
+        assert not sub.secondary_maturity_tags
+
+    def test_status_action_warning_shown_when_approved_has_tags(self, admin_client):
+        """Change form shows the tag-clear warning when service is approved with tags."""
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="emerging",
+            secondary_maturity_tags=["unstable"],
+        )
+        resp = admin_client.get(_change_url(sub))
+        assert resp.status_code == 200
+        assert b"Unapproving will automatically clear maturity tags" in resp.content
+
+    def test_status_action_no_warning_when_no_tags(self, admin_client):
+        """Change form does not show the tag-clear warning when service has no tags."""
+        sub = ServiceSubmissionFactory(status="approved", primary_maturity_tag=None)
+        resp = admin_client.get(_change_url(sub))
+        assert resp.status_code == 200
+        assert b"Unapproving will automatically clear maturity tags" not in resp.content
+
+    def test_change_form_renders_tag_fields(self, admin_client):
+        """Change form loads without error and includes tag field markup."""
+        sub = ServiceSubmissionFactory(status="approved")
+        url = reverse("admin:submissions_servicesubmission_change", args=[sub.pk])
+        response = admin_client.get(url)
+        assert response.status_code == 200
+        assert b"primary_maturity_tag" in response.content
+        assert b"secondary_maturity_tags" in response.content
+
+    def test_csv_export_includes_maturity_tags(self, admin_client):
+        """CSV export includes Primary Maturity Tag and Secondary Maturity Tags columns."""
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="emerging",
+            secondary_maturity_tags=["unstable"],
+        )
+        resp = _run_action(admin_client, "action_export_csv", sub)
+        assert resp.status_code == 200
+        assert b"primary_maturity_tag" in resp.content
+        # Export uses get_primary_maturity_tag_display() → "Emerging" (title case)
+        assert b"Emerging" in resp.content
+
+    def test_json_export_includes_maturity_tags(self, admin_client):
+        """JSON export includes primary_maturity_tag and secondary_maturity_tags fields."""
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="legacy",
+            secondary_maturity_tags=["unstable"],
+        )
+        resp = _run_action(admin_client, "action_export_json", sub)
+        assert resp.status_code == 200
+        assert b"primary_maturity_tag" in resp.content
+        assert b"legacy" in resp.content
+
+
+# ===========================================================================
+# Admin — license field rendered as Select (YAML-driven)
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestAdminLicenseField:
+    def test_change_form_renders_license_as_select(self, admin_client):
+        """The license field must render as a <select> widget, not a text input."""
+        sub = ServiceSubmissionFactory()
+        url = reverse("admin:submissions_servicesubmission_change", args=[sub.pk])
+        resp = admin_client.get(url)
+        assert resp.status_code == 200
+        # A <select> for license must be present in the rendered HTML
+        assert b'name="license"' in resp.content
+        assert b"<select" in resp.content
+
+    def test_change_form_license_select_contains_yaml_options(self, admin_client):
+        """The license select must include slugs from form_texts.yaml."""
+        sub = ServiceSubmissionFactory()
+        url = reverse("admin:submissions_servicesubmission_change", args=[sub.pk])
+        resp = admin_client.get(url)
+        assert resp.status_code == 200
+        # Options derived from YAML must be present
+        assert b'value="mit"' in resp.content
+        assert b'value="eupl12"' in resp.content
+
+
+# ===========================================================================
+# Admin — action_assign_maturity_tags bulk action (AJAX / modal)
+# ===========================================================================
+
+
+def _ajax_post(admin_client, data):
+    """POST to the changelist with the AJAX header the modal JS sends."""
+    return admin_client.post(
+        _changelist_url(),
+        data,
+        HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+    )
+
+
+@pytest.mark.django_db
+class TestAssignMaturityTagsAction:
+    # ── first POST (open modal) ──────────────────────────────────────────────
+
+    def test_first_post_all_approved_returns_form(self, admin_client):
+        """First AJAX POST returns {status:'form', warning_count:0, form_html:...}."""
+        sub = ServiceSubmissionFactory(status="approved")
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(sub.pk)],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "form"
+        assert data["warning_count"] == 0
+        assert "primary_maturity_tag" in data["form_html"]
+
+    def test_first_post_mixed_selection_returns_warning_count(self, admin_client):
+        """First AJAX POST with mixed selection returns warning_count > 0."""
+        approved = ServiceSubmissionFactory(status="approved")
+        draft = ServiceSubmissionFactory(status="draft")
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(approved.pk), str(draft.pk)],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "form"
+        assert data["warning_count"] == 1
+
+    def test_first_post_no_approved_returns_error(self, admin_client):
+        """First AJAX POST with zero approved returns {status:'error'}."""
+        sub = ServiceSubmissionFactory(status="submitted")
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(sub.pk)],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "error"
+        assert "approved" in data["message"].lower()
+
+    # ── second POST (submit tags) ────────────────────────────────────────────
+
+    def test_second_post_assigns_tags_and_returns_success(self, admin_client):
+        """Second AJAX POST persists tags and returns {status:'success', updated:N}."""
+        sub = ServiceSubmissionFactory(status="approved", primary_maturity_tag=None)
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(sub.pk)],
+                "_assign_tags": "1",
+                "primary_maturity_tag": "emerging",
+                "secondary_maturity_tags": ["unstable"],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["updated"] == 1
+        sub.refresh_from_db()
+        assert sub.primary_maturity_tag == "emerging"
+        assert sub.secondary_maturity_tags == ["unstable"]
+
+    def test_second_post_skips_non_approved(self, admin_client):
+        """Second AJAX POST with only non-approved PKs returns error, no tags set."""
+        sub = ServiceSubmissionFactory(status="submitted")
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(sub.pk)],
+                "_assign_tags": "1",
+                "primary_maturity_tag": "mature",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "error"
+        sub.refresh_from_db()
+        assert sub.primary_maturity_tag in (None, "")
+
+    def test_second_post_mixed_only_updates_approved(self, admin_client):
+        """Second AJAX POST with mixed PKs only tags the approved one."""
+        approved = ServiceSubmissionFactory(status="approved")
+        draft = ServiceSubmissionFactory(status="draft")
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(approved.pk), str(draft.pk)],
+                "_assign_tags": "1",
+                "primary_maturity_tag": "mature",
+            },
+        )
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["updated"] == 1
+        approved.refresh_from_db()
+        draft.refresh_from_db()
+        assert approved.primary_maturity_tag == "mature"
+        assert draft.primary_maturity_tag in (None, "")
+
+    def test_second_post_stale_selection_excludes_newly_non_approved(
+        self, admin_client
+    ):
+        """If a submission becomes non-approved between first and second POST, it is
+        excluded and updated count reflects only what was actually written."""
+        sub1 = ServiceSubmissionFactory(status="approved")
+        sub2 = ServiceSubmissionFactory(status="approved")
+        # Simulate status change between modal open and submit
+        sub2.status = "rejected"
+        sub2.primary_maturity_tag = None
+        sub2.save(update_fields=["status", "primary_maturity_tag"])
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(sub1.pk), str(sub2.pk)],
+                "_assign_tags": "1",
+                "primary_maturity_tag": "emerging",
+            },
+        )
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["updated"] == 1  # only sub1 was still approved
+        sub1.refresh_from_db()
+        sub2.refresh_from_db()
+        assert sub1.primary_maturity_tag == "emerging"
+        assert sub2.primary_maturity_tag in (None, "")
+
+    def test_second_post_invalid_primary_tag_returns_error(self, admin_client):
+        """Invalid primary tag returns {status:'error'}, no DB write."""
+        sub = ServiceSubmissionFactory(status="approved")
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(sub.pk)],
+                "_assign_tags": "1",
+                "primary_maturity_tag": "not_a_real_tag",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "error"
+        sub.refresh_from_db()
+        assert sub.primary_maturity_tag in (None, "")
+
+    def test_second_post_invalid_secondary_tag_returns_error(self, admin_client):
+        """Invalid secondary tag returns {status:'error'}, no DB write."""
+        sub = ServiceSubmissionFactory(status="approved")
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(sub.pk)],
+                "_assign_tags": "1",
+                "primary_maturity_tag": "emerging",
+                "secondary_maturity_tags": ["not_valid"],
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "error"
+        sub.refresh_from_db()
+        assert sub.primary_maturity_tag in (None, "")
+
+    # ── CSRF edge case ───────────────────────────────────────────────────────
+
+    def test_missing_csrf_token_returns_403(self, db):
+        """AJAX POST without CSRF token is rejected with 403."""
+        User = get_user_model()
+        user = User.objects.create_superuser(
+            username="csrftest", password="csrfpass123", email="csrf@example.com"
+        )
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(user)
+        sub = ServiceSubmissionFactory(status="approved")
+        resp = csrf_client.post(
+            _changelist_url(),
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(sub.pk)],
+            },
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        assert resp.status_code == 403
+
+
+# ===========================================================================
+# Admin — SubmissionChangeLog written on admin save
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestAdminSaveWritesChangeLog:
+    def test_admin_change_creates_changelog_entry(self, admin_client):
+        """
+        Saving a submission via the admin (save_model + save_related) must create
+        a SubmissionChangeLog entry when at least one field changed.
+        """
+        from django.test import RequestFactory
+        from django.contrib.auth import get_user_model
+        from apps.submissions.admin import ServiceSubmissionAdmin
+        from apps.submissions.models import SubmissionChangeLog
+        from django.contrib.admin.sites import AdminSite
+
+        sub = ServiceSubmissionFactory(comments="before")
+
+        # Build a minimal mock form and call the admin save methods directly.
+        User = get_user_model()
+        user = User.objects.get(username="testadmin")
+
+        factory = RequestFactory()
+        request = factory.post("/")
+        request.user = user
+
+        admin_instance = ServiceSubmissionAdmin(sub.__class__, AdminSite())
+
+        # Simulate save_model: snapshot before, then apply change.
+        admin_instance.save_model(request, sub, form=None, change=True)
+
+        # Now change the field and call save_related with a mock form.
+        sub.comments = "after"
+        sub.save(update_fields=["comments"])
+
+        class MockForm:
+            instance = sub
+
+            def save_m2m(self):
+                pass  # No M2M changes in this test
+
+        admin_instance.save_related(request, MockForm(), [], change=True)
+
+        # A changelog entry must have been created for this submission.
+        assert SubmissionChangeLog.objects.filter(submission=sub).exists()
+        entry = SubmissionChangeLog.objects.filter(submission=sub).latest("changed_at")
+        field_names = [ch["field"] for ch in entry.changes]
+        assert "comments" in field_names
+
+
+# ===========================================================================
+# Admin — SubmissionChangeLog navigation (submission_link + row drill-down)
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestChangeLogAdminNavigation:
+    """
+    Verify that the Change Log admin list provides correct navigation:
+      - submission_link points to the changelog list filtered for that submission
+      - the "Changed at" column links to the individual entry's read-only detail view
+      - the filtered list only returns entries for the requested submission
+    """
+
+    def _create_entry(self, sub=None):
+        from apps.submissions.models import SubmissionChangeLog
+        from django.utils import timezone
+
+        if sub is None:
+            sub = ServiceSubmissionFactory()
+        return SubmissionChangeLog.objects.create(
+            submission=sub,
+            changed_by=f"{CHANGELOG_ACTOR_ADMIN_PREFIX}testadmin",
+            changed_at=timezone.now(),
+            changes=[{"field": "comments", "before": "a", "after": "b"}],
+        )
+
+    def test_submission_link_points_to_filtered_changelist(self, admin_client):
+        """submission_link URL must be the changelog changelist filtered by submission id."""
+        from apps.submissions.admin import SubmissionChangeLogAdmin
+        from django.contrib.admin.sites import AdminSite
+        from apps.submissions.models import SubmissionChangeLog
+
+        entry = self._create_entry()
+        admin_instance = SubmissionChangeLogAdmin(SubmissionChangeLog, AdminSite())
+
+        link_html = admin_instance.submission_link(entry)
+        expected_base = reverse("admin:submissions_submissionchangelog_changelist")
+        assert expected_base in str(link_html)
+        assert f"submission__id={entry.submission_id}" in str(link_html)
+
+    def test_filtered_changelist_returns_only_matching_entries(self, admin_client):
+        """Filtering the changelog list by submission__id shows only that submission's entries."""
+
+        sub_a = ServiceSubmissionFactory()
+        sub_b = ServiceSubmissionFactory()
+        self._create_entry(sub_a)
+        self._create_entry(sub_b)
+
+        url = reverse("admin:submissions_submissionchangelog_changelist")
+        resp = admin_client.get(url, {"submission__id": str(sub_a.pk)})
+
+        assert resp.status_code == 200
+        content = resp.content.decode()
+        assert sub_a.service_name in content
+        assert sub_b.service_name not in content
+
+    def test_changelog_detail_view_accessible_readonly(self, admin_client):
+        """Clicking a changelog entry (via changed_at link) opens the read-only detail view."""
+        entry = self._create_entry()
+        url = reverse("admin:submissions_submissionchangelog_change", args=[entry.pk])
+        resp = admin_client.get(url)
+        assert resp.status_code == 200
+        content = resp.content.decode()
+        assert entry.changed_by in content
+
+    def test_list_display_links_is_none(self, admin_client):
+        """list_display_links must be None — both links are rendered as explicit anchors."""
+        from apps.submissions.admin import SubmissionChangeLogAdmin
+        from apps.submissions.models import SubmissionChangeLog
+        from django.contrib.admin.sites import AdminSite
+
+        admin_instance = SubmissionChangeLogAdmin(SubmissionChangeLog, AdminSite())
+        assert admin_instance.list_display_links is None
+
+    def test_changed_at_link_points_to_entry_detail(self, admin_client):
+        """changed_at_link must link to the individual changelog entry's detail view with tooltip."""
+        from apps.submissions.admin import SubmissionChangeLogAdmin
+        from apps.submissions.models import SubmissionChangeLog
+        from django.contrib.admin.sites import AdminSite
+
+        entry = self._create_entry()
+        admin_instance = SubmissionChangeLogAdmin(SubmissionChangeLog, AdminSite())
+
+        link_html = str(admin_instance.changed_at_link(entry))
+        expected_url = reverse(
+            "admin:submissions_submissionchangelog_change", args=[entry.pk]
+        )
+        assert expected_url in link_html
+        assert "View diff for this change" in link_html
+
+
+# ===========================================================================
+# Admin — SubmissionDeletionAudit written on hard delete
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestSubmissionDeletionAudit:
+    """
+    Verify that deleting a ServiceSubmission via the admin:
+      - writes a SubmissionDeletionAudit record capturing key fields and changelog
+      - the delete confirmation view includes the changelog count warning
+      - the audit record persists after the submission is gone
+    """
+
+    def _make_changelog_entry(self, sub):
+        from apps.submissions.models import SubmissionChangeLog
+        from django.utils import timezone
+
+        return SubmissionChangeLog.objects.create(
+            submission=sub,
+            changed_by="admin:testadmin",
+            changed_at=timezone.now(),
+            changes=[{"field": "comments", "before": "a", "after": "b"}],
+        )
+
+    def test_delete_model_writes_audit_record(self, admin_client):
+        """Deleting a submission via the admin writes a SubmissionDeletionAudit."""
+        from apps.submissions.models import SubmissionDeletionAudit
+
+        sub = ServiceSubmissionFactory()
+        self._make_changelog_entry(sub)
+        sub_id = sub.pk
+        sub_name = sub.service_name
+
+        url = reverse("admin:submissions_servicesubmission_delete", args=[sub.pk])
+        resp = admin_client.post(url, {"post": "yes"}, follow=True)
+        assert resp.status_code == 200
+
+        audit = SubmissionDeletionAudit.objects.get(submission_id=sub_id)
+        assert audit.service_name == sub_name
+        assert audit.changelog_count == 1
+        assert len(audit.changelog_snapshot) == 1
+        assert audit.deleted_by == "admin:testadmin"
+
+    def test_audit_persists_after_submission_deleted(self, admin_client):
+        """The audit record must survive after the submission cascade-deletes."""
+        from apps.submissions.models import SubmissionDeletionAudit
+        from apps.submissions.models import ServiceSubmission
+
+        sub = ServiceSubmissionFactory()
+        sub_id = sub.pk
+
+        url = reverse("admin:submissions_servicesubmission_delete", args=[sub.pk])
+        admin_client.post(url, {"post": "yes"})
+
+        assert not ServiceSubmission.objects.filter(pk=sub_id).exists()
+        assert SubmissionDeletionAudit.objects.filter(submission_id=sub_id).exists()
+
+    def test_delete_confirmation_shows_changelog_warning(self, admin_client):
+        """The delete confirmation page shows a warning when changelog entries exist."""
+        sub = ServiceSubmissionFactory()
+        self._make_changelog_entry(sub)
+
+        url = reverse("admin:submissions_servicesubmission_delete", args=[sub.pk])
+        resp = admin_client.get(url)
+        assert resp.status_code == 200
+        content = resp.content.decode()
+        assert "change log" in content.lower()
+        assert "Deprecated" in content
+
+    def test_delete_confirmation_no_warning_without_changelog(self, admin_client):
+        """No warning is shown when there are no changelog entries."""
+        sub = ServiceSubmissionFactory()
+
+        url = reverse("admin:submissions_servicesubmission_delete", args=[sub.pk])
+        resp = admin_client.get(url)
+        content = resp.content.decode()
+        assert "Permanent data loss" not in content
+
+
+# ===========================================================================
+# SubmissionDeletionAuditAdmin
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestDeletionAuditAdmin:
+    def _make_audit(self):
+        from apps.submissions.models import SubmissionDeletionAudit
+
+        return SubmissionDeletionAudit.objects.create(
+            submission_id="00000000-0000-0000-0000-000000000001",
+            service_name="Ghost Service",
+            status="approved",
+            deleted_by="admin:testadmin",
+            changelog_count=2,
+            changelog_snapshot=[
+                {
+                    "changed_by": "admin:testadmin",
+                    "changed_at": "2026-01-01T00:00:00",
+                    "changes": [],
+                }
+            ],
+        )
+
+    def test_deletion_audit_list_accessible(self, admin_client):
+        self._make_audit()
+        url = reverse("admin:submissions_submissiondeletionaudit_changelist")
+        resp = admin_client.get(url)
+        assert resp.status_code == 200
+        assert "Ghost Service" in resp.content.decode()
+
+    def test_deletion_audit_detail_accessible(self, admin_client):
+        audit = self._make_audit()
+        url = reverse(
+            "admin:submissions_submissiondeletionaudit_change", args=[audit.pk]
+        )
+        resp = admin_client.get(url)
+        assert resp.status_code == 200
+        assert "admin:testadmin" in resp.content.decode()
+
+    def test_deletion_audit_add_blocked(self, admin_client):
+        url = reverse("admin:submissions_submissiondeletionaudit_add")
+        resp = admin_client.get(url)
+        assert resp.status_code == 403
+
+    def test_deletion_audit_delete_blocked(self, admin_client):
+        audit = self._make_audit()
+        url = reverse(
+            "admin:submissions_submissiondeletionaudit_delete", args=[audit.pk]
+        )
+        resp = admin_client.post(url, {"post": "yes"})
+        assert resp.status_code == 403

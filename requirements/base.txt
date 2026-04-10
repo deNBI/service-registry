@@ -4,7 +4,7 @@
 # Install with: pip install -r requirements/base.txt
 
 # Core framework
-Django==6.0.3
+Django==6.0.4
 psycopg[binary]==3.3.3       # PostgreSQL adapter (psycopg3)
 
 # Configuration

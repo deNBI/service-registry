@@ -434,3 +434,31 @@ class TestSubmissionChangeLogWrites:
             HTTP_AUTHORIZATION=f"ApiKey {plaintext}",
         )
         assert not SubmissionChangeLog.objects.filter(submission=sub).exists()
+
+
+# ===========================================================================
+# License field — YAML-based label lookup
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestSnapshotLicense:
+    def test_snapshot_license_uses_yaml_label(self, db):
+        """License snapshot value must be the human-readable label, not the slug."""
+        from tests.factories import ServiceSubmissionFactory
+
+        sub = ServiceSubmissionFactory(license="mit")
+        snap = snapshot(sub)
+        assert snap["license"] == "MIT License"
+
+    def test_snapshot_license_unknown_slug_returns_slug(self, db):
+        """For a slug not in the YAML (e.g. legacy data), return the raw slug."""
+        from apps.submissions.models import ServiceSubmission
+        from tests.factories import ServiceSubmissionFactory
+
+        sub = ServiceSubmissionFactory()
+        # Write an unlisted slug directly to bypass form validation
+        ServiceSubmission.objects.filter(pk=sub.pk).update(license="some_old_slug")
+        sub.refresh_from_db()
+        snap = snapshot(sub)
+        assert snap["license"] == "some_old_slug"

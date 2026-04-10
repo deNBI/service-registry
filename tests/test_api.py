@@ -173,6 +173,43 @@ class TestSubmissionCreate:
         assert "error" in data
         assert "request_id" in data
 
+    def test_create_without_internal_contact_name_returns_400(self, api_client):
+        """internal_contact_name is mandatory on POST — missing it must fail."""
+        payload = _valid_payload()
+        del payload["internal_contact_name"]
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 400
+
+    def test_create_without_internal_contact_email_returns_400(self, api_client):
+        """internal_contact_email is mandatory on POST — missing it must fail."""
+        payload = _valid_payload()
+        del payload["internal_contact_email"]
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 400
+
+    def test_create_saves_internal_contact_fields_to_db(self, api_client):
+        """Internal contact fields submitted via POST must be persisted in the DB."""
+        from apps.submissions.models import ServiceSubmission
+
+        resp = api_client.post("/api/v1/submissions/", _valid_payload(), format="json")
+        assert resp.status_code == 201
+        sub = ServiceSubmission.objects.get(pk=resp.json()["id"])
+        assert sub.internal_contact_name == "API Contact"
+        assert sub.internal_contact_email == "api-internal@example.com"
+
+    def test_create_with_maturity_tags_in_payload_ignores_them(self, api_client):
+        """Maturity tags are read-only — values in POST payload must be silently discarded."""
+        from apps.submissions.models import ServiceSubmission
+
+        payload = _valid_payload()
+        payload["primary_maturity_tag"] = "mature"
+        payload["secondary_maturity_tags"] = ["unstable"]
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 201
+        sub = ServiceSubmission.objects.get(pk=resp.json()["id"])
+        assert sub.primary_maturity_tag is None or sub.primary_maturity_tag == ""
+        assert sub.secondary_maturity_tags == []
+
 
 # ===========================================================================
 # GET /api/v1/submissions/{id}/ — ApiKey auth, full detail
@@ -283,6 +320,21 @@ class TestSubmissionRetrieve:
             functions[0]["operations"][0]["uri"]
             == "http://edamontology.org/operation_0004"
         )
+
+    def test_get_biotoolsrecord_returns_none_when_no_record(self):
+        """get_biotoolsrecord must return None (not crash) when no biotools record exists."""
+        from apps.api.serializers import SubmissionDetailSerializer
+
+        sub = ServiceSubmissionFactory()
+        s = SubmissionDetailSerializer(sub, context={"request": None})
+        assert s.data["biotoolsrecord"] is None
+
+    def test_get_links_omits_biotoolsrecord_key_when_no_record(self):
+        from apps.api.serializers import SubmissionDetailSerializer
+
+        sub = ServiceSubmissionFactory()
+        s = SubmissionDetailSerializer(sub, context={"request": None})
+        assert "biotoolsrecord" not in s.data["links"]
 
 
 # ===========================================================================
@@ -427,6 +479,78 @@ class TestSubmissionUpdate:
         resp = api_client.get(f"/api/v1/submissions/{sub.pk}/")
         assert resp.status_code == 200
         assert "last_change_summary" not in resp.data
+
+    def test_patch_can_update_internal_contact_fields(self, api_client):
+        """PATCH with internal contact fields must persist them to the DB."""
+        sub = ServiceSubmissionFactory(
+            internal_contact_name="Old Name",
+            internal_contact_email="old@example.com",
+        )
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {
+                "internal_contact_name": "New Name, New Uni",
+                "internal_contact_email": "new@example.com",
+            },
+            format="json",
+        )
+        assert resp.status_code == 200
+        sub.refresh_from_db()
+        assert sub.internal_contact_name == "New Name, New Uni"
+        assert sub.internal_contact_email == "new@example.com"
+
+    def test_patch_response_excludes_internal_contact_fields(self, api_client):
+        """Internal contact fields updated via PATCH must not appear in the response."""
+        sub = ServiceSubmissionFactory()
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"internal_contact_name": "Secret Contact"},
+            format="json",
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "internal_contact_name" not in data
+        assert "internal_contact_email" not in data
+
+    def test_patch_with_maturity_tags_ignores_them(self, api_client):
+        """Maturity tags are read-only — PATCH payload values must be silently discarded."""
+        sub = ServiceSubmissionFactory(
+            primary_maturity_tag=None, secondary_maturity_tags=[]
+        )
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"primary_maturity_tag": "mature", "secondary_maturity_tags": ["unstable"]},
+            format="json",
+        )
+        assert resp.status_code == 200
+        sub.refresh_from_db()
+        assert sub.primary_maturity_tag is None or sub.primary_maturity_tag == ""
+        assert sub.secondary_maturity_tags == []
+
+    def test_patch_approved_submission_maturity_tags_preserved(self, api_client):
+        """PATCH on approved submission with admin-set tags must not clear those tags."""
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=[],
+        )
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"comments": "Minor correction"},
+            format="json",
+        )
+        assert resp.status_code == 200
+        sub.refresh_from_db()
+        # Tags should survive a PATCH that doesn't touch them
+        assert sub.primary_maturity_tag == "mature"
 
 
 # ===========================================================================
@@ -933,14 +1057,19 @@ class TestOpenAPIEndpoints:
         resp = api_client.get("/api/schema/")
         assert b"ApiKey" in resp.content or b"apiKey" in resp.content
 
-    def test_schema_excludes_internal_fields(self, api_client):
-        """Sensitive internal fields must never appear in the public schema."""
+    def test_schema_excludes_server_only_fields(self, api_client):
+        """Server-generated fields must never appear in the public schema."""
         resp = api_client.get("/api/schema/")
         content = resp.content
         assert b"submission_ip" not in content
         assert b"user_agent_hash" not in content
-        assert b"internal_contact_email" not in content
-        assert b"internal_contact_name" not in content
+
+    def test_schema_includes_internal_contact_fields_as_write_only(self, api_client):
+        """internal_contact_name/email appear in schema as writeOnly input fields."""
+        resp = api_client.get("/api/schema/")
+        content = resp.content
+        assert b"internal_contact_email" in content
+        assert b"internal_contact_name" in content
 
 
 # ===========================================================================
@@ -1002,6 +1131,17 @@ class TestBioToolsRecordAccessControl:
     def test_retrieve_draft_denied(self, api_client):
         record = BioToolsRecordFactory(submission__status="draft")
         resp = api_client.get(f"/api/v1/biotools/{record.biotools_id}/")
+        assert resp.status_code == 404
+
+    def test_no_pk_bypass_for_non_approved_record(self, api_client):
+        """
+        The old super().get_object() fallback allowed unauthenticated access to
+        non-approved bio.tools records by UUID PK. This must return 404 now.
+        """
+        record = BioToolsRecordFactory(
+            submission__status="submitted", biotools_id="secret-tool"
+        )
+        resp = api_client.get(f"/api/v1/biotools/{record.pk}/")
         assert resp.status_code == 404
 
     def test_list_requires_admin_token(self, api_client):
@@ -1551,3 +1691,445 @@ class TestAdminAPIKeyThrottling:
 
         # Revoked key should have is_authenticated=False
         assert key.is_authenticated is False
+
+
+# ---------------------------------------------------------------------------
+# API Maturity Tags Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestSubmissionMaturityTagsAPI:
+    """Test API serialization and filtering for maturity tags."""
+
+    def test_submission_response_includes_maturity_tags(self):
+        """API response includes primary_maturity_tag and secondary_maturity_tags."""
+        from apps.submissions.models import SubmissionAPIKey
+
+        sub = ServiceSubmissionFactory(status="approved", primary_maturity_tag="mature")
+        key_obj, plaintext = SubmissionAPIKey.create_for_submission(
+            submission=sub, label="test", created_by="test"
+        )
+        client = APIClient()
+        response = client.get(
+            f"/api/v1/submissions/{sub.id}/",
+            HTTP_AUTHORIZATION=f"ApiKey {plaintext}",
+        )
+        assert response.status_code == 200
+        assert "primary_maturity_tag" in response.data
+        assert "secondary_maturity_tags" in response.data
+        assert response.data["primary_maturity_tag"] == "mature"
+
+    def test_api_patch_maturity_tags_silently_ignored(self):
+        """Maturity tags in PATCH body are silently ignored — they are admin-only."""
+        from apps.submissions.models import SubmissionAPIKey
+
+        sub = ServiceSubmissionFactory(status="approved", primary_maturity_tag=None)
+        key_obj, plaintext = SubmissionAPIKey.create_for_submission(
+            submission=sub, label="test", created_by="test"
+        )
+        client = APIClient()
+        response = client.patch(
+            f"/api/v1/submissions/{sub.id}/",
+            {"primary_maturity_tag": "emerging"},
+            HTTP_AUTHORIZATION=f"ApiKey {plaintext}",
+            content_type="application/json",
+        )
+        assert response.status_code == 200
+        sub.refresh_from_db()
+        # Tag must NOT have been written — it was silently discarded
+        assert sub.primary_maturity_tag is None or sub.primary_maturity_tag == ""
+
+    def test_api_patch_maturity_tags_ignored_on_any_status(self):
+        """Maturity tag values in PATCH are ignored regardless of submission status."""
+        from apps.submissions.models import SubmissionAPIKey
+
+        sub = ServiceSubmissionFactory(status="draft", primary_maturity_tag=None)
+        key_obj, plaintext = SubmissionAPIKey.create_for_submission(
+            submission=sub, label="test", created_by="test"
+        )
+        client = APIClient()
+        response = client.patch(
+            f"/api/v1/submissions/{sub.id}/",
+            {"primary_maturity_tag": "mature"},
+            HTTP_AUTHORIZATION=f"ApiKey {plaintext}",
+            content_type="application/json",
+        )
+        assert response.status_code == 200
+        sub.refresh_from_db()
+        assert sub.primary_maturity_tag is None or sub.primary_maturity_tag == ""
+
+    def test_api_patch_invalid_tag_value_silently_ignored(self):
+        """Invalid tag values in PATCH are silently ignored (field is read-only)."""
+        from apps.submissions.models import SubmissionAPIKey
+
+        sub = ServiceSubmissionFactory(status="approved", primary_maturity_tag=None)
+        key_obj, plaintext = SubmissionAPIKey.create_for_submission(
+            submission=sub, label="test", created_by="test"
+        )
+        client = APIClient()
+        response = client.patch(
+            f"/api/v1/submissions/{sub.id}/",
+            {"primary_maturity_tag": "invalid_tag"},
+            HTTP_AUTHORIZATION=f"ApiKey {plaintext}",
+            content_type="application/json",
+        )
+        # Read-only field → no validation → 200, value discarded
+        assert response.status_code == 200
+        sub.refresh_from_db()
+        assert sub.primary_maturity_tag is None or sub.primary_maturity_tag == ""
+
+    def test_api_patch_secondary_tags_silently_ignored(self):
+        """Secondary maturity tags in PATCH body are silently ignored."""
+        from apps.submissions.models import SubmissionAPIKey
+
+        sub = ServiceSubmissionFactory(status="approved", secondary_maturity_tags=[])
+        key_obj, plaintext = SubmissionAPIKey.create_for_submission(
+            submission=sub, label="test", created_by="test"
+        )
+        client = APIClient()
+        response = client.patch(
+            f"/api/v1/submissions/{sub.id}/",
+            {"secondary_maturity_tags": ["unstable"]},
+            HTTP_AUTHORIZATION=f"ApiKey {plaintext}",
+            content_type="application/json",
+        )
+        assert response.status_code == 200
+        sub.refresh_from_db()
+        assert sub.secondary_maturity_tags == []
+
+    def test_api_get_after_status_change_clears_tags(self):
+        """GET a submission whose secondary_maturity_tags were cleared to None in the DB
+        (simulating legacy data or a pre-fix _change_status write) must return 200,
+        not a 500 from the JSONField trying to serialize None."""
+        from apps.submissions.models import ServiceSubmission, SubmissionAPIKey
+
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=["unstable"],
+        )
+        key_obj, plaintext = SubmissionAPIKey.create_for_submission(
+            submission=sub, label="test", created_by="test"
+        )
+        # Write NULL directly — matches what _change_status wrote before the fix,
+        # and what could exist in production DBs migrated before the patch.
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            status="rejected",
+            primary_maturity_tag=None,
+            secondary_maturity_tags=None,
+        )
+        client = APIClient()
+        response = client.get(
+            f"/api/v1/submissions/{sub.id}/",
+            HTTP_AUTHORIZATION=f"ApiKey {plaintext}",
+        )
+        assert response.status_code == 200
+        assert response.data["primary_maturity_tag"] is None
+        # JSONField returns None (null) when the DB column holds NULL
+        assert response.data["secondary_maturity_tags"] is None
+
+    def test_create_with_maturity_tag_silently_ignored(self):
+        """POST with primary_maturity_tag returns 201 — the tag is silently discarded.
+        Maturity tags are admin-only; submitters cannot set them via the API."""
+        from apps.submissions.models import ServiceSubmission
+
+        client = APIClient()
+        payload = _valid_payload()
+        payload["primary_maturity_tag"] = "mature"
+        response = client.post("/api/v1/submissions/", payload, format="json")
+        assert response.status_code == 201
+        sub = ServiceSubmission.objects.get(pk=response.data["id"])
+        assert sub.primary_maturity_tag is None or sub.primary_maturity_tag == ""
+
+
+# ---------------------------------------------------------------------------
+# API Maturity Tag Filter Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestMaturityTagFiltering:
+    """Test API list filtering by primary and secondary maturity tags."""
+
+    def test_list_filter_by_primary_tag(self, staff_client):
+        """?primary_maturity_tag=mature returns only mature-tagged submissions."""
+        mature = ServiceSubmissionFactory(
+            status="approved", primary_maturity_tag="mature"
+        )
+        emerging = ServiceSubmissionFactory(
+            status="approved", primary_maturity_tag="emerging"
+        )
+        untagged = ServiceSubmissionFactory(
+            status="approved", primary_maturity_tag=None
+        )
+
+        response = staff_client.get("/api/v1/submissions/?primary_maturity_tag=mature")
+        assert response.status_code == 200
+
+        ids = [str(item["id"]) for item in response.data["results"]]
+        assert str(mature.id) in ids
+        assert str(emerging.id) not in ids
+        assert str(untagged.id) not in ids
+
+    def test_list_filter_by_secondary_tag(self, staff_client):
+        """?secondary_maturity_tags=unstable returns submissions that include that tag."""
+        unstable = ServiceSubmissionFactory(
+            status="approved", secondary_maturity_tags=["unstable"]
+        )
+        clean = ServiceSubmissionFactory(status="approved", secondary_maturity_tags=[])
+
+        response = staff_client.get(
+            "/api/v1/submissions/?secondary_maturity_tags=unstable"
+        )
+        assert response.status_code == 200
+
+        ids = [str(item["id"]) for item in response.data["results"]]
+        assert str(unstable.id) in ids
+        assert str(clean.id) not in ids
+
+    def test_list_filter_by_multiple_secondary_tags(self, staff_client):
+        """Comma-separated secondary tags use AND semantics — all listed tags must be present."""
+        unstable = ServiceSubmissionFactory(
+            status="approved", secondary_maturity_tags=["unstable"]
+        )
+        neither = ServiceSubmissionFactory(
+            status="approved", secondary_maturity_tags=[]
+        )
+
+        # Single tag: submission with "unstable" is returned; one with no tags is not.
+        r1 = staff_client.get("/api/v1/submissions/?secondary_maturity_tags=unstable")
+        assert r1.status_code == 200
+        ids1 = [str(item["id"]) for item in r1.data["results"]]
+        assert str(unstable.id) in ids1
+        assert str(neither.id) not in ids1
+
+        # Two comma-separated tags (AND): the submission only has "unstable", not a
+        # second tag, so it must NOT appear — this proves AND rather than OR semantics.
+        r2 = staff_client.get(
+            "/api/v1/submissions/?secondary_maturity_tags=unstable,secondtag"
+        )
+        assert r2.status_code == 200
+        ids2 = [str(item["id"]) for item in r2.data["results"]]
+        assert str(unstable.id) not in ids2
+
+    def test_list_unfiltered_returns_all(self, staff_client):
+        """List with no maturity params returns all submissions regardless of tag."""
+        tagged = ServiceSubmissionFactory(
+            status="approved", primary_maturity_tag="legacy"
+        )
+        untagged = ServiceSubmissionFactory(
+            status="approved", primary_maturity_tag=None
+        )
+
+        response = staff_client.get("/api/v1/submissions/")
+        assert response.status_code == 200
+
+        ids = [str(item["id"]) for item in response.data["results"]]
+        assert str(tagged.id) in ids
+        assert str(untagged.id) in ids
+
+
+# ===========================================================================
+# License field — API validation (YAML-driven)
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestApiLicenseValidation:
+    def test_create_rejects_unknown_license_slug(self, api_client):
+        """POST with an unknown license slug must return 400."""
+        payload = _valid_payload()
+        payload["license"] = "unknown_license_xyz"
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 400
+        assert "license" in resp.json().get("error", resp.json())
+
+    def test_create_accepts_new_yaml_slug(self, api_client):
+        """POST with a YAML-listed slug not in the old hardcoded list must return 201."""
+        payload = _valid_payload()
+        payload["license"] = "eupl12"
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 201
+
+    def test_patch_allows_legacy_slug_on_existing_submission(self, api_client):
+        """PATCH an existing submission with a legacy (non-YAML) slug must not be rejected."""
+        from apps.submissions.models import ServiceSubmission
+
+        sub = ServiceSubmissionFactory()
+        # Write a legacy slug directly to the DB to simulate old data
+        ServiceSubmission.objects.filter(pk=sub.pk).update(license="some_legacy_slug")
+        sub.refresh_from_db()
+
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"license": "some_legacy_slug"},
+            format="json",
+        )
+        assert resp.status_code == 200
+        sub.refresh_from_db()
+        assert sub.license == "some_legacy_slug"
+
+
+# ===========================================================================
+# PATCH — kpi_start_year partial-update validation edge cases
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestKpiStartYearValidation:
+    def test_patch_kpi_monitoring_yes_with_empty_start_year_fails(self, api_client):
+        """
+        PATCH that sends kpi_monitoring=yes with kpi_start_year="" must fail
+        even when the existing instance already has a non-empty kpi_start_year.
+        Previously the validator read the instance value as a fallback and
+        silently passed.
+        """
+        from apps.submissions.models import ServiceSubmission
+
+        sub = ServiceSubmissionFactory(kpi_monitoring="planned", kpi_start_year="")
+        # Set a non-empty year directly so the instance has data
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            kpi_monitoring="yes", kpi_start_year="2020"
+        )
+        sub.refresh_from_db()
+
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"kpi_monitoring": "yes", "kpi_start_year": ""},
+            format="json",
+        )
+        assert resp.status_code == 400
+        assert "kpi_start_year" in resp.json().get("error", resp.json())
+
+    def test_patch_kpi_monitoring_yes_with_valid_start_year_passes(self, api_client):
+        """PATCH that sends kpi_monitoring=yes with a valid year must succeed."""
+        sub = ServiceSubmissionFactory(kpi_monitoring="planned", kpi_start_year="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"kpi_monitoring": "yes", "kpi_start_year": "2022"},
+            format="json",
+        )
+        assert resp.status_code == 200
+        sub.refresh_from_db()
+        assert sub.kpi_start_year == "2022"
+
+    def test_patch_kpi_monitoring_planned_clears_start_year(self, api_client):
+        """PATCH that switches to kpi_monitoring=planned should not require kpi_start_year."""
+        from apps.submissions.models import ServiceSubmission
+
+        sub = ServiceSubmissionFactory()
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            kpi_monitoring="yes", kpi_start_year="2020"
+        )
+        sub.refresh_from_db()
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"kpi_monitoring": "planned"},
+            format="json",
+        )
+        assert resp.status_code == 200
+
+
+# ===========================================================================
+# GET /api/v1/biotools/{id}/ — access control
+# ===========================================================================
+# GET /api/v1/submissions/ — secondary_maturity_tags filter
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestSecondaryMaturityTagsFilter:
+    def test_filter_returns_matching_submission(self, staff_client):
+        """?secondary_maturity_tags=unstable must return submissions tagged unstable."""
+        ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="emerging",
+            secondary_maturity_tags=["unstable"],
+        )
+        ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="stable",
+            secondary_maturity_tags=["stable"],
+        )
+        resp = staff_client.get("/api/v1/submissions/?secondary_maturity_tags=unstable")
+        assert resp.status_code == 200
+        results = resp.json()["results"]
+        assert len(results) >= 1
+        for item in results:
+            assert "unstable" in (item.get("secondary_maturity_tags") or [])
+
+    def test_filter_no_false_positive_for_partial_slug(self, staff_client):
+        """
+        'unstable' must not match 'stable' — the quote-wrapped icontains check
+        must prevent the false positive where 'stable' contains 'unstable' as a
+        substring without the surrounding quotes.
+        """
+        ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="stable",
+            secondary_maturity_tags=["stable"],
+        )
+        resp = staff_client.get("/api/v1/submissions/?secondary_maturity_tags=unstable")
+        assert resp.status_code == 200
+        results = resp.json()["results"]
+        # None of the results should have only 'stable' as their secondary tags
+        for item in results:
+            tags = item.get("secondary_maturity_tags") or []
+            assert "unstable" in tags, (
+                f"Submission with tags {tags} incorrectly matched 'unstable' filter"
+            )
+
+    def test_filter_no_match_returns_empty(self, staff_client):
+        """Filter with a tag that no submission has must return zero results."""
+        ServiceSubmissionFactory(
+            status="approved",
+            secondary_maturity_tags=["stable"],
+        )
+        resp = staff_client.get("/api/v1/submissions/?secondary_maturity_tags=emerging")
+        assert resp.status_code == 200
+        # 'stable' submissions must not appear when filtering for 'emerging'
+        for item in resp.json()["results"]:
+            assert "emerging" in (item.get("secondary_maturity_tags") or [])
+
+
+# ===========================================================================
+# Reference data API mutation logging
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestReferenceDataLogging:
+    def test_service_category_create_is_logged(self, staff_client):
+        from unittest.mock import patch
+
+        with patch("apps.api.views.logger") as mock_logger:
+            resp = staff_client.post(
+                "/api/v1/categories/",
+                {"name": "Test Category"},
+                format="json",
+            )
+        assert resp.status_code == 201
+        calls = " ".join(str(c) for c in mock_logger.info.call_args_list)
+        assert "ServiceCategory created" in calls
+
+    def test_service_category_soft_delete_is_logged(self, staff_client):
+        from unittest.mock import patch
+
+        cat = ServiceCategoryFactory(name="ToDelete")
+        with patch("apps.api.views.logger") as mock_logger:
+            resp = staff_client.delete(f"/api/v1/categories/{cat.id}/")
+        assert resp.status_code == 204
+        # Check that info was called with args that produce the expected message
+        assert mock_logger.info.called
+        args = mock_logger.info.call_args_list[0][0]
+        assert "deactivated" in args[0]
+        assert "ServiceCategory" in str(args)

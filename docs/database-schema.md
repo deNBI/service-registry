@@ -18,13 +18,29 @@ ServiceSubmission (UUID PK)
 ├── edam_topics → EdamTerm (branch=topic)               — many-to-many
 └── edam_operations → EdamTerm (branch=operation)       — many-to-many
 
+SubmissionDeletionAudit                                 — no FK (survives cascade)
+└── stores submission_id (UUID, plain field) + changelog snapshot
+
 EdamTerm
 └── parent → EdamTerm (self-referential FK, SET_NULL)
 ```
 
 ---
 
+## Source Files
+
+| Model(s) | File |
+|---|---|
+| `ServiceSubmission`, `SubmissionChangeLog`, `SubmissionAPIKey`, `SubmissionDeletionAudit` | `apps/submissions/models.py` |
+| `ServiceCategory`, `ServiceCenter`, `PrincipalInvestigator` | `apps/registry/models.py` |
+| `EdamTerm` | `apps/edam/models.py` |
+| `BioToolsRecord`, `BioToolsFunction` | `apps/biotools/models.py` |
+
+---
+
 ## `submissions_servicesubmission`
+
+**Source:** `apps/submissions/models.py` → `ServiceSubmission` (line 166)
 
 The core domain model. One row per registered service.
 
@@ -37,7 +53,10 @@ The core domain model. One row per registered service.
 | `submitted_at` | timestamptz | NOT NULL | Set on creation (`auto_now_add`) |
 | `updated_at` | timestamptz | NOT NULL | Updated on every save (`auto_now`) |
 | `submission_ip` | inet | nullable | Source IP stored for abuse investigation only |
-| `user_agent_hash` | varchar(64) | NOT NULL, default `""` | SHA-256 of raw User-Agent; raw UA never stored |
+| `user_agent_hash` | varchar(64) | NOT NULL | SHA-256 of raw User-Agent; raw UA never stored; empty string by default |
+| `primary_maturity_tag` | varchar(20) | nullable, indexed | Primary lifecycle state: `mature`, `emerging`, `legacy`; null if untagged; only settable on approved services |
+| `secondary_maturity_tags` | jsonb | nullable, default `[]` | Array of secondary tags: `["unstable"]` or `[]`; null and empty list treated equivalently; only settable on approved services |
+| `last_change_summary` | jsonb | nullable | Most recent field-level change; written by edit views; schema: `{"changed_by": "...", "changed_at": "...", "changes": [...]}` |
 
 ### Section A — General
 
@@ -49,7 +68,7 @@ The core domain model. One row per registered service.
 | `submitter_affiliation` | varchar(300) | Institute or organisation |
 | `register_as_elixir` | boolean | `false` by default |
 
-**Computed property (not a column):** `submitter_name` — `"First Last, Affiliation"` string.
+**Computed property (not a column):** `submitter_name` — `"First Last, Affiliation"` string. (`models.py:233`)
 
 ### Section B — Service Master Data
 
@@ -62,7 +81,7 @@ The core domain model. One row per registered service.
 | `toolbox_name` | varchar(200) | Required when `is_toolbox=True` |
 | `user_knowledge_required` | text | Optional prerequisites for users |
 | `publications_pmids` | text | Comma-separated PMIDs or DOIs; max 50 entries |
-| `logo` | varchar (file path) | nullable; stored as `logos/<uuid4>.<ext>` under `MEDIA_ROOT`; original filename discarded; accepted types: PNG, JPEG, SVG; max 10 MB (configurable) |
+| `logo` | FileField | nullable; stored as `logos/<uuid4>.<ext>` under `MEDIA_ROOT`; original filename discarded; accepted types: PNG, JPEG, SVG; max 10 MB (configurable) |
 
 M2M relations (via junction tables):
 
@@ -97,7 +116,7 @@ All URL fields must use `https://`. Domain-specific validators are applied on sa
 |---|---|---|---|
 | `website_url` | varchar(2000) | HTTPS only | Required |
 | `terms_of_use_url` | varchar(2000) | HTTPS only | Required |
-| `license` | varchar(20) | choices | `agpl3`, `gpl3`, `lgpl3`, `mpl2`, `apache2`, `mit`, `boost`, `unlicense`, `other`, `na` |
+| `license` | varchar(50) | — | Valid values are YAML-driven from `apps/submissions/form_texts.yaml`. Model field has no choices constraint; validation is at form/serializer level. Legacy license slugs are allowed on existing submissions. |
 | `github_url` | varchar(2000) | `https://github.com/` prefix | Optional |
 | `biotools_url` | varchar(2000) | `https://bio.tools/` prefix | Optional; triggers bio.tools sync on save |
 | `fairsharing_url` | varchar(2000) | `https://fairsharing.org/` prefix | Optional |
@@ -123,23 +142,32 @@ All URL fields must use `https://`. Domain-specific validators are applied on sa
 
 | Column | Type | Notes |
 |---|---|---|
-| `data_protection_consent` | boolean | Mandatory; `clean()` raises error if `False` |
+| `data_protection_consent` | boolean | Mandatory at submission time; enforced by the form (web) and serializer (API). `Model.clean()` does not enforce this to allow admin edits on existing records. |
 
 ### Indexes
 
+Indexes come from two sources in the model:
+
+- `db_index=True` on a field → single-column index created by Django automatically
+- `Meta.indexes` list → explicit `models.Index(...)` entries, shown as compound below
+
 ```sql
+-- From Meta.indexes (explicit):
 CREATE INDEX ON submissions_servicesubmission (status);
 CREATE INDEX ON submissions_servicesubmission (submitted_at DESC);
 CREATE INDEX ON submissions_servicesubmission (service_center_id);
+CREATE INDEX ON submissions_servicesubmission (submitted_at DESC, status);  -- compound
+
+-- From db_index=True on the model field:
 CREATE INDEX ON submissions_servicesubmission (register_as_elixir);
 CREATE INDEX ON submissions_servicesubmission (year_established);
--- Compound: default admin list sort + status filter
-CREATE INDEX ON submissions_servicesubmission (submitted_at DESC, status);
 ```
 
 ---
 
 ## `submissions_submissionchangelog`
+
+**Source:** `apps/submissions/models.py` → `SubmissionChangeLog` (line 605)
 
 Append-only audit trail of field-level changes. One row per edit event regardless of source (submitter web form, admin backend, API PATCH).
 
@@ -162,7 +190,39 @@ For a full discussion of the audit logging system, see [Admin Guide → Audit Lo
 
 ---
 
+## `submissions_submissiondeletionaudit`
+
+**Source:** `apps/submissions/models.py` → `SubmissionDeletionAudit` (line 820)
+
+Persisted audit record written immediately before a `ServiceSubmission` is hard-deleted. Unlike `SubmissionChangeLog`, this table has **no FK to `ServiceSubmission`** — it stores the submission UUID as a plain field and is never cascade-deleted. One record is created per deletion event.
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | bigint | PK (auto-increment) | |
+| `submission_id` | UUID | NOT NULL, indexed | PK of the deleted submission — plain field, not a FK |
+| `service_name` | varchar(300) | NOT NULL | Submission name at time of deletion |
+| `status` | varchar(20) | NOT NULL | Status at time of deletion |
+| `submitter_first_name` | varchar(100) | | |
+| `submitter_last_name` | varchar(100) | | |
+| `submitter_affiliation` | varchar(300) | | |
+| `public_contact_email` | varchar(254) | | |
+| `deleted_by` | varchar(200) | NOT NULL | `"admin:<username>"` or `"system"` |
+| `deleted_at` | timestamptz | NOT NULL, auto_now_add | |
+| `changelog_count` | integer | NOT NULL, default 0 | Number of `SubmissionChangeLog` rows cascade-deleted |
+| `changelog_snapshot` | jsonb | NOT NULL, default `[]` | Full snapshot of all changelog entries: `[{changed_by, changed_at, changes}, …]` |
+
+**Design notes:**
+
+- Written by `ServiceSubmissionAdmin.delete_model` / `delete_queryset` before `super()` is called.
+- The `changelog_snapshot` preserves the complete field-level edit history that would otherwise be lost to cascade deletion.
+- Records are append-only and cannot be added, edited, or deleted through the admin UI (requires `view_submissiondeletionaudit` permission to view).
+- The admin delete confirmation page shows a warning with the changelog count and suggests marking the submission as **Deprecated** instead when changelog entries exist.
+
+---
+
 ## `submissions_submissionapikey`
+
+**Source:** `apps/submissions/models.py` → `SubmissionAPIKey` (line 670)
 
 API keys for programmatic access. One or more per submission. Plaintext is never stored.
 
@@ -178,7 +238,7 @@ API keys for programmatic access. One or more per submission. Plaintext is never
 | `is_active` | boolean | default `true` | Set `false` to revoke; never deleted |
 | `last_used_at` | timestamptz | nullable | Updated on every successful auth |
 
-**Security design:**
+**Security design** (`SubmissionAPIKey.create_for_submission` (line 750) · `SubmissionAPIKey.verify` (line 778)):
 
 - `key_hash` is `SHA-256(plaintext)`. Plaintext is generated in memory, shown once, and discarded.
 - Lookups use `hmac.compare_digest` for constant-time comparison.
@@ -188,6 +248,8 @@ API keys for programmatic access. One or more per submission. Plaintext is never
 ---
 
 ## `registry_servicecategory`
+
+**Source:** `apps/registry/models.py` → `ServiceCategory` (line 28)
 
 Lookup table for service types. Managed via admin.
 
@@ -200,6 +262,8 @@ Lookup table for service types. Managed via admin.
 ---
 
 ## `registry_servicecenter`
+
+**Source:** `apps/registry/models.py` → `ServiceCenter` (line 63)
 
 de.NBI service centres. Used as an FK on submissions.
 
@@ -215,6 +279,8 @@ de.NBI service centres. Used as an FK on submissions.
 
 ## `registry_principalinvestigator`
 
+**Source:** `apps/registry/models.py` → `PrincipalInvestigator` (line 127)
+
 Named PIs who can be selected as responsible for a service.
 
 | Column | Type | Notes |
@@ -228,11 +294,13 @@ Named PIs who can be selected as responsible for a service.
 | `is_active` | boolean | `false` hides from form |
 | `is_associated_partner` | boolean | Marks the generic "Associated partner" dropdown entry |
 
-**ORCID validation:** Format `0000-0000-0000-000X` plus ISO 7064 MOD 11-2 checksum verification — the last character may be `X` (value 10). The check digit is computed as `(12 − (total mod 11)) mod 11`; ORCIDs whose check digit is `1` (i.e. where the running total mod 11 equals 0) require the outer `mod 11` to be applied correctly.
+**ORCID validation** (`apps/registry/models.py` → `_validate_orcid` (line 105)): Format `0000-0000-0000-000X` plus ISO 7064 MOD 11-2 checksum verification — the last character may be `X` (value 10). The check digit is computed as `(12 − (total mod 11)) mod 11`; ORCIDs whose check digit is `1` (i.e. where the running total mod 11 equals 0) require the outer `mod 11` to be applied correctly.
 
 ---
 
 ## `edam_edamterm`
+
+**Source:** `apps/edam/models.py` → `EdamTerm` (line 45)
 
 Local cache of the EDAM bioscientific ontology. Seeded by `manage.py sync_edam`.
 
@@ -269,6 +337,8 @@ CREATE INDEX ON edam_edamterm (label);
 
 ## `biotools_biotoolsrecord`
 
+**Source:** `apps/biotools/models.py` → `BioToolsRecord` (line 63)
+
 Locally cached snapshot of a bio.tools entry. One-to-one with `ServiceSubmission`.
 
 | Column | Type | Notes |
@@ -296,7 +366,7 @@ Locally cached snapshot of a bio.tools entry. One-to-one with `ServiceSubmission
 | `created_at` | timestamptz | auto_now_add |
 | `updated_at` | timestamptz | auto_now |
 
-**Computed properties (not columns):**
+**Computed properties (not columns)** (`apps/biotools/models.py` lines 190–196):
 
 - `biotools_url` → `https://bio.tools/<biotools_id>`
 - `sync_ok` → `True` when `sync_error == ""` and `last_synced_at is not None`
@@ -304,6 +374,8 @@ Locally cached snapshot of a bio.tools entry. One-to-one with `ServiceSubmission
 ---
 
 ## `biotools_biotoolsfunction`
+
+**Source:** `apps/biotools/models.py` → `BioToolsFunction` (line 208)
 
 One functional annotation block from bio.tools. A tool may have several.
 
@@ -337,6 +409,8 @@ These are automatically managed by Django. They have no extra columns.
 
 ## Status Lifecycle
 
+**Source:** `apps/submissions/models.py` → `SubmissionStatus` (line 130) · status reset on approved-submission edit enforced in `apps/submissions/views.py`
+
 ```
           ┌──────────┐
           │  draft   │  ← saved by form before submission (rare)
@@ -360,6 +434,8 @@ If a submitter edits an **approved** submission, the status resets to `submitted
 ---
 
 ## Input Sanitisation
+
+**Source:** `apps/submissions/models.py` → `_sanitise_text` (line 63) · applied in `ServiceSubmission.save()` (line 575)
 
 All free-text fields are sanitised on every `save()`:
 

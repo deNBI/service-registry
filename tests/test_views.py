@@ -13,6 +13,8 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
 from django.urls import reverse
 
+from apps.submissions.models import SubmissionChangeLog
+
 from tests.factories import APIKeyFactory, ServiceSubmissionFactory
 
 
@@ -425,6 +427,49 @@ class TestEditView:
         assert resp.status_code == 302
         sub.refresh_from_db()
         assert sub.status == "deprecated"
+
+    def test_deprecate_creates_changelog_entry(self, client):
+        """Submitter deprecation records a SubmissionChangeLog entry with changed_by=submitter."""
+        sub = ServiceSubmissionFactory(status="approved")
+        self._setup_edit_session(client, sub)
+        client.post(reverse("submissions:edit"), {"_deprecate": "1"})
+        log = SubmissionChangeLog.objects.get(submission=sub)
+        assert log.changed_by == "submitter"
+        assert log.changes[0]["field"] == "status"
+        assert log.changes[0]["new"] == "Deprecated"
+
+    def test_deprecate_populates_last_change_summary(self, client):
+        """Submitter deprecation writes last_change_summary on the submission."""
+        sub = ServiceSubmissionFactory(status="approved")
+        self._setup_edit_session(client, sub)
+        client.post(reverse("submissions:edit"), {"_deprecate": "1"})
+        sub.refresh_from_db()
+        assert sub.last_change_summary is not None
+        assert sub.last_change_summary["changed_by"] == "submitter"
+        assert sub.last_change_summary["changes"][0]["field"] == "status"
+
+    def test_deprecate_idempotent_creates_no_changelog(self, client):
+        """Re-deprecating an already-deprecated service creates no new changelog entry."""
+        sub = ServiceSubmissionFactory(status="deprecated")
+        self._setup_edit_session(client, sub)
+        client.post(reverse("submissions:edit"), {"_deprecate": "1"})
+        assert SubmissionChangeLog.objects.filter(submission=sub).count() == 0
+
+    def test_deprecate_records_maturity_tag_clearing(self, client):
+        """When a tagged service is deprecated, the cleared tags appear in the changelog."""
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=["unstable"],
+        )
+        self._setup_edit_session(client, sub)
+        client.post(reverse("submissions:edit"), {"_deprecate": "1"})
+        log = SubmissionChangeLog.objects.get(submission=sub)
+        fields = [c["field"] for c in log.changes]
+        assert "primary_maturity_tag" in fields
+        assert "secondary_maturity_tags" in fields
+        tag_entry = next(c for c in log.changes if c["field"] == "primary_maturity_tag")
+        assert tag_entry["new"] == "—"
 
     def test_deprecated_badge_shown_when_deprecated(self, client):
         """GET edit page for a deprecated service shows the badge, not the danger zone."""

@@ -181,3 +181,81 @@ are defined in the parent template so each can have its own action/labels.
   <altcha-widget challengeurl="{% url 'submissions:altcha_challenge' %}"></altcha-widget>
 </div>
 {% endif %}
+
+<script>
+"use strict";
+// ---------------------------------------------------------------------------
+// Conditional fields — shared by register and edit forms.
+// Each function also runs on page load so pre-populated edit forms
+// initialise correctly, not just on change.
+// ---------------------------------------------------------------------------
+
+// Toolbox name: show when is_toolbox = True
+document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
+  radio.addEventListener('change', function() {
+    var wrapper = document.getElementById('toolbox-name-wrapper');
+    if (wrapper) wrapper.style.display = this.value === 'True' ? 'block' : 'none';
+  });
+});
+
+// Associated partner note: show when any selected PI is an associated partner
+(function() {
+  var piSelect = document.getElementById('id_responsible_pis');
+  if (!piSelect) return;
+  function updateAssociatedPartner() {
+    var hasAssociated = Array.from(piSelect.selectedOptions)
+      .some(function(o) { return o.text.toLowerCase().includes('associated partner'); });
+    var wrapper = document.getElementById('associated-partner-wrapper');
+    if (wrapper) wrapper.style.display = hasAssociated ? 'block' : 'none';
+  }
+  piSelect.addEventListener('change', updateAssociatedPartner);
+  updateAssociatedPartner();
+})();
+
+// KPI start year: hide when monitoring is "planned"
+(function() {
+  var kpiSelect = document.getElementById('id_kpi_monitoring');
+  if (!kpiSelect) return;
+  function toggleKpiYear() {
+    var wrapper = document.getElementById('kpi-start-year-wrapper');
+    if (wrapper) wrapper.style.display = kpiSelect.value === 'planned' ? 'none' : 'block';
+  }
+  kpiSelect.addEventListener('change', toggleKpiYear);
+  toggleKpiYear();
+})();
+
+// ---------------------------------------------------------------------------
+// Error highlighting — mark invalid fields, scroll to first error.
+// Shared because both register and edit forms render errors via this partial.
+// ---------------------------------------------------------------------------
+(function highlightErrors() {
+  var firstErrorEl = null;
+  document.querySelectorAll('[id^="field-errors-"]').forEach(function(errDiv) {
+    if (!errDiv.children.length) return;
+    var name = errDiv.id.replace('field-errors-', '');
+    var wrapper = document.getElementById('field-wrapper-' + name);
+    if (!wrapper) return;
+    wrapper.querySelectorAll('input, select, textarea').forEach(function(inp) {
+      inp.classList.add('is-invalid');
+    });
+    var label = wrapper.querySelector('label');
+    if (label) label.classList.add('text-danger');
+    if (!firstErrorEl) firstErrorEl = wrapper;
+    var card = wrapper.closest('.section-card');
+    if (card) card.classList.add('has-section-error');
+  });
+  document.querySelectorAll('.invalid-feedback').forEach(function(fb) {
+    var inp = fb.closest('.mb-3') && fb.closest('.mb-3').querySelector('input, select, textarea');
+    if (inp) inp.classList.add('is-invalid');
+  });
+  if (firstErrorEl) {
+    var card = firstErrorEl.closest('.section-card');
+    if (card) {
+      card.style.transition = 'outline 0.3s';
+      card.style.outline = '2px solid #dc3545';
+      setTimeout(function() { card.style.outline = ''; }, 2000);
+    }
+    setTimeout(function() { firstErrorEl.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 100);
+  }
+})();
+</script>

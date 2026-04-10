@@ -696,10 +696,12 @@ class TestChangeLogAdmin:
             req = self._make_request(user)
             assert self._admin().has_change_permission(req) is False
 
-    def test_nobody_can_delete_log_entries(self, superuser, editor_user):
-        for user in (superuser, editor_user):
-            req = self._make_request(user)
-            assert self._admin().has_delete_permission(req) is False
+    def test_role_users_cannot_delete_log_entries(self, editor_user):
+        # Regular role groups do not hold delete_submissionchangelog, so
+        # they are blocked.  Superusers can delete via super() to allow
+        # cascade-deletion workflows.
+        req = self._make_request(editor_user)
+        assert self._admin().has_delete_permission(req) is False
 
     def test_viewer_can_view_log(self, viewer_user):
         req = self._make_request(viewer_user)

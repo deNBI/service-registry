@@ -4,12 +4,18 @@ API Serializers
 DRF serializers for the public REST API.
 
 Security notes:
-  - internal_contact_email, internal_contact_name, submission_ip,
-    user_agent_hash are excluded from ALL serializer outputs.
+  - internal_contact_email and internal_contact_name are write-only:
+    submitters must provide them on POST/PATCH but they are never returned
+    in any GET response.
+  - submission_ip and user_agent_hash are excluded from ALL serializer
+    fields (neither readable nor writable via the API).
+  - primary_maturity_tag and secondary_maturity_tags are read-only:
+    visible in GET responses but only settable by admins via the backend.
   - The api_key field is write-only on creation — it is returned once
     in the POST response and never again.
 """
 
+from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
 
 from apps.biotools.models import BioToolsFunction, BioToolsRecord
@@ -158,6 +164,13 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
     )
     logo_url = serializers.SerializerMethodField()
 
+    # License field — CharField so DRF's built-in ChoiceField rejection does not
+    # fire before validate_license, which needs to allow legacy slugs on existing
+    # submissions. All slug validation is handled in validate_license below.
+    license = serializers.CharField(
+        help_text="License governing use of this service.",
+    )
+
     links = serializers.SerializerMethodField()
 
     class Meta:
@@ -190,7 +203,9 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
             "edam_topic_ids",
             "edam_operations",
             "edam_operation_ids",
-            # Section C — public fields only (internal_contact_* excluded)
+            # Section C — internal contact fields are write-only (never returned in responses)
+            "internal_contact_name",
+            "internal_contact_email",
             "responsible_pis",
             "responsible_pi_ids",
             "associated_partner_note",
@@ -221,13 +236,27 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
             "data_protection_consent",
             # bio.tools integrated record (auto-synced, read-only)
             "biotoolsrecord",
+            # Maturity tags — read-only; set by admins via the backend only
+            "primary_maturity_tag",
+            "secondary_maturity_tags",
             # Links
             "links",
         ]
-        read_only_fields = ["id", "status", "submitted_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "status",
+            "submitted_at",
+            "updated_at",
+            # Admin-only fields — submitters can read but never write these
+            "primary_maturity_tag",
+            "secondary_maturity_tags",
+        ]
         extra_kwargs = {
             # Never echo consent back in responses — it is always True for valid records
             "data_protection_consent": {"write_only": True},
+            # Internal contact fields: writable (POST/PATCH) but never returned in responses
+            "internal_contact_name": {"write_only": True},
+            "internal_contact_email": {"write_only": True},
         }
 
     def get_logo_url(self, obj) -> str | None:
@@ -264,7 +293,7 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
         """
         try:
             record = obj.biotoolsrecord
-        except Exception:
+        except ObjectDoesNotExist:
             return None
         from apps.api.serializers import BioToolsRecordSerializer
 
@@ -282,34 +311,65 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
             links["biotoolsrecord"] = (
                 f"{base}api/v1/biotools/{obj.biotoolsrecord.biotools_id}/"
             )
-        except Exception:
+        except ObjectDoesNotExist:
             pass
         return links
 
     def validate_year_established(self, value):
         """Mirror model.clean(): year must be between 1900 and the current year."""
         if value is not None:
-            from django.utils import timezone as tz
+            from django.core.exceptions import ValidationError as DjangoVE
+            from apps.submissions.validation import (
+                validate_year_established as _validate,
+            )
 
-            current_year = tz.now().year
-            if not (1900 <= value <= current_year):
-                raise serializers.ValidationError(
-                    f"Year must be between 1900 and {current_year}."
-                )
+            try:
+                _validate(value)
+            except DjangoVE as e:
+                raise serializers.ValidationError(e.message)
         return value
 
     def validate_service_description(self, value):
         """Mirror model.clean(): description must be within the allowed length range."""
         if value:
-            desc_len = len(value.strip())
-            if desc_len < DESCRIPTION_MIN_LENGTH:
-                raise serializers.ValidationError(
-                    f"Service description must be at least {DESCRIPTION_MIN_LENGTH} characters."
+            from django.core.exceptions import ValidationError as DjangoVE
+            from apps.submissions.validation import validate_description_length
+
+            try:
+                validate_description_length(
+                    value, DESCRIPTION_MIN_LENGTH, DESCRIPTION_MAX_LENGTH
                 )
-            if desc_len > DESCRIPTION_MAX_LENGTH:
-                raise serializers.ValidationError(
-                    f"Service description must not exceed {DESCRIPTION_MAX_LENGTH} characters."
-                )
+            except DjangoVE as e:
+                raise serializers.ValidationError(e.message)
+        return value
+
+    def validate_license(self, value):
+        """Validate license slug against YAML choices or allow existing legacy values.
+
+        For new submissions (no instance): only accept YAML-defined licenses.
+        For existing submissions (instance exists): also allow previously valid
+        licenses that may have been removed from YAML (preserves audit trail).
+        """
+        if not value:
+            return value
+
+        from apps.submissions.forms import _LICENSE_CHOICES
+
+        allowed_slugs = {slug for slug, _ in _LICENSE_CHOICES}
+
+        # If slug is in current YAML choices, it's always valid
+        if value in allowed_slugs:
+            return value
+
+        # For new submissions (no PK yet), reject unknown slugs
+        if self.instance is None or not self.instance.pk:
+            raise serializers.ValidationError(
+                f"'{value}' is not a valid license. "
+                "Please select a license from the list."
+            )
+
+        # For existing submissions, allow the value to pass through (legacy data)
+        # The diff system will display the raw slug if no label is defined
         return value
 
     def validate(self, data: dict) -> dict:
@@ -317,25 +377,47 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
         errors = {}
 
         # Toolbox name required when is_toolbox=True
+        from django.core.exceptions import ValidationError as DjangoVE
+        from apps.submissions.validation import (
+            validate_toolbox_name,
+            validate_kpi_start_year,
+        )
+
         is_toolbox = data.get("is_toolbox", getattr(self.instance, "is_toolbox", False))
         toolbox_name = data.get(
             "toolbox_name", getattr(self.instance, "toolbox_name", "")
         )
-        if is_toolbox and not (toolbox_name or "").strip():
-            errors["toolbox_name"] = "Toolbox name is required when is_toolbox is True."
+        try:
+            validate_toolbox_name(is_toolbox, toolbox_name or "")
+        except DjangoVE as e:
+            errors.update(
+                {
+                    k: v[0] if isinstance(v, list) else v
+                    for k, v in e.message_dict.items()
+                }
+            )
 
         # KPI start year required when monitoring is active (not "planned")
         kpi_monitoring = data.get(
             "kpi_monitoring", getattr(self.instance, "kpi_monitoring", "")
         )
-        kpi_start_year = data.get(
-            "kpi_start_year", getattr(self.instance, "kpi_start_year", "")
+        # Prefer the explicitly submitted value over the existing instance value.
+        # This ensures that PATCH with kpi_monitoring=yes, kpi_start_year=""
+        # correctly fails validation even when the instance already has a year set.
+        kpi_start_year = (
+            data["kpi_start_year"]
+            if "kpi_start_year" in data
+            else getattr(self.instance, "kpi_start_year", "")
         )
-        if kpi_monitoring and kpi_monitoring != "planned":
-            if not (kpi_start_year or "").strip():
-                errors["kpi_start_year"] = (
-                    "Please provide the year KPI monitoring started."
-                )
+        try:
+            validate_kpi_start_year(kpi_monitoring or "", kpi_start_year or "")
+        except DjangoVE as e:
+            errors.update(
+                {
+                    k: v[0] if isinstance(v, list) else v
+                    for k, v in e.message_dict.items()
+                }
+            )
 
         # data_protection_consent is mandatory on create; DRF does not call
         # model.clean() automatically, so we enforce it here.
@@ -343,6 +425,35 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
             errors["data_protection_consent"] = (
                 "You must consent to the data protection information to submit this form."
             )
+
+        # associated_partner_note required when an associated-partner PI is selected.
+        # Mirrors SubmissionForm.clean() — DRF does not run the web form's clean().
+        responsible_pi_ids = data.get("responsible_pi_ids")
+        if responsible_pi_ids is not None:
+            # responsible_pi_ids was explicitly submitted — check the resolved objects.
+            from apps.registry.models import PrincipalInvestigator
+
+            has_associated = PrincipalInvestigator.objects.filter(
+                pk__in=responsible_pi_ids, is_associated_partner=True
+            ).exists()
+        elif self.instance is not None:
+            # Partial update: responsible_pis not changed — check existing instance.
+            has_associated = self.instance.responsible_pis.filter(
+                is_associated_partner=True
+            ).exists()
+        else:
+            has_associated = False
+
+        if has_associated:
+            note = (
+                data["associated_partner_note"]
+                if "associated_partner_note" in data
+                else getattr(self.instance, "associated_partner_note", "")
+            )
+            if not (note or "").strip():
+                errors["associated_partner_note"] = (
+                    "Please provide the name and affiliation of the associated partner."
+                )
 
         if errors:
             raise serializers.ValidationError(errors)
@@ -352,13 +463,20 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
 
 class SubmissionListSerializer(SubmissionDetailSerializer):
     """
-    Full serializer for the list endpoint — returns identical fields to detail.
-    Every record includes all form fields, EDAM annotations, and the embedded
-    bio.tools record (if synced). Write-only fields (…_ids) are suppressed
-    automatically since they are declared write_only=True on the parent.
+    Serializer for the list endpoint.
+
+    Returns all submission fields but embeds a compact bio.tools summary instead
+    of the full nested record, keeping list payloads significantly smaller.
+    Write-only fields (…_ids) are suppressed automatically since they are
+    declared write_only=True on the parent.
     """
 
-    pass
+    def get_biotoolsrecord(self, obj) -> dict | None:
+        try:
+            record = obj.biotoolsrecord
+        except ObjectDoesNotExist:
+            return None
+        return BioToolsRecordSummarySerializer(record, context=self.context).data
 
 
 class SubmissionCreateSerializer(SubmissionDetailSerializer):
@@ -528,8 +646,14 @@ class BioToolsRecordSerializer(serializers.ModelSerializer):
 
 class BioToolsRecordSummarySerializer(serializers.ModelSerializer):
     """
-    Compact summary of bio.tools data for embedding inside SubmissionDetailSerializer.
-    Omits the large raw_json and full function list.
+    Compact bio.tools summary for embedding inside list responses.
+
+    Includes all lightweight scalar fields from the full BioToolsRecordSerializer.
+    Omits the heavy nested collections (functions, publications, documentation,
+    download, links, edam_topics_resolved) to keep list payloads small — these
+    are replaced by counts. Used by SubmissionListSerializer; the full
+    BioToolsRecordSerializer is used for detail responses and the standalone
+    /api/v1/biotools/{id}/ endpoint.
     """
 
     biotools_url = serializers.SerializerMethodField()
@@ -539,18 +663,26 @@ class BioToolsRecordSummarySerializer(serializers.ModelSerializer):
     class Meta:
         model = BioToolsRecord
         fields = [
+            # Identifiers
+            "id",
             "biotools_id",
             "biotools_url",
+            # Core metadata (lightweight scalars)
             "name",
             "description",
             "homepage",
             "version",
             "license",
             "maturity",
+            "cost",
             "tool_type",
+            "operating_system",
+            # EDAM — raw URIs + count (resolved objects omitted; use detail for those)
             "edam_topic_uris",
             "edam_topic_count",
+            # Function count only (full function list omitted; use detail for that)
             "function_count",
+            # Sync metadata
             "last_synced_at",
             "sync_error",
         ]
@@ -562,5 +694,4 @@ class BioToolsRecordSummarySerializer(serializers.ModelSerializer):
         return len(obj.edam_topic_uris)
 
     def get_function_count(self, obj) -> int:
-        # Use len() so a prefetched functions cache is not bypassed
         return len(obj.functions.all())
