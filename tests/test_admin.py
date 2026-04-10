@@ -843,49 +843,6 @@ class TestServiceSubmissionAdminTags:
         assert sub1.service_name.encode() in response.content
         assert sub2.service_name.encode() not in response.content
 
-    def test_bulk_action_renders_form_on_first_post(self, admin_client):
-        """First POST to action renders the tag-selection form."""
-        sub = ServiceSubmissionFactory(status="approved")
-        resp = _run_action(admin_client, "action_assign_maturity_tags", sub)
-        assert resp.status_code == 200
-        assert b"_assign_tags" in resp.content  # form submit button present
-        assert b"primary_maturity_tag" in resp.content
-
-    def test_bulk_action_assigns_tag_on_second_post(self, admin_client):
-        """Second POST (with _assign_tags) persists the selected tag."""
-        sub = ServiceSubmissionFactory(status="approved", primary_maturity_tag=None)
-        admin_client.post(
-            _changelist_url(),
-            {
-                "action": "action_assign_maturity_tags",
-                "_selected_action": [str(sub.pk)],
-                "_assign_tags": "1",
-                "primary_maturity_tag": "mature",
-            },
-        )
-        sub.refresh_from_db()
-        assert sub.primary_maturity_tag == "mature"
-
-    def test_bulk_action_filters_non_approved(self, admin_client):
-        """Non-approved submissions are skipped; approved one still gets the tag."""
-        approved = ServiceSubmissionFactory(
-            status="approved", primary_maturity_tag=None
-        )
-        draft = ServiceSubmissionFactory(status="draft")
-        admin_client.post(
-            _changelist_url(),
-            {
-                "action": "action_assign_maturity_tags",
-                "_selected_action": [str(approved.pk), str(draft.pk)],
-                "_assign_tags": "1",
-                "primary_maturity_tag": "legacy",
-            },
-        )
-        approved.refresh_from_db()
-        draft.refresh_from_db()
-        assert approved.primary_maturity_tag == "legacy"
-        assert draft.primary_maturity_tag is None  # draft must not receive tags
-
     def test_status_action_clears_tags_on_reject(self, admin_client):
         """Rejecting an approved+tagged submission auto-clears maturity tags."""
         sub = ServiceSubmissionFactory(
@@ -994,83 +951,214 @@ class TestAdminLicenseField:
 
 
 # ===========================================================================
-# Admin — action_assign_maturity_tags bulk action
+# Admin — action_assign_maturity_tags bulk action (AJAX / modal)
 # ===========================================================================
+
+
+def _ajax_post(admin_client, data):
+    """POST to the changelist with the AJAX header the modal JS sends."""
+    return admin_client.post(
+        _changelist_url(),
+        data,
+        HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+    )
 
 
 @pytest.mark.django_db
 class TestAssignMaturityTagsAction:
-    def _run_assign_action(self, admin_client, primary, secondary, *submissions):
-        ids = [str(s.pk) for s in submissions]
-        return admin_client.post(
-            _changelist_url(),
-            {
-                "action": "action_assign_maturity_tags",
-                "_selected_action": ids,
-                "_assign_tags": "1",
-                "primary_maturity_tag": primary,
-                "secondary_maturity_tags": secondary,
-            },
-        )
+    # ── first POST (open modal) ──────────────────────────────────────────────
 
-    def test_assigns_tags_to_approved_submissions(self, admin_client):
+    def test_first_post_all_approved_returns_form(self, admin_client):
+        """First AJAX POST returns {status:'form', warning_count:0, form_html:...}."""
         sub = ServiceSubmissionFactory(status="approved")
-        resp = self._run_assign_action(admin_client, "emerging", ["unstable"], sub)
-        assert resp.status_code in (200, 302)
-        sub.refresh_from_db()
-        assert sub.primary_maturity_tag == "emerging"
-        assert sub.secondary_maturity_tags == ["unstable"]
-
-    def test_skips_non_approved_submissions(self, admin_client):
-        """Tags must only be applied to approved submissions."""
-        submitted = ServiceSubmissionFactory(status="submitted")
-        resp = self._run_assign_action(admin_client, "emerging", [], submitted)
-        assert resp.status_code in (200, 302)
-        submitted.refresh_from_db()
-        # Tags must not have been applied
-        assert submitted.primary_maturity_tag in (None, "")
-        assert submitted.secondary_maturity_tags in (None, [])
-
-    def test_assigns_only_to_approved_in_mixed_selection(self, admin_client):
-        """When selection mixes approved and non-approved, only approved get tags."""
-        approved = ServiceSubmissionFactory(status="approved")
-        submitted = ServiceSubmissionFactory(status="submitted")
-        self._run_assign_action(
-            admin_client, "mature", ["unstable"], approved, submitted
-        )
-        approved.refresh_from_db()
-        submitted.refresh_from_db()
-        assert approved.primary_maturity_tag == "mature"
-        assert submitted.primary_maturity_tag in (None, "")
-
-    def test_rejects_invalid_primary_tag(self, admin_client):
-        sub = ServiceSubmissionFactory(status="approved")
-        resp = self._run_assign_action(admin_client, "not_a_real_tag", [], sub)
-        assert resp.status_code in (200, 302)
-        sub.refresh_from_db()
-        # Tags must not have been applied
-        assert sub.primary_maturity_tag in (None, "")
-
-    def test_rejects_invalid_secondary_tag(self, admin_client):
-        sub = ServiceSubmissionFactory(status="approved")
-        resp = self._run_assign_action(
-            admin_client, "emerging", ["not_valid_secondary"], sub
-        )
-        assert resp.status_code in (200, 302)
-        sub.refresh_from_db()
-        assert sub.primary_maturity_tag in (None, "")
-
-    def test_all_non_approved_shows_error(self, admin_client):
-        """Selecting only non-approved submissions must show an error message."""
-        sub = ServiceSubmissionFactory(status="submitted")
-        resp = admin_client.post(
-            _changelist_url(),
+        resp = _ajax_post(
+            admin_client,
             {
                 "action": "action_assign_maturity_tags",
                 "_selected_action": [str(sub.pk)],
             },
         )
-        assert resp.status_code in (200, 302)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "form"
+        assert data["warning_count"] == 0
+        assert "primary_maturity_tag" in data["form_html"]
+
+    def test_first_post_mixed_selection_returns_warning_count(self, admin_client):
+        """First AJAX POST with mixed selection returns warning_count > 0."""
+        approved = ServiceSubmissionFactory(status="approved")
+        draft = ServiceSubmissionFactory(status="draft")
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(approved.pk), str(draft.pk)],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "form"
+        assert data["warning_count"] == 1
+
+    def test_first_post_no_approved_returns_error(self, admin_client):
+        """First AJAX POST with zero approved returns {status:'error'}."""
+        sub = ServiceSubmissionFactory(status="submitted")
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(sub.pk)],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "error"
+        assert "approved" in data["message"].lower()
+
+    # ── second POST (submit tags) ────────────────────────────────────────────
+
+    def test_second_post_assigns_tags_and_returns_success(self, admin_client):
+        """Second AJAX POST persists tags and returns {status:'success', updated:N}."""
+        sub = ServiceSubmissionFactory(status="approved", primary_maturity_tag=None)
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(sub.pk)],
+                "_assign_tags": "1",
+                "primary_maturity_tag": "emerging",
+                "secondary_maturity_tags": ["unstable"],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["updated"] == 1
+        sub.refresh_from_db()
+        assert sub.primary_maturity_tag == "emerging"
+        assert sub.secondary_maturity_tags == ["unstable"]
+
+    def test_second_post_skips_non_approved(self, admin_client):
+        """Second AJAX POST with only non-approved PKs returns error, no tags set."""
+        sub = ServiceSubmissionFactory(status="submitted")
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(sub.pk)],
+                "_assign_tags": "1",
+                "primary_maturity_tag": "mature",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "error"
+        sub.refresh_from_db()
+        assert sub.primary_maturity_tag in (None, "")
+
+    def test_second_post_mixed_only_updates_approved(self, admin_client):
+        """Second AJAX POST with mixed PKs only tags the approved one."""
+        approved = ServiceSubmissionFactory(status="approved")
+        draft = ServiceSubmissionFactory(status="draft")
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(approved.pk), str(draft.pk)],
+                "_assign_tags": "1",
+                "primary_maturity_tag": "mature",
+            },
+        )
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["updated"] == 1
+        approved.refresh_from_db()
+        draft.refresh_from_db()
+        assert approved.primary_maturity_tag == "mature"
+        assert draft.primary_maturity_tag in (None, "")
+
+    def test_second_post_stale_selection_excludes_newly_non_approved(
+        self, admin_client
+    ):
+        """If a submission becomes non-approved between first and second POST, it is
+        excluded and updated count reflects only what was actually written."""
+        sub1 = ServiceSubmissionFactory(status="approved")
+        sub2 = ServiceSubmissionFactory(status="approved")
+        # Simulate status change between modal open and submit
+        sub2.status = "rejected"
+        sub2.primary_maturity_tag = None
+        sub2.save(update_fields=["status", "primary_maturity_tag"])
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(sub1.pk), str(sub2.pk)],
+                "_assign_tags": "1",
+                "primary_maturity_tag": "emerging",
+            },
+        )
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["updated"] == 1  # only sub1 was still approved
+        sub1.refresh_from_db()
+        sub2.refresh_from_db()
+        assert sub1.primary_maturity_tag == "emerging"
+        assert sub2.primary_maturity_tag in (None, "")
+
+    def test_second_post_invalid_primary_tag_returns_error(self, admin_client):
+        """Invalid primary tag returns {status:'error'}, no DB write."""
+        sub = ServiceSubmissionFactory(status="approved")
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(sub.pk)],
+                "_assign_tags": "1",
+                "primary_maturity_tag": "not_a_real_tag",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "error"
+        sub.refresh_from_db()
+        assert sub.primary_maturity_tag in (None, "")
+
+    def test_second_post_invalid_secondary_tag_returns_error(self, admin_client):
+        """Invalid secondary tag returns {status:'error'}, no DB write."""
+        sub = ServiceSubmissionFactory(status="approved")
+        resp = _ajax_post(
+            admin_client,
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(sub.pk)],
+                "_assign_tags": "1",
+                "primary_maturity_tag": "emerging",
+                "secondary_maturity_tags": ["not_valid"],
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "error"
+        sub.refresh_from_db()
+        assert sub.primary_maturity_tag in (None, "")
+
+    # ── CSRF edge case ───────────────────────────────────────────────────────
+
+    def test_missing_csrf_token_returns_403(self, db):
+        """AJAX POST without CSRF token is rejected with 403."""
+        User = get_user_model()
+        user = User.objects.create_superuser(
+            username="csrftest", password="csrfpass123", email="csrf@example.com"
+        )
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(user)
+        sub = ServiceSubmissionFactory(status="approved")
+        resp = csrf_client.post(
+            _changelist_url(),
+            {
+                "action": "action_assign_maturity_tags",
+                "_selected_action": [str(sub.pk)],
+            },
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        assert resp.status_code == 403
 
 
 # ===========================================================================

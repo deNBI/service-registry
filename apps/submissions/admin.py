@@ -19,7 +19,8 @@ from django.contrib import admin, messages
 from django.forms.widgets import CheckboxSelectMultiple
 from django.contrib.admin.models import CHANGE, LogEntry
 from django.db import transaction
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
+from django.template import loader
 from django.utils import timezone
 from django.utils.html import escape, format_html, format_html_join, mark_safe
 
@@ -851,27 +852,9 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         permissions=["change"],
     )
     def action_assign_maturity_tags(self, request, queryset):
-        """Bulk action to assign tags to approved submissions only."""
-        from django.shortcuts import render
-
+        """Bulk action: open a modal to assign maturity tags (AJAX only)."""
         approved_queryset = queryset.filter(status=SubmissionStatus.APPROVED)
         non_approved_count = queryset.count() - approved_queryset.count()
-
-        if non_approved_count > 0:
-            self.message_user(
-                request,
-                f"Note: {non_approved_count} selected submission(s) are not approved. "
-                "Tags can only be assigned to approved services.",
-                messages.WARNING,
-            )
-
-        if not approved_queryset.exists():
-            self.message_user(
-                request,
-                "No approved submissions selected. Tags can only be assigned to approved services.",
-                messages.ERROR,
-            )
-            return
 
         if "_assign_tags" in request.POST:
             primary = request.POST.get("primary_maturity_tag", "").strip() or None
@@ -880,18 +863,24 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             if primary:
                 valid_primary = dict(PRIMARY_MATURITY_TAG_CHOICES)
                 if primary not in valid_primary:
-                    self.message_user(
-                        request, "Invalid primary tag selection.", messages.ERROR
+                    return JsonResponse(
+                        {"status": "error", "message": "Invalid primary tag selection."}
                     )
-                    return
 
             valid_secondary = dict(SECONDARY_MATURITY_TAG_CHOICES)
             for tag in secondary:
                 if tag not in valid_secondary:
-                    self.message_user(
-                        request, f"Invalid secondary tag: {tag}.", messages.ERROR
+                    return JsonResponse(
+                        {"status": "error", "message": f"Invalid secondary tag: {tag}."}
                     )
-                    return
+
+            if not approved_queryset.exists():
+                return JsonResponse(
+                    {
+                        "status": "error",
+                        "message": "No approved submissions selected. Tags can only be assigned to approved services.",
+                    }
+                )
 
             username = getattr(request.user, "username", "admin")
             changed_by = f"admin:{username}"
@@ -909,7 +898,6 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
 
                 for sub in approved_subs:
                     changes = []
-
                     old_primary = sub.primary_maturity_tag
                     old_secondary = list(sub.secondary_maturity_tags or [])
 
@@ -971,25 +959,44 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
 
                     updated += 1
 
-            self.message_user(
-                request,
-                f"Maturity tags assigned to {updated} approved submission(s).",
-                messages.SUCCESS,
+            return JsonResponse(
+                {
+                    "status": "success",
+                    "updated": updated,
+                    "message": f"Maturity tags assigned to {updated} approved submission(s).",
+                }
             )
-            return
+
+        # First POST: validate queryset and return form fragment
+        if not approved_queryset.exists():
+            return JsonResponse(
+                {
+                    "status": "error",
+                    "message": "No approved submissions selected. Tags can only be assigned to approved services.",
+                }
+            )
 
         primary_choices = [("", "None")] + list(PRIMARY_MATURITY_TAG_CHOICES)
         secondary_choices = list(SECONDARY_MATURITY_TAG_CHOICES)
+        selected_pks = list(queryset.values_list("pk", flat=True))
 
-        context = {
-            "title": "Assign Maturity Tags",
-            "queryset": approved_queryset,
-            "primary_choices": primary_choices,
-            "secondary_choices": secondary_choices,
-            "opts": self.model._meta,
-        }
+        form_html = loader.render_to_string(
+            "admin/submissions/assign_maturity_tags_partial.html",
+            {
+                "primary_choices": primary_choices,
+                "secondary_choices": secondary_choices,
+                "selected_pks": selected_pks,
+            },
+            request=request,
+        )
 
-        return render(request, "admin/submissions/assign_maturity_tags.html", context)
+        return JsonResponse(
+            {
+                "status": "form",
+                "warning_count": non_approved_count,
+                "form_html": form_html,
+            }
+        )
 
     actions = [
         "action_approve",
