@@ -109,7 +109,7 @@ edam_operations:
 
 publications_pmids:
   help: "Publications related to this service."
-  tooltip: "List all related publications. PMIDs preferred and required for ELIXIR impact assessment. Separate multiple entries by commas."
+  tooltip: "List all related publications. PMIDs preferred and required for ELIXIR impact assessment. Separate multiple entries by commas. If your service is a consulting offering or does not yet have a valid publication for other reasons, please enter “1234567”."
 
 logo:
   help: "Optional service logo. Accepted formats: PNG, JPEG, SVG. Maximum 10 MB."
