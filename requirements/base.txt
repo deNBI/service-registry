@@ -30,7 +30,7 @@ altcha==1.0.0                 # CAPTCHA — self-hosted proof-of-work challenge 
 bleach==6.3.0
 
 # File upload processing
-Pillow==12.1.1        # JPEG/PNG re-encoding and EXIF stripping
+Pillow==12.2.0        # JPEG/PNG re-encoding and EXIF stripping
 
 # Utilities
 python-json-logger==4.0.0     # Structured JSON logging
