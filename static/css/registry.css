@@ -152,6 +152,9 @@ main.container { max-width: 1140px; }
 }
 .tooltip-icon:hover,
 .tooltip-icon:focus { color: var(--g); outline: none; }
+
+/* Left-align tooltip text */
+.tooltip-inner { text-align: left; }
 .tooltip-icon:focus-visible {
   outline: 2px solid var(--g);
   outline-offset: 2px;
