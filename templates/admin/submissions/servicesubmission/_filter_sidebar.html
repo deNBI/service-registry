@@ -1,0 +1,82 @@
+{% load i18n admin_filter_tags %}
+<search id="changelist-filter"
+        class="changelist-filter--enhanced"
+        aria-labelledby="changelist-filter-header">
+  <h2 id="changelist-filter-header">{% translate 'Filter' %}</h2>
+
+  {% if cl.is_facets_optional %}
+    <div id="changelist-filter-extra-actions">
+      <h3>
+        {% if cl.add_facets %}
+          <a href="{{ cl.remove_facet_link }}" class="hidelink">{% translate "Hide counts" %}</a>
+        {% else %}
+          <a href="{{ cl.add_facet_link }}" class="viewlink">{% translate "Show counts" %}</a>
+        {% endif %}
+      </h3>
+    </div>
+  {% endif %}
+
+  {% if has_pills %}
+    <section class="active-filters-block" aria-labelledby="active-filters-heading">
+      <h3 id="active-filters-heading">{% translate 'Active filters' %}</h3>
+      <ul class="active-filters" role="list">
+        {% for pill in pills %}
+          <li class="pill">
+            <span class="pill-label" title="{{ pill.title }}: {{ pill.label }}">
+              <span class="pill-title">{{ pill.title }}:</span>
+              <span class="pill-value">{{ pill.label }}</span>
+            </span>
+            <a class="pill-remove"
+               href="{{ pill.remove_qs }}"
+               role="button"
+               aria-label="{% pill_aria_label pill.title pill.label %}"
+               title="{% translate 'Remove filter' %}">×</a>
+          </li>
+        {% endfor %}
+      </ul>
+      <a class="pill-clear" href="{{ clear_all_qs }}">
+        {% translate 'Clear all filters' %}
+      </a>
+    </section>
+  {% endif %}
+
+  <div class="filter-sections" role="group" aria-label="{% translate 'Filters' %}">
+    {% for section in sections %}
+      <details class="filter-section"
+               data-field="{{ section.field }}"
+               {% if forloop.first or section.has_active %}open{% endif %}>
+        <summary>{{ section.title }}</summary>
+        {% if section.options|length > 1 %}
+          <label class="filter-search-label visually-hidden"
+                 for="filter-search-{{ forloop.counter }}">
+            {% blocktranslate with field=section.title %}Filter {{ field }} options{% endblocktranslate %}
+          </label>
+          <input type="search"
+                 class="filter-search"
+                 id="filter-search-{{ forloop.counter }}"
+                 placeholder="{% translate 'Filter options…' %}"
+                 aria-label="{% blocktranslate with field=section.title %}Filter {{ field }} options{% endblocktranslate %}"
+                 autocomplete="off">
+          <div class="filter-results-live" aria-live="polite" role="status"></div>
+          <ul class="filter-options" role="listbox">
+            {% for opt in section.options %}
+              <li class="filter-option{% if opt.selected %} selected{% endif %}"
+                  data-label="{{ opt.display_lower }}"
+                  role="option"
+                  {% if opt.selected %}aria-selected="true"{% endif %}>
+                <a href="{{ opt.query_string }}">{{ opt.display }}</a>
+              </li>
+            {% endfor %}
+            <li class="filter-no-match" hidden>
+              {% translate 'No matching options' %}
+            </li>
+          </ul>
+        {% else %}
+          <p class="filter-empty">{% translate 'No options' %}</p>
+        {% endif %}
+      </details>
+    {% endfor %}
+  </div>
+
+  <div id="changelist-filter-error" class="filter-error" hidden role="alert"></div>
+</search>

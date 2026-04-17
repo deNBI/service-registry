@@ -1,5 +1,16 @@
 {% extends "admin/change_list.html" %}
-{% load i18n %}
+{% load i18n static admin_filter_tags %}
+
+{% block extrahead %}
+{{ block.super }}
+<script src="{% static 'js/htmx.min.js' %}" defer></script>
+{% endblock %}
+
+{% block filters %}
+  {% if cl.has_filters %}
+    {% enhanced_filter_sidebar cl %}
+  {% endif %}
+{% endblock %}
 
 {% block extrastyle %}
 {{ block.super }}
