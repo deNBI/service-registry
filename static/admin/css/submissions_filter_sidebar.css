@@ -1,0 +1,326 @@
+/*
+ * Enhanced filter sidebar for ServiceSubmissionAdmin changelist.
+ * Scoped to `#changelist-filter.changelist-filter--enhanced` so it does not
+ * affect any other admin in the project.
+ */
+
+/* ── Visually-hidden utility (a11y) ──────────────────────────────────────── */
+#changelist-filter.changelist-filter--enhanced .visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0);
+  white-space: nowrap; border: 0;
+}
+
+/* ── Sidebar container ───────────────────────────────────────────────────── */
+#changelist-filter.changelist-filter--enhanced {
+  display: flex;
+  flex-direction: column;
+  gap: .75rem;
+  width: 260px;
+  max-width: 260px;
+  min-width: 260px;
+  overflow-x: hidden;
+}
+
+#changelist-filter.changelist-filter--enhanced h2 { margin-bottom: 0; }
+
+/* ── Active filters block ────────────────────────────────────────────────── */
+#changelist-filter.changelist-filter--enhanced .active-filters-block {
+  background: #f8fbf1;
+  border: 1px solid #c8e49e;
+  border-radius: 6px;
+  padding: .65rem .7rem .55rem;
+}
+
+#changelist-filter.changelist-filter--enhanced .active-filters-block h3 {
+  font-size: .7rem !important;
+  font-weight: 700 !important;
+  color: #2e5010 !important;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  margin: 0 0 .45rem;
+  padding: 0;
+  background: none !important;
+  border: none !important;
+}
+
+#changelist-filter.changelist-filter--enhanced .active-filters {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: .3rem;
+}
+
+#changelist-filter.changelist-filter--enhanced .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  max-width: 100%;
+  background: #fff;
+  border: 1px solid #c8e49e;
+  border-radius: 999px;
+  padding: .1rem .1rem .1rem .5rem;
+  font-size: .72rem;
+  line-height: 1.3;
+  color: #1a3a06;
+  overflow: hidden;
+}
+
+#changelist-filter.changelist-filter--enhanced .pill-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
+#changelist-filter.changelist-filter--enhanced .pill-title { font-weight: 600; }
+#changelist-filter.changelist-filter--enhanced .pill-value { color: #2e5010; }
+
+#changelist-filter.changelist-filter--enhanced .pill-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  font-size: .9rem;
+  line-height: 1;
+  color: #4a7e1c !important;
+  text-decoration: none !important;
+  background: transparent;
+  flex-shrink: 0;
+}
+#changelist-filter.changelist-filter--enhanced .pill-remove:hover,
+#changelist-filter.changelist-filter--enhanced .pill-remove:focus {
+  background: #5c9d25;
+  color: #fff !important;
+  outline: none;
+}
+
+#changelist-filter.changelist-filter--enhanced .pill-clear {
+  display: inline-block;
+  margin-top: .45rem;
+  font-size: .72rem;
+  color: #4a7e1c !important;
+  text-decoration: underline;
+}
+#changelist-filter.changelist-filter--enhanced .pill-clear:hover,
+#changelist-filter.changelist-filter--enhanced .pill-clear:focus {
+  color: #2e5010 !important;
+}
+
+/* ── Filter sections ─────────────────────────────────────────────────────── */
+#changelist-filter.changelist-filter--enhanced .filter-sections {
+  display: flex;
+  flex-direction: column;
+  gap: .45rem;
+}
+
+#changelist-filter.changelist-filter--enhanced .filter-section {
+  border: 1px solid var(--border-color, #c8e49e);
+  border-radius: 6px;
+  background: var(--body-bg, #fff);
+  overflow: hidden;
+}
+
+#changelist-filter.changelist-filter--enhanced .filter-section > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: .45rem .65rem;
+  background: #f0f7e6;
+  color: #2e5010;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid transparent;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+}
+#changelist-filter.changelist-filter--enhanced .filter-section > summary::-webkit-details-marker { display: none; }
+#changelist-filter.changelist-filter--enhanced .filter-section > summary::before {
+  content: "▸";
+  font-size: 1rem;
+  line-height: 1;
+  color: #5c9d25;
+  transition: transform .15s ease-in-out;
+  transform-origin: center;
+  display: inline-block;
+}
+#changelist-filter.changelist-filter--enhanced .filter-section[open] > summary::before {
+  transform: rotate(90deg);
+}
+#changelist-filter.changelist-filter--enhanced .filter-section[open] > summary {
+  border-bottom-color: #c8e49e;
+}
+
+#changelist-filter.changelist-filter--enhanced .filter-search {
+  display: block;
+  width: 100%;
+  padding: .3rem .5rem;
+  border: 0;
+  border-bottom: 1px solid var(--border-color, #e1e1e1);
+  font-size: .8rem;
+  box-sizing: border-box;
+  background: var(--body-bg, #fff);
+  color: var(--body-fg, #333);
+}
+#changelist-filter.changelist-filter--enhanced .filter-search:focus {
+  outline: 2px solid #5c9d25;
+  outline-offset: -2px;
+}
+
+#changelist-filter.changelist-filter--enhanced .filter-results-live {
+  position: absolute;
+  left: -10000px;
+  top: auto;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+#changelist-filter.changelist-filter--enhanced .filter-options {
+  list-style: none;
+  margin: 0;
+  padding: .25rem 0;
+  max-height: 14rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+#changelist-filter.changelist-filter--enhanced .filter-option {
+  padding: 0;
+  margin: 0;
+}
+#changelist-filter.changelist-filter--enhanced .filter-option > a {
+  display: block;
+  padding: .3rem .75rem;
+  font-size: .82rem;
+  color: var(--body-fg, #475569) !important;
+  text-decoration: none;
+  word-break: break-word;
+  white-space: normal;
+  line-height: 1.35;
+}
+#changelist-filter.changelist-filter--enhanced .filter-option > a:hover,
+#changelist-filter.changelist-filter--enhanced .filter-option > a:focus {
+  background: #f0f7e6;
+  color: #2e5010 !important;
+  outline: none;
+}
+#changelist-filter.changelist-filter--enhanced .filter-option.selected > a {
+  color: #5c9d25 !important;
+  font-weight: 600;
+  background: rgba(92, 157, 37, .08);
+}
+
+#changelist-filter.changelist-filter--enhanced .filter-no-match,
+#changelist-filter.changelist-filter--enhanced .filter-empty {
+  padding: .45rem .75rem;
+  margin: 0;
+  font-size: .78rem;
+  color: var(--body-quiet-color, #888);
+  font-style: italic;
+}
+
+/* ── Error banner ────────────────────────────────────────────────────────── */
+#changelist-filter.changelist-filter--enhanced .filter-error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  border-radius: 4px;
+  padding: .45rem .65rem;
+  font-size: .78rem;
+}
+
+/* ── HTMX in-flight hint ─────────────────────────────────────────────────── */
+.htmx-request #content-main { cursor: progress; }
+.htmx-request #changelist-filter.changelist-filter--enhanced { opacity: .7; }
+
+/* ── Reduced motion ──────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  #changelist-filter.changelist-filter--enhanced .filter-section > summary::before {
+    transition: none;
+  }
+}
+
+/* ── Dark mode — OS preference ───────────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) #changelist-filter.changelist-filter--enhanced .active-filters-block {
+    background: #162408;
+    border-color: #2e5010;
+  }
+  html:not([data-theme="light"]) #changelist-filter.changelist-filter--enhanced .active-filters-block h3 {
+    color: #9be44a !important;
+  }
+  html:not([data-theme="light"]) #changelist-filter.changelist-filter--enhanced .pill {
+    background: #1e3310;
+    border-color: #2e5010;
+    color: #d7f0b8;
+  }
+  html:not([data-theme="light"]) #changelist-filter.changelist-filter--enhanced .pill-title { color: #b8e27a; }
+  html:not([data-theme="light"]) #changelist-filter.changelist-filter--enhanced .pill-value { color: #9be44a; }
+  html:not([data-theme="light"]) #changelist-filter.changelist-filter--enhanced .pill-remove { color: #9be44a !important; }
+  html:not([data-theme="light"]) #changelist-filter.changelist-filter--enhanced .pill-clear { color: #9be44a !important; }
+  html:not([data-theme="light"]) #changelist-filter.changelist-filter--enhanced .filter-section > summary {
+    background: #162408;
+    color: #9be44a;
+    border-bottom-color: #2e5010;
+  }
+  html:not([data-theme="light"]) #changelist-filter.changelist-filter--enhanced .filter-option.selected > a {
+    color: #9be44a !important;
+    background: rgba(155, 228, 74, .1);
+  }
+  html:not([data-theme="light"]) #changelist-filter.changelist-filter--enhanced .filter-option > a:hover,
+  html:not([data-theme="light"]) #changelist-filter.changelist-filter--enhanced .filter-option > a:focus {
+    background: rgba(155, 228, 74, .12);
+    color: #9be44a !important;
+  }
+  html:not([data-theme="light"]) #changelist-filter.changelist-filter--enhanced .filter-error {
+    background: #2d0a0a;
+    border-color: #7f1d1d;
+    color: #fecaca;
+  }
+}
+
+/* ── Dark mode — explicit toggle ─────────────────────────────────────────── */
+[data-theme="dark"] #changelist-filter.changelist-filter--enhanced .active-filters-block {
+  background: #162408;
+  border-color: #2e5010;
+}
+[data-theme="dark"] #changelist-filter.changelist-filter--enhanced .active-filters-block h3 {
+  color: #9be44a !important;
+}
+[data-theme="dark"] #changelist-filter.changelist-filter--enhanced .pill {
+  background: #1e3310;
+  border-color: #2e5010;
+  color: #d7f0b8;
+}
+[data-theme="dark"] #changelist-filter.changelist-filter--enhanced .pill-title { color: #b8e27a; }
+[data-theme="dark"] #changelist-filter.changelist-filter--enhanced .pill-value { color: #9be44a; }
+[data-theme="dark"] #changelist-filter.changelist-filter--enhanced .pill-remove { color: #9be44a !important; }
+[data-theme="dark"] #changelist-filter.changelist-filter--enhanced .pill-clear { color: #9be44a !important; }
+[data-theme="dark"] #changelist-filter.changelist-filter--enhanced .filter-section > summary {
+  background: #162408;
+  color: #9be44a;
+  border-bottom-color: #2e5010;
+}
+[data-theme="dark"] #changelist-filter.changelist-filter--enhanced .filter-option.selected > a {
+  color: #9be44a !important;
+  background: rgba(155, 228, 74, .1);
+}
+[data-theme="dark"] #changelist-filter.changelist-filter--enhanced .filter-option > a:hover,
+[data-theme="dark"] #changelist-filter.changelist-filter--enhanced .filter-option > a:focus {
+  background: rgba(155, 228, 74, .12);
+  color: #9be44a !important;
+}
+[data-theme="dark"] #changelist-filter.changelist-filter--enhanced .filter-error {
+  background: #2d0a0a;
+  border-color: #7f1d1d;
+  color: #fecaca;
+}

@@ -270,7 +270,13 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         return super().formfield_for_dbfield(db_field, request, **kwargs)
 
     class Media:
-        js = ("js/admin_submission_change.js",)
+        # Enhanced filter sidebar assets are loaded on the changelist only
+        # (the JS guards on `#changelist-filter.changelist-filter--enhanced`).
+        css = {"all": ("admin/css/submissions_filter_sidebar.css",)}
+        js = (
+            "js/admin_submission_change.js",
+            "admin/js/submissions_filter_sidebar.js",
+        )
 
     inlines = [SubmissionAPIKeyInline]
 
