@@ -22,6 +22,9 @@ from django import forms
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 
+from django.db.models import Q
+
+from apps.licenses.models import SpdxLicense
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
 from .models import (
     DESCRIPTION_MAX_LENGTH,
@@ -37,6 +40,7 @@ from .widgets import (
     AffiliationComboboxWidget,
     CompactSelectWidget,
     CompactSelectSingleWidget,
+    SpdxLicenseAutocompleteWidget,
 )
 
 # ---------------------------------------------------------------------------
@@ -49,12 +53,6 @@ try:
         _FORM_TEXTS = yaml.safe_load(f) or {}
 except FileNotFoundError:
     pass  # Graceful fallback — fields keep their model help_text
-
-# License choices derived from form_texts.yaml at module load time
-_LICENSE_CHOICES: list[tuple[str, str]] = list(
-    (_FORM_TEXTS.get("license", {}).get("choices") or {}).items()
-)
-
 
 # ---------------------------------------------------------------------------
 # Bleach sanitiser — strips HTML tags from free-text fields
@@ -165,13 +163,6 @@ class SubmissionForm(forms.ModelForm):
         ),
     )
 
-    # License field with YAML-driven choices
-    license = forms.ChoiceField(
-        choices=_LICENSE_CHOICES,
-        widget=forms.Select(attrs={"class": "form-select"}),
-        help_text=_("License governing use of this service."),
-    )
-
     class Meta:
         model = ServiceSubmission
         exclude = [
@@ -257,6 +248,14 @@ class SubmissionForm(forms.ModelForm):
             "terms_of_use_url": forms.URLInput(
                 attrs={"class": "form-control", "placeholder": "https://"}
             ),
+            "licenses": SpdxLicenseAutocompleteWidget(),
+            "license_note": forms.TextInput(
+                attrs={
+                    "class": "form-control",
+                    "placeholder": "e.g. Other, Not applicable, custom license",
+                    "maxlength": 200,
+                }
+            ),
             "github_url": forms.URLInput(
                 attrs={"class": "form-control", "placeholder": "https://github.com/..."}
             ),
@@ -318,7 +317,8 @@ class SubmissionForm(forms.ModelForm):
             "internal_contact_email": _("Internal contact email"),
             "website_url": _("Link to the service website"),
             "terms_of_use_url": _("Link to the service terms of use"),
-            "license": _("License attached to the service"),
+            "licenses": _("License(s)"),
+            "license_note": _("License note"),
             "github_url": _("Link to GitHub repository"),
             "biotools_url": _("Link to bio.tools entry"),
             "fairsharing_url": _("Link to FAIRsharing.org entry"),
@@ -356,6 +356,17 @@ class SubmissionForm(forms.ModelForm):
             is_active=True
         )
 
+        # Licenses — hide deprecated from new picks, but keep any already selected
+        # on the current instance so edits don't silently drop them.
+        license_qs = SpdxLicense.objects.filter(is_deprecated=False)
+        if self.instance and self.instance.pk:
+            selected_ids = list(self.instance.licenses.values_list("pk", flat=True))
+            if selected_ids:
+                license_qs = SpdxLicense.objects.filter(
+                    Q(is_deprecated=False) | Q(pk__in=selected_ids)
+                )
+        self.fields["licenses"].queryset = license_qs.order_by("license_id")
+
         # EDAM term querysets — only active, non-obsolete terms per branch
         from apps.edam.models import EdamTerm
 
@@ -377,31 +388,28 @@ class SubmissionForm(forms.ModelForm):
                 "submitter_affiliation", flat=True
             )
         )
-        suggestions = sorted(pi_institutes | past_affiliations, key=str.casefold)
-        # Include the current instance value so edit pre-fill works even if not in list
-        current_affiliation = (
-            self.instance.submitter_affiliation or ""
-            if self.instance and self.instance.pk
-            else ""
-        )
-        if current_affiliation and current_affiliation not in suggestions:
-            suggestions = [current_affiliation] + suggestions
-        self.fields["submitter_affiliation"].widget.choices = [("", "")] + [
-            (s, s) for s in suggestions
-        ]
+        base_suggestions = sorted(pi_institutes | past_affiliations, key=str.casefold)
 
-        # Host institute — same suggestion pool, but also include the current value
-        current_host = (
-            self.instance.host_institute or ""
-            if self.instance and self.instance.pk
-            else ""
-        )
-        host_suggestions = suggestions
-        if current_host and current_host not in host_suggestions:
-            host_suggestions = [current_host] + list(host_suggestions)
-        self.fields["host_institute"].widget.choices = [("", "")] + [
-            (s, s) for s in host_suggestions
-        ]
+        def _held_value(field_name: str) -> str:
+            """Current held value for a combobox field: prefer bound POST, else instance."""
+            if self.is_bound:
+                return (self.data.get(field_name) or "").strip()
+            if self.instance and self.instance.pk:
+                return (getattr(self.instance, field_name, "") or "").strip()
+            return ""
+
+        def _seed_combobox(field_name: str) -> None:
+            """Ensure the held value survives re-render by prepending it to choices."""
+            held = _held_value(field_name)
+            choices = list(base_suggestions)
+            if held and held not in choices:
+                choices = [held] + choices
+            self.fields[field_name].widget.choices = [("", "")] + [
+                (s, s) for s in choices
+            ]
+
+        _seed_combobox("submitter_affiliation")
+        _seed_combobox("host_institute")
 
         # Pre-fill email confirmation from instance
         if self.instance.pk:
@@ -515,6 +523,18 @@ class SubmissionForm(forms.ModelForm):
                         "Please provide the name and affiliation of the associated partner."
                     ),
                 )
+
+        # At least one of licenses (M2M) or license_note (free text) must be provided
+        licenses = cleaned.get("licenses")
+        license_note = (cleaned.get("license_note") or "").strip()
+        if not license_note and (licenses is None or not licenses):
+            self.add_error(
+                None,
+                _(
+                    "Please select at least one license, or fill in a license note "
+                    "if no standard license applies."
+                ),
+            )
 
         # kpi_start_year is only required when KPI monitoring is already active (not "planned")
         kpi_monitoring = cleaned.get("kpi_monitoring", "")

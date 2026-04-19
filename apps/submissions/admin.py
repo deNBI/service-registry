@@ -106,8 +106,26 @@ class SubmissionAPIKeyInline(admin.TabularInline):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+class ServiceSubmissionAdminForm(forms.ModelForm):
+    class Meta:
+        model = ServiceSubmission
+        fields = "__all__"
+
+    def clean(self):
+        cleaned = super().clean()
+        licenses = cleaned.get("licenses")
+        license_note = (cleaned.get("license_note") or "").strip()
+        if not licenses and not license_note:
+            raise forms.ValidationError(
+                "Please select at least one license, or fill in a license note "
+                "if no standard license applies."
+            )
+        return cleaned
+
+
 @admin.register(ServiceSubmission)
 class ServiceSubmissionAdmin(admin.ModelAdmin):
+    form = ServiceSubmissionAdminForm
     # ── List view ────────────────────────────────────────────────────────────
     list_display = (
         "service_name_link",
@@ -115,6 +133,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         "status_badge",
         "maturity_tag_display",
         "service_center",
+        "licenses_summary",
         "elixir_badge",
         "submitted_at",
         "key_count",
@@ -137,6 +156,9 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         "host_institute",
         "responsible_pis__last_name",
         "responsible_pis__first_name",
+        "licenses__license_id",
+        "licenses__name",
+        "license_note",
     )
     ordering = ("-submitted_at",)
     date_hierarchy = "submitted_at"
@@ -144,7 +166,12 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
     list_per_page = 30
     list_select_related = ("service_center",)
     # Two-panel filtered selector with search — needed for large option sets
-    filter_horizontal = ("responsible_pis", "edam_topics", "edam_operations")
+    filter_horizontal = (
+        "responsible_pis",
+        "edam_topics",
+        "edam_operations",
+        "licenses",
+    )
 
     # ── Permission gates ──────────────────────────────────────────────────────
 
@@ -193,15 +220,10 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
     # ── Queryset ──────────────────────────────────────────────────────────────
 
     def get_queryset(self, request):
-        return super().get_queryset(request).prefetch_related("api_keys")
+        return super().get_queryset(request).prefetch_related("api_keys", "licenses")
 
     def get_form(self, request, obj=None, **kwargs):
-        # Stash obj so formfield_for_dbfield can inject legacy license slugs.
-        self._form_obj = obj
-        try:
-            form = super().get_form(request, obj, **kwargs)
-        finally:
-            self._form_obj = None
+        form = super().get_form(request, obj, **kwargs)
         # Override textarea row counts — Django's default vLargeTextField CSS
         # sets height:26em which makes empty fields enormous. Setting rows here
         # takes precedence once we disable the CSS height override in base_site.html.
@@ -227,27 +249,6 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         return super().formfield_for_manytomanyfield(db_field, request, **kwargs)
 
     def formfield_for_dbfield(self, db_field, request, **kwargs):
-        if db_field.name == "license":
-            # Model field no longer carries choices= (YAML-driven); render as Select.
-            # If the record being edited has a legacy slug not in the current YAML
-            # choices, inject it first so ChoiceField validation does not reject the
-            # form when the admin saves without changing the license field.
-            from apps.submissions.forms import _LICENSE_CHOICES
-
-            choices = list(_LICENSE_CHOICES)
-            obj = getattr(self, "_form_obj", None)
-            if obj and obj.license:
-                known_slugs = {slug for slug, _ in choices}
-                if obj.license not in known_slugs:
-                    choices = [
-                        (obj.license, f"{obj.license} (legacy — please update)"),
-                    ] + choices
-            return forms.ChoiceField(
-                choices=choices,
-                widget=forms.Select(),
-                label="License",
-                help_text="License governing use of this service.",
-            )
         if db_field.name == "primary_maturity_tag":
             # Get the default form field then swap in RadioSelect + relabel empty option.
             # Do NOT pass empty_label — TypedChoiceField does not accept it.
@@ -325,6 +326,23 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         return format_html(
             '<span style="color:var(--link-fg);font-weight:600">{}</span>', primary
         )
+
+    @admin.display(description="License(s)")
+    def licenses_summary(self, obj):
+        ids = list(obj.licenses.values_list("license_id", flat=True))
+        if ids:
+            shown = ", ".join(ids[:3])
+            if len(ids) > 3:
+                shown += f", +{len(ids) - 3}"
+            return shown
+        note = (obj.license_note or "").strip()
+        if note:
+            truncated = note if len(note) <= 40 else note[:37] + "…"
+            return format_html(
+                '<span style="color:var(--body-quiet-color);font-style:italic">{}</span>',
+                truncated,
+            )
+        return "—"
 
     @staticmethod
     def _actor_badge(changed_by: str, font_size: str = ".78rem") -> str:
@@ -755,9 +773,9 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             {
                 "fields": (
                     ("website_url", "terms_of_use_url"),
-                    ("license", "github_url"),
-                    ("biotools_url", "fairsharing_url"),
-                    "other_registry_url",
+                    ("licenses", "license_note"),
+                    ("github_url", "biotools_url"),
+                    ("fairsharing_url", "other_registry_url"),
                 ),
             },
         ),
@@ -1372,6 +1390,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             "responsible_pis",
             "edam_topics",
             "edam_operations",
+            "licenses",
             "biotoolsrecord__functions",
         )
 
@@ -1472,7 +1491,8 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 "publications_pmids",
                 "website_url",
                 "terms_of_use_url",
-                "license",
+                "licenses",
+                "license_note",
                 "github_url",
                 "biotools_url",
                 "fairsharing_url",
@@ -1545,7 +1565,8 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     s.publications_pmids,
                     s.website_url,
                     s.terms_of_use_url,
-                    s.license,
+                    "; ".join(lic.license_id for lic in s.licenses.all()),
+                    s.license_note,
                     s.github_url,
                     s.biotools_url,
                     s.fairsharing_url,
@@ -1630,7 +1651,8 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     "publications_pmids": s.publications_pmids,
                     "website_url": s.website_url,
                     "terms_of_use_url": s.terms_of_use_url,
-                    "license": s.license,
+                    "licenses": [lic.license_id for lic in s.licenses.all()],
+                    "license_note": s.license_note,
                     "github_url": s.github_url,
                     "biotools_url": s.biotools_url,
                     "fairsharing_url": s.fairsharing_url,

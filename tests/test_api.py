@@ -99,7 +99,8 @@ def _valid_payload():
         "internal_contact_email": "api-internal@example.com",
         "website_url": "https://api.example.com",
         "terms_of_use_url": "https://api.example.com/tos",
-        "license": "apache2",
+        "licenses": [],
+        "license_note": "Custom license",
         "kpi_monitoring": "planned",
         "kpi_start_year": "2021",
         "survey_participation": True,
@@ -589,7 +590,8 @@ class TestSubmissionList:
             "responsible_pis",
             "biotoolsrecord",
             "website_url",
-            "license",
+            "licenses",
+            "license_note",
             "kpi_monitoring",
         ):
             assert field in item, f"Missing field: {field}"
@@ -1937,40 +1939,37 @@ class TestMaturityTagFiltering:
 
 @pytest.mark.django_db
 class TestApiLicenseValidation:
-    def test_create_rejects_unknown_license_slug(self, api_client):
-        """POST with an unknown license slug must return 400."""
+    def test_create_rejects_empty_licenses_and_empty_license_note(self, api_client):
+        """POST with neither licenses nor license_note must return 400."""
+        from apps.licenses.models import SpdxLicense
+
+        # Create a license so we can test the validation without side effects
+        SpdxLicense.objects.create(license_id="MIT", name="MIT License")
         payload = _valid_payload()
-        payload["license"] = "unknown_license_xyz"
+        payload["licenses"] = []
+        payload["license_note"] = ""
         resp = api_client.post("/api/v1/submissions/", payload, format="json")
         assert resp.status_code == 400
-        assert "license" in resp.json().get("error", resp.json())
+        assert "licenses" in resp.json().get("error", resp.json())
 
-    def test_create_accepts_new_yaml_slug(self, api_client):
-        """POST with a YAML-listed slug not in the old hardcoded list must return 201."""
+    def test_create_accepts_license_note_only(self, api_client):
+        """POST with license_note but no licenses must return 201."""
         payload = _valid_payload()
-        payload["license"] = "eupl12"
+        payload["licenses"] = []
+        payload["license_note"] = "Custom license"
         resp = api_client.post("/api/v1/submissions/", payload, format="json")
         assert resp.status_code == 201
 
-    def test_patch_allows_legacy_slug_on_existing_submission(self, api_client):
-        """PATCH an existing submission with a legacy (non-YAML) slug must not be rejected."""
-        from apps.submissions.models import ServiceSubmission
+    def test_create_accepts_new_spdx_slug(self, api_client):
+        """POST with a new SPDX slug must return 201."""
+        from apps.licenses.models import SpdxLicense
 
-        sub = ServiceSubmissionFactory()
-        # Write a legacy slug directly to the DB to simulate old data
-        ServiceSubmission.objects.filter(pk=sub.pk).update(license="some_legacy_slug")
-        sub.refresh_from_db()
-
-        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
-        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
-        resp = api_client.patch(
-            f"/api/v1/submissions/{sub.pk}/",
-            {"license": "some_legacy_slug"},
-            format="json",
-        )
-        assert resp.status_code == 200
-        sub.refresh_from_db()
-        assert sub.license == "some_legacy_slug"
+        # Create the license first - SlugRelatedField requires it to exist
+        SpdxLicense.objects.create(license_id="MIT", name="MIT License")
+        payload = _valid_payload()
+        payload["licenses"] = ["MIT"]
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 201
 
 
 # ===========================================================================

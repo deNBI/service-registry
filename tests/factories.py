@@ -110,7 +110,7 @@ class ServiceSubmissionFactory(DjangoModelFactory):
     # Section D
     website_url = "https://example.com/service"
     terms_of_use_url = "https://example.com/tos"
-    license = "mit"
+    license_note = "Not applicable"
     github_url = ""
     biotools_url = ""
     fairsharing_url = ""

@@ -11,6 +11,19 @@ Configuration is split into two files with a clear separation of concerns:
 | `config/site.toml` | Branding, contact info, URLs, feature flags    | Yes (`docker compose restart web worker beat`) |
 | `.env`             | Secrets, passwords, connection strings, tuning | Yes (full restart)                             |
 
+### Configuration precedence
+
+Environment variables always take precedence over settings in `config/site.toml`. This allows you to:
+
+- Keep sensitive values in `.env` (never commit it)
+- Use different configurations per environment (dev/staging/prod) by setting env vars
+- Override site.toml values without editing the file
+
+For example:
+- `EDAM_OWL_URL` in `.env` overrides `[edam] owl_url` in site.toml
+- `ADMIN_URL_PREFIX` in `.env` overrides `[admin] url_prefix` in site.toml
+- `LOGO_URL` in `.env` overrides `[site] logo_url` in site.toml
+
 ---
 
 ## Site settings
@@ -28,18 +41,15 @@ tagline      = "de.NBI & ELIXIR-DE Service Registration System"
 url          = "https://service-registry.bi.denbi.de"
 logo_url     = ""
 favicon_url  = ""
-form_version = "1.1"
-form_date    = "2026-02-14"
 ```
 
-| Key                          | Description                                                                                                                                                                                        |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                       | Site name shown in the navbar, page titles, and email subjects                                                                                                                                     |
-| `tagline`                    | Browser tab subtitle and meta description                                                                                                                                                          |
-| `url`                        | Canonical public URL — used in outbound emails and the bio.tools API User-Agent                                                                                                                    |
-| `logo_url`                   | Logo image URL. Three options: an absolute URL (`https://…`), a local static path (`/static/img/logo.svg`), or empty string (auto-detects `static/img/logo.*`, then falls back to a CSS text logo) |
-| `favicon_url`                | Favicon URL. Same three options as `logo_url`. Empty string auto-detects `static/img/favicon.ico` / `.png` / `.svg`. If nothing is found, no `<link rel="icon">` is rendered                       |
-| `form_version` / `form_date` | Shown in the registration form header                                                                                                                                                              |
+| Key           | Description                                                                                                                                                                                        |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`        | Site name shown in the navbar, page titles, and email subjects                                                                                                                                     |
+| `tagline`     | Browser tab subtitle and meta description                                                                                                                                                          |
+| `url`         | Canonical public URL — used in outbound emails and the bio.tools API User-Agent                                                                                                                    |
+| `logo_url`    | Logo image URL. Three options: an absolute URL (`https://…`), a local static path (`/static/img/logo.svg`), or empty string (auto-detects `static/img/logo.*`, then falls back to a CSS text logo) |
+| `favicon_url` | Favicon URL. Same three options as `logo_url`. Empty string auto-detects `static/img/favicon.ico` / `.png` / `.svg`. If nothing is found, no `<link rel="icon">` is rendered                       |
 
 ### Contact details
 
@@ -71,9 +81,19 @@ privacy_policy  = "https://www.denbi.de/privacy-policy"
 imprint         = "https://www.denbi.de/imprint"
 data_protection = "https://www.denbi.de/privacy-policy"
 kpi_cheatsheet  = "https://www.denbi.de/images/Service/20210624_KPI_Cheat_Sheet_doi.pdf"
+user_guide      = "https://denbi.github.io/service-registry/user-guide/"
 ```
 
 All links are rendered dynamically — changing a URL here updates it everywhere in the UI without touching template files.
+
+| Key | Description | Default |
+|-----|-------------|---------|
+| `website` | Main organisation website | `https://www.denbi.de` |
+| `privacy_policy` | Privacy policy page | `https://www.denbi.de/privacy-policy` |
+| `imprint` | Legal imprint page | `https://www.denbi.de/imprint` |
+| `data_protection` | Data protection information | `https://www.denbi.de/privacy-policy` |
+| `kpi_cheatsheet` | KPI cheat-sheet PDF | PDF URL |
+| `user_guide` | User documentation page (appears in navbar) | `https://denbi.github.io/service-registry/user-guide/` |
 
 ### OpenAPI metadata
 
@@ -101,6 +121,15 @@ owl_url = "https://edamontology.org/EDAM_stable.owl"
 
 Overridden by `EDAM_OWL_URL` in `.env`. Set to a local file path for air-gapped servers.
 
+### SPDX licenses sync
+
+```toml
+[licenses]
+url = "https://raw.githubusercontent.com/spdx/license-list-data/main/json/licenses.json"
+```
+
+Overridden by `SPDX_LICENSES_URL` in `.env`. Set to a local file path for air-gapped servers.
+
 ### Admin interface
 
 ```toml
@@ -117,8 +146,8 @@ Overridden by `ADMIN_URL_PREFIX` in `.env`. Changes the URL of the Django admin 
 logo_max_bytes = 10_485_760
 ```
 
-| Key | Default | Description |
-|---|---|---|
+| Key              | Default            | Description                                                                                                                        |
+| ---------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `logo_max_bytes` | `10485760` (10 MB) | Maximum allowed size in bytes for service logo uploads. Reduce to tighten limits. Requires a web container restart after changing. |
 
 ---
@@ -174,8 +203,8 @@ FORWARDED_ALLOW_IPS=127.0.0.1
 ```
 
 !!! note "Two separate concerns: Gunicorn log vs. application IP"
-    **`FORWARDED_ALLOW_IPS`** only affects Gunicorn's own access log (stdout).
-    It has no effect on the IP that Django views or django-axes record.
+**`FORWARDED_ALLOW_IPS`** only affects Gunicorn's own access log (stdout).
+It has no effect on the IP that Django views or django-axes record.
 
     **Application-level IP** (axes lockout log, `submission_ip` field) is resolved
     by `django-ipware` reading the `X-Real-IP` header, which the upstream proxy sets
@@ -226,7 +255,7 @@ RATE_LIMIT_VALIDATE=120/h       # Inline field validation (POST /register/valida
 ### ALTCHA CAPTCHA
 
 ALTCHA is a self-hosted, privacy-respecting proof-of-work CAPTCHA that protects
-the registration and edit forms from automated submissions.  No external service
+the registration and edit forms from automated submissions. No external service
 is contacted at runtime — the JS widget is vendored in `static/js/altcha.min.js`
 and challenge generation/verification happens entirely inside Django.
 
@@ -234,8 +263,8 @@ and challenge generation/verification happens entirely inside Django.
 ALTCHA_HMAC_KEY=                # Secret key for signing challenges (required in production)
 ```
 
-| Variable          | Default | Description                                                                                                            |
-| ----------------- | ------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Variable          | Default | Description                                                                                                           |
+| ----------------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
 | `ALTCHA_HMAC_KEY` | `""`    | HMAC-SHA256 key used to sign and verify challenges. When empty, ALTCHA is bypassed — safe for local development only. |
 
 Generate a strong key with:
@@ -281,22 +310,22 @@ Subject lines and submitter-facing status messages are configured in `apps/submi
 
 **Subject line keys:**
 
-| Key | Event | Placeholders |
-|-----|-------|-------------|
-| `created` | New submission received (admin notification) | `{service_name}` |
-| `status_changed` | Status changed (admin notification) | `{service_name}`, `{status}` |
-| `updated` | Submitter edited their service (admin notification) | `{service_name}` |
-| `submitter_created` | New submission received (submitter confirmation) | `{service_name}` |
-| `submitter_status` | Status changed (submitter notification) | `{service_name}`, `{status}` |
-| `submitter_updated` | Submitter edited their service (submitter notification) | `{service_name}` |
+| Key                 | Event                                                   | Placeholders                 |
+| ------------------- | ------------------------------------------------------- | ---------------------------- |
+| `created`           | New submission received (admin notification)            | `{service_name}`             |
+| `status_changed`    | Status changed (admin notification)                     | `{service_name}`, `{status}` |
+| `updated`           | Submitter edited their service (admin notification)     | `{service_name}`             |
+| `submitter_created` | New submission received (submitter confirmation)        | `{service_name}`             |
+| `submitter_status`  | Status changed (submitter notification)                 | `{service_name}`, `{status}` |
+| `submitter_updated` | Submitter edited their service (submitter notification) | `{service_name}`             |
 
 **Email routing summary:**
 
-| Event | Admin email | Submitter email |
-|-------|-------------|-----------------|
-| New submission (`created`) | ✓ (with admin portal link) | ✓ (receipt confirmation, no admin URL) |
-| Edit submitted (`updated`) | ✓ (with diff table + admin portal link) | ✓ (with diff table, no admin URL) |
-| Status changed (`status_changed`) | ✓ | ✓ (plain-language status message) |
+| Event                             | Admin email                             | Submitter email                        |
+| --------------------------------- | --------------------------------------- | -------------------------------------- |
+| New submission (`created`)        | ✓ (with admin portal link)              | ✓ (receipt confirmation, no admin URL) |
+| Edit submitted (`updated`)        | ✓ (with diff table + admin portal link) | ✓ (with diff table, no admin URL)      |
+| Status changed (`status_changed`) | ✓                                       | ✓ (plain-language status message)      |
 
 The submitter is **never** CC'd on admin emails. All submitter communication goes through dedicated separate emails so the admin portal URL is never accidentally forwarded to submitters.
 
@@ -326,6 +355,15 @@ API_KEY_HASH_ALGORITHM=sha256   # Hash algorithm for stored key hashes
 # Pin a specific release: https://edamontology.org/EDAM_1.25.owl
 # Air-gapped servers:     /app/EDAM.owl
 EDAM_OWL_URL=https://edamontology.org/EDAM_stable.owl
+```
+
+### SPDX licenses
+
+```bash
+# Overrides [licenses] url in site.toml.
+# Default is the canonical SPDX GitHub raw URL.
+# Air-gapped servers: /app/licenses.json
+SPDX_LICENSES_URL=https://raw.githubusercontent.com/spdx/license-list-data/main/json/licenses.json
 ```
 
 ### Branding overrides
@@ -361,11 +399,11 @@ All values from `site.toml` are injected into every Django template via the
 {{ PRIVACY_POLICY_URL }}
 {{ IMPRINT_URL }}
 {{ WEBSITE_URL }}
+{{ USER_GUIDE_URL }}
 {{ LOGO_URL }}
 {{ FAVICON_URL }}
 
 {# Full SITE dict — mirrors site.toml sections #}
-{{ SITE.form_version }}
 {{ SITE.contact.email }}
 {{ SITE.links.kpi_cheatsheet }}
 {{ SITE.features.biotools_prefill }}

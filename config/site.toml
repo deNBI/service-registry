@@ -53,11 +53,6 @@ logo_url = "https://www.denbi.de/templates/nbimaster/img/denbi-logo-color.svg"
 #   3. Empty string:            ""  → auto-detects static/img/favicon.ico if present
 favicon_url = ""
 
-# Version string shown in the registration form header.
-form_version = "1.1"
-form_date    = "2026-02-14"
-
-
 # -----------------------------------------------------------------------------
 # [contact] — All contact addresses in one place
 # -----------------------------------------------------------------------------
@@ -106,6 +101,9 @@ data_protection = "https://www.denbi.de/privacy-policy"
 # KPI cheat-sheet PDF linked in the KPI section of the form.
 kpi_cheatsheet = "https://www.denbi.de/images/Service/20210624_KPI_Cheat_Sheet_doi.pdf"
 
+# User guide documentation page.
+user_guide = "https://denbi.github.io/service-registry/user-guide/"
+
 
 # -----------------------------------------------------------------------------
 # [api] — OpenAPI / Swagger metadata
@@ -147,6 +145,22 @@ edam_annotations = true
 # To use a local file (air-gapped):
 #   owl_url = "/app/EDAM.owl"
 owl_url = "https://edamontology.org/EDAM_stable.owl"
+
+
+# -----------------------------------------------------------------------------
+# [licenses] — SPDX License List sync settings
+# -----------------------------------------------------------------------------
+[licenses]
+
+# URL of the SPDX license list JSON fetched by `manage.py sync_spdx_licenses`.
+# Overridden by the SPDX_LICENSES_URL env var if that is set (e.g. for
+# air-gapped servers pointing to a local file path).
+#
+# To pin a specific release tag, change to e.g.:
+#   url = "https://raw.githubusercontent.com/spdx/license-list-data/v3.26/json/licenses.json"
+# To use a local file (air-gapped):
+#   url = "/app/spdx-licenses.json"
+url = "https://raw.githubusercontent.com/spdx/license-list-data/main/json/licenses.json"
 
 
 # -----------------------------------------------------------------------------

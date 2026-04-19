@@ -143,6 +143,11 @@
         <li class="nav-item">
           <a class="nav-link" href="{% url 'submissions:update' %}">Update a Registration</a>
         </li>
+        {% if USER_GUIDE_URL %}
+        <li class="nav-item">
+          <a class="nav-link" href="{{ USER_GUIDE_URL }}" target="_blank" rel="noopener noreferrer">User Guide</a>
+        </li>
+        {% endif %}
         <li class="nav-item">
           <a class="nav-link" href="/api/docs/" target="_blank">API Docs</a>
         </li>

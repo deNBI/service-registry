@@ -16,6 +16,9 @@ Why Tom Select instead of plain <select>?
 The widget groups options by branch for clarity when the user opens the
 full option list without typing.
 
+SpdxLicenseAutocompleteWidget: Reuses EdamAutocompleteWidget's CSS/JS for
+SPDX license selection. Has no Media of its own to avoid duplicate loading.
+
 AffiliationComboboxWidget: Tom Select combobox for institute/affiliation autocomplete.
   - Allows custom input if the user's affiliation isn't in the list
   - Pre-populated with suggestions from PI institutes and past submissions
@@ -73,6 +76,44 @@ class EdamAutocompleteWidget(forms.SelectMultiple):
         js = [
             "js/tom-select.complete.min.js",
         ]
+
+
+class SpdxLicenseAutocompleteWidget(forms.SelectMultiple):
+    """
+    Searchable multi-select widget for SPDX licenses.
+
+    Reuses the same CSS class and JS picker as EdamAutocompleteWidget
+    (buildEdamPicker in static/js/edam-autocomplete.js) so selected
+    licenses render as pills on top of a type-to-search list.
+
+    Usage:
+        class MyForm(forms.ModelForm):
+            class Meta:
+                widgets = {
+                    "licenses": SpdxLicenseAutocompleteWidget(),
+                }
+
+    Attributes:
+        data-max-items  : Maximum number of licenses selectable (default: 6,
+                          matching EdamAutocompleteWidget — comfortably covers
+                          dual/triple-licensed services without hard-capping.
+                          Backend enforces no count limit, so this is UX only).
+        data-placeholder: Placeholder text shown when nothing is selected.
+    """
+
+    def __init__(
+        self,
+        attrs=None,
+        placeholder: str = "Search licenses (e.g. MIT, Apache-2.0)…",
+    ):
+        default_attrs = {
+            "class": "edam-autocomplete",
+            "data-placeholder": placeholder,
+            "data-max-items": "6",
+        }
+        if attrs:
+            default_attrs.update(attrs)
+        super().__init__(attrs=default_attrs)
 
 
 class AffiliationComboboxWidget(forms.Select):

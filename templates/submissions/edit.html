@@ -22,7 +22,6 @@
 
     <h1 class="h3 mb-1">de.NBI &amp; ELIXIR-DE Service Registration Form</h1>
     <p class="text-muted mb-4">
-      Version {{ SITE.form_version }} &mdash; {{ SITE.form_date }} &bull;
       All fields marked <span class="required-star">*</span> are mandatory.
     </p>
 
@@ -37,6 +36,7 @@
           action="{% url 'submissions:edit' %}"
           novalidate
           id="registration-form"
+          data-draft-key="denbi_draft_edit_{{ submission.id }}"
           hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
       {% csrf_token %}
 
@@ -59,40 +59,7 @@
   <!-- Right sidebar -->
   <div class="col-lg-3">
     <div class="sidebar-nav">
-      <div class="card">
-        <div class="card-header">Form Sections</div>
-        <div class="card-body p-2">
-          <nav class="nav flex-column" aria-label="Form sections">
-            <a class="nav-link" href="#section-a" data-section="a"><span class="section-dot" id="dot-a"></span>📋 General</a>
-            <a class="nav-link" href="#section-b" data-section="b"><span class="section-dot" id="dot-b"></span>🔬 Service Data</a>
-            <a class="nav-link" href="#section-c" data-section="c"><span class="section-dot" id="dot-c"></span>👥 Responsibilities</a>
-            <a class="nav-link" href="#section-d" data-section="d"><span class="section-dot" id="dot-d"></span>🔗 Links</a>
-            <a class="nav-link" href="#section-e" data-section="e"><span class="section-dot" id="dot-e"></span>📊 KPIs</a>
-            <a class="nav-link" href="#section-f" data-section="f"><span class="section-dot" id="dot-f"></span>🏷️ Discoverability</a>
-            <a class="nav-link" href="#section-g" data-section="g"><span class="section-dot" id="dot-g"></span>🔒 Consent</a>
-          </nav>
-        </div>
-      </div>
-
-      <div class="card mt-3">
-        <div class="card-header">Completion</div>
-        <div class="card-body py-2 px-3">
-          <div class="d-flex justify-content-between mb-1">
-            <span class="small text-muted">Required fields</span>
-            <span class="small fw-semibold" id="progress-label">0%</span>
-          </div>
-          <div class="form-progress">
-            <div class="form-progress-fill" id="progress-bar" style="width:0%"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card mt-3">
-        <div class="card-body py-2 px-3">
-          <p class="small text-muted mb-1"><strong>Need help?</strong></p>
-          <a href="mailto:{{ CONTACT_EMAIL }}" class="small">{{ CONTACT_EMAIL }}</a>
-        </div>
-      </div>
+      {% include "submissions/partials/form_sidebar.html" %}
 
       {% if submission.status == 'deprecated' %}
       <div class="card mt-3 border-secondary">

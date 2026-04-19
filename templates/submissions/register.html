@@ -21,7 +21,6 @@
 
     <h1 class="h3 mb-1">de.NBI &amp; ELIXIR-DE Service Registration Form</h1>
     <p class="text-muted mb-4">
-      <!-- Version {{ SITE.form_version }} &mdash; {{ SITE.form_date }} &bull; -->
       All fields marked <span class="required-star">*</span> are mandatory.
     </p>
 
@@ -30,180 +29,12 @@
           action="{% url 'submissions:register' %}"
           novalidate
           id="registration-form"
+          data-draft-key="denbi_draft_register"
           hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
       {% csrf_token %}
 
-      <!-- ================================================================
-           SECTION A — General
-           ================================================================ -->
-      <div class="card section-card mb-4" id="section-a">
-        <div class="card-header">
-          <span class="me-2">📋</span>A — General Information
-        </div>
-        <div class="card-body">
-          {% with desc=form.section_texts.a.description %}{% if desc %}<div class="section-description">{{ desc|linkify_description }}</div>{% endif %}{% endwith %}
-          {% include "submissions/partials/field.html" with field=form.date_of_entry required=True %}
-          <div class="row g-3">
-            <div class="col-md-6">
-              {% include "submissions/partials/field.html" with field=form.submitter_first_name required=True %}
-            </div>
-            <div class="col-md-6">
-              {% include "submissions/partials/field.html" with field=form.submitter_last_name required=True %}
-            </div>
-          </div>
-          {% include "submissions/partials/field.html" with field=form.submitter_affiliation required=True %}
-          {% include "submissions/partials/field.html" with field=form.register_as_elixir required=True %}
-        </div>
-      </div>
+      {% include "submissions/partials/form_body.html" %}
 
-      <!-- ================================================================
-           SECTION <span class="me-2">🔬</span>B — Service Master Data
-           ================================================================ -->
-      <div class="card section-card mb-4" id="section-b">
-        <div class="card-header"><span class="me-2">🔬</span>B — Service Master Data</div>
-        <div class="card-body">
-          {% with desc=form.section_texts.b.description %}{% if desc %}<div class="section-description">{{ desc|linkify_description }}</div>{% endif %}{% endwith %}
-          {% include "submissions/partials/field.html" with field=form.service_name required=True %}
-          {% include "submissions/partials/field.html" with field=form.service_description required=True %}
-          {% include "submissions/partials/field.html" with field=form.year_established required=True %}
-          {% include "submissions/partials/field.html" with field=form.service_categories required=True %}
-
-          <!-- is_toolbox with HTMX-controlled conditional field -->
-          {% include "submissions/partials/field.html" with field=form.is_toolbox required=True %}
-          <div id="toolbox-name-wrapper"
-               {% if not form.is_toolbox.value %}style="display:none"{% endif %}>
-            {% include "submissions/partials/field.html" with field=form.toolbox_name %}
-          </div>
-
-          {% include "submissions/partials/field.html" with field=form.user_knowledge_required %}
-
-          {% include "submissions/partials/edam_fields.html" %}
-
-          {% include "submissions/partials/field.html" with field=form.publications_pmids required=True %}
-
-          <!-- Logo upload -->
-          {% include "submissions/partials/field.html" with field=form.logo %}
-        </div>
-      </div>
-
-      <!-- ================================================================
-           SECTION C — Responsibilities
-           ================================================================ -->
-      <div class="card section-card mb-4" id="section-c">
-        <div class="card-header"><span class="me-2">👥</span>C — Responsibilities &amp; Responsiveness</div>
-        <div class="card-body">
-          {% with desc=form.section_texts.c.description %}{% if desc %}<div class="section-description">{{ desc|linkify_description }}</div>{% endif %}{% endwith %}
-          {% include "submissions/partials/field.html" with field=form.responsible_pis required=True %}
-
-          <!-- associated_partner_note conditional field -->
-          <div id="associated-partner-wrapper" style="display:none">
-            {% include "submissions/partials/field.html" with field=form.associated_partner_note %}
-          </div>
-
-          {% include "submissions/partials/field.html" with field=form.host_institute required=True %}
-          {% include "submissions/partials/field.html" with field=form.service_center required=True %}
-
-          <hr class="my-3">
-          <p class="text-muted small">
-            <strong>Public contact</strong> — this email will be displayed on the de.NBI services page.
-          </p>
-          {% include "submissions/partials/field.html" with field=form.public_contact_email required=True %}
-
-          <hr class="my-3">
-          <p class="text-muted small">
-            <strong>Internal contact</strong> — used only by the de.NBI administration office. Not publicly visible.
-          </p>
-          {% include "submissions/partials/field.html" with field=form.internal_contact_name required=True %}
-          {% include "submissions/partials/field.html" with field=form.internal_contact_email required=True %}
-          {% include "submissions/partials/field.html" with field=form.internal_contact_email_confirm required=True %}
-        </div>
-      </div>
-
-      <!-- ================================================================
-           SECTION D — Websites & Links
-           ================================================================ -->
-      <div class="card section-card mb-4" id="section-d">
-        <div class="card-header"><span class="me-2">🔗</span>D — Websites &amp; Links</div>
-        <div class="card-body">
-          {% with desc=form.section_texts.d.description %}{% if desc %}<div class="section-description">{{ desc|linkify_description }}</div>{% endif %}{% endwith %}
-          {% include "submissions/partials/field.html" with field=form.website_url required=True %}
-          {% include "submissions/partials/field.html" with field=form.terms_of_use_url required=True %}
-          {% include "submissions/partials/field.html" with field=form.license required=True %}
-          {% include "submissions/partials/field.html" with field=form.github_url %}
-          {% include "submissions/partials/field.html" with field=form.biotools_url %}
-          {% include "submissions/partials/field.html" with field=form.fairsharing_url %}
-          {% include "submissions/partials/field.html" with field=form.other_registry_url %}
-        </div>
-      </div>
-
-      <!-- ================================================================
-           SECTION E — KPIs
-           ================================================================ -->
-      <div class="card section-card mb-4" id="section-e">
-        <div class="card-header"><span class="me-2">📊</span>E — Key Performance Indicators (KPIs)</div>
-        <div class="card-body">
-          {% with desc=form.section_texts.e.description %}{% if desc %}<div class="section-description">{{ desc|linkify_description }}</div>{% endif %}{% endwith %}
-          {% include "submissions/partials/field.html" with field=form.kpi_monitoring required=True %}
-          <div id="kpi-start-year-wrapper"
-               {% if form.kpi_monitoring.value == 'planned' %}style="display:none"{% endif %}>
-            {% include "submissions/partials/field.html" with field=form.kpi_start_year required=True %}
-          </div>
-        </div>
-      </div>
-
-      <!-- ================================================================
-           SECTION F — Discoverability & Outreach
-           ================================================================ -->
-      <div class="card section-card mb-4" id="section-f">
-        <div class="card-header"><span class="me-2">🏷️</span>F — Search Tags, Discoverability &amp; Outreach</div>
-        <div class="card-body">
-          {% with desc=form.section_texts.f.description %}{% if desc %}<div class="section-description">{{ desc|linkify_description }}</div>{% endif %}{% endwith %}
-          {% include "submissions/partials/field.html" with field=form.keywords_uncited %}
-          {% include "submissions/partials/field.html" with field=form.keywords_seo %}
-          {% include "submissions/partials/field.html" with field=form.survey_participation required=True %}
-          {% include "submissions/partials/field.html" with field=form.comments %}
-        </div>
-      </div>
-
-      <!-- ================================================================
-           SECTION G — Consent
-           ================================================================ -->
-      <div class="card section-card mb-4" id="section-g">
-        <div class="card-header"><span class="me-2">🔒</span>G — Data Protection &amp; Consent</div>
-        <div class="card-body">
-          {% with desc=form.section_texts.g.description %}{% if desc %}<div class="section-description">{{ desc|linkify_description }}</div>{% endif %}{% endwith %}
-          <p class="small">
-            This form has been created by the de.NBI Office.
-            Person-related data will exclusively be used by the de.NBI Administration Office
-            for matters related to the de.NBI Service registration process.
-            <a href="{{ SITE.links.data_protection }}"
-               target="_blank" rel="noopener noreferrer">Data protection information</a>
-            and
-            <a href="{{ PRIVACY_POLICY_URL }}"
-               target="_blank" rel="noopener noreferrer">privacy policy</a>.
-          </p>
-          <div class="consent-block">
-            <div class="form-check">
-              {{ form.data_protection_consent }}
-              <label class="form-check-label" for="{{ form.data_protection_consent.id_for_label }}">
-                {{ form.data_protection_consent.label }}
-              </label>
-              {% if form.data_protection_consent.errors %}
-              <div class="text-danger small mt-1 fw-semibold">⚠ {{ form.data_protection_consent.errors }}</div>
-              {% endif %}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ALTCHA proof-of-work CAPTCHA -->
-      {% if altcha_enabled %}
-      <div class="mb-3">
-        <altcha-widget challengeurl="{% url 'submissions:altcha_challenge' %}"></altcha-widget>
-      </div>
-      {% endif %}
-
-      <!-- Submit button — sticky bar -->
       <div class="form-submit-row d-flex justify-content-between align-items-center">
         <span class="text-muted small">All fields marked <span class="required-star">*</span> are required</span>
         <div class="d-flex gap-2">
@@ -217,59 +48,9 @@
     </form>
   </div>
 
-  <!-- Right sidebar -->
   <div class="col-lg-3">
     <div class="sidebar-nav">
-      <div class="card">
-        <div class="card-header">Form Sections</div>
-        <div class="card-body p-2">
-          <nav class="nav flex-column" aria-label="Form sections">
-            <a class="nav-link" href="#section-a" data-section="a">
-              <span class="section-dot" id="dot-a"></span>📋 General
-            </a>
-            <a class="nav-link" href="#section-b" data-section="b">
-              <span class="section-dot" id="dot-b"></span>🔬 Service Data
-            </a>
-            <a class="nav-link" href="#section-c" data-section="c">
-              <span class="section-dot" id="dot-c"></span>👥 Responsibilities
-            </a>
-            <a class="nav-link" href="#section-d" data-section="d">
-              <span class="section-dot" id="dot-d"></span>🔗 Links
-            </a>
-            <a class="nav-link" href="#section-e" data-section="e">
-              <span class="section-dot" id="dot-e"></span>📊 KPIs
-            </a>
-            <a class="nav-link" href="#section-f" data-section="f">
-              <span class="section-dot" id="dot-f"></span>🏷️ Discoverability
-            </a>
-            <a class="nav-link" href="#section-g" data-section="g">
-              <span class="section-dot" id="dot-g"></span>🔒 Consent
-            </a>
-          </nav>
-        </div>
-      </div>
-
-      <!-- Progress -->
-      <div class="card mt-3">
-        <div class="card-header">Completion</div>
-        <div class="card-body py-2 px-3">
-          <div class="d-flex justify-content-between mb-1">
-            <span class="small text-muted">Required fields</span>
-            <span class="small fw-semibold" id="progress-label">0%</span>
-          </div>
-          <div class="form-progress">
-            <div class="form-progress-fill" id="progress-bar" style="width:0%"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Contact -->
-      <div class="card mt-3">
-        <div class="card-body py-2 px-3">
-          <p class="small text-muted mb-1"><strong>Need help?</strong></p>
-          <a href="mailto:{{ CONTACT_EMAIL }}" class="small">{{ CONTACT_EMAIL }}</a>
-        </div>
-      </div>
+      {% include "submissions/partials/form_sidebar.html" %}
     </div>
   </div>
 </div>

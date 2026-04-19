@@ -353,7 +353,12 @@ class TestSubmissionChangeLogWrites:
             "internal_contact_email_confirm": sub.internal_contact_email,
             "website_url": sub.website_url,
             "terms_of_use_url": sub.terms_of_use_url,
-            "license": sub.license,
+            "licenses": [lic.pk for lic in sub.licenses.all()],
+            # For M2M licenses, at least one license or non-empty license_note must be provided
+            # If submission has licenses, use them; otherwise use an empty list (form validation will require one)
+            "license_note": sub.license_note
+            if sub.license_note
+            else "No license specified",
             "github_url": sub.github_url or "",
             "biotools_url": sub.biotools_url or "",
             "fairsharing_url": sub.fairsharing_url or "",
@@ -443,22 +448,47 @@ class TestSubmissionChangeLogWrites:
 
 @pytest.mark.django_db
 class TestSnapshotLicense:
-    def test_snapshot_license_uses_yaml_label(self, db):
-        """License snapshot value must be the human-readable label, not the slug."""
+    def test_snapshot_licenses_empty_returns_empty_list(self, db):
+        """licenses M2M field should snapshot as an empty list when nothing selected."""
         from tests.factories import ServiceSubmissionFactory
 
-        sub = ServiceSubmissionFactory(license="mit")
+        sub = ServiceSubmissionFactory()
+        snap = snapshot_m2m(sub)
+        assert snap["licenses"] == []
+
+    def test_snapshot_license_note_used_when_no_licenses(self, db):
+        """license_note should be in the diff when provided without licenses."""
+        from tests.factories import ServiceSubmissionFactory
+
+        sub = ServiceSubmissionFactory(license_note="Custom license")
         snap = snapshot(sub)
-        assert snap["license"] == "MIT License"
+        assert snap["license_note"] == "Custom license"
+
+    def test_snapshot_m2m_licenses_shows_ids(self, db):
+        """licenses M2M field should show license IDs in the snapshot."""
+        from apps.licenses.models import SpdxLicense
+        from tests.factories import ServiceSubmissionFactory
+
+        mit = SpdxLicense.objects.create(
+            license_id="MIT-TEST",
+            name="MIT Test License",
+            is_deprecated=False,
+        )
+        sub = ServiceSubmissionFactory()
+        sub.licenses.add(mit)
+        snap = snapshot_m2m(sub)
+        assert snap["licenses"] == ["MIT-TEST"]
 
     def test_snapshot_license_unknown_slug_returns_slug(self, db):
-        """For a slug not in the YAML (e.g. legacy data), return the raw slug."""
+        """For a legacy license_note value, return the raw value."""
         from apps.submissions.models import ServiceSubmission
         from tests.factories import ServiceSubmissionFactory
 
         sub = ServiceSubmissionFactory()
-        # Write an unlisted slug directly to bypass form validation
-        ServiceSubmission.objects.filter(pk=sub.pk).update(license="some_old_slug")
+        # Write a custom license note directly to bypass form validation
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            license_note="some_old_license"
+        )
         sub.refresh_from_db()
         snap = snapshot(sub)
-        assert snap["license"] == "some_old_slug"
+        assert snap["license_note"] == "some_old_license"

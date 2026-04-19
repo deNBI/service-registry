@@ -84,4 +84,7 @@ def site_context(request):
         ),
         "IMPRINT_URL": links.get("imprint", "https://www.denbi.de/imprint"),
         "WEBSITE_URL": links.get("website", "https://www.denbi.de"),
+        "USER_GUIDE_URL": links.get(
+            "user_guide", "https://denbi.github.io/service-registry/user-guide/"
+        ),
     }

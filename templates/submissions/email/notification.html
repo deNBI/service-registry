@@ -68,7 +68,8 @@ th      { background: #e8f0f8; font-weight: bold; text-align: left; }
 <tr><th>Categories</th><td>{{ categories|join:", " }}</td></tr>
 <tr><th>Year Established</th><td>{{ submission.year_established }}</td></tr>
 <tr><th>Website</th><td><a href="{{ submission.website_url }}">{{ submission.website_url }}</a></td></tr>
-<tr><th>License</th><td>{{ submission.get_license_display }}</td></tr>
+<tr><th>Licenses</th><td>{% for lic in submission.licenses.all %}{{ lic.license_id }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</td></tr>
+<tr><th>License Note</th><td>{{ submission.license_note|default:"—" }}</td></tr>
 <tr><th>Publications</th><td>{{ submission.publications_pmids }}</td></tr>
 <tr><th>Responsible PIs</th><td>{% for pi in pis %}{{ pi }}{% if not forloop.last %}, {% endif %}{% endfor %}</td></tr>
 <tr><th>KPI Monitoring</th><td>{{ submission.get_kpi_monitoring_display }} ({{ submission.kpi_start_year }})</td></tr>

@@ -48,6 +48,7 @@ _sc_email = _sc.get("email", {})
 _sc_links = _sc.get("links", {})
 _sc_api = _sc.get("api", {})
 _sc_edam = _sc.get("edam", {})
+_sc_licenses = _sc.get("licenses", {})
 _sc_admin = _sc.get("admin", {})
 _sc_uploads = _sc.get("uploads", {})
 
@@ -119,6 +120,7 @@ INSTALLED_APPS = [
     "apps.api",
     "apps.edam",
     "apps.biotools",
+    "apps.licenses",
 ]
 
 # ---------------------------------------------------------------------------
@@ -235,6 +237,12 @@ EDAM_OWL_URL = env("EDAM_OWL_URL", default=None) or _sc_edam.get(
     "owl_url", "https://edamontology.org/EDAM_stable.owl"
 )
 
+# SPDX licenses JSON URL: site.toml → [licenses] url, overridden by SPDX_LICENSES_URL env var
+SPDX_LICENSES_URL = env("SPDX_LICENSES_URL", default=None) or _sc_licenses.get(
+    "url",
+    "https://raw.githubusercontent.com/spdx/license-list-data/main/json/licenses.json",
+)
+
 # Admin URL prefix: site.toml → [admin] url_prefix, overridden by ADMIN_URL_PREFIX env var
 ADMIN_URL_PREFIX = env("ADMIN_URL_PREFIX", default=None) or _sc_admin.get(
     "url_prefix", "admin"
@@ -339,6 +347,10 @@ CELERY_BEAT_SCHEDULE = {
     "sync-edam-monthly": {
         "task": "edam.sync",
         "schedule": 2592000,  # every 30 days (~monthly)
+    },
+    "sync-spdx-licenses-fortnightly": {
+        "task": "licenses.sync",
+        "schedule": 2592000,  # every 30 days
     },
 }
 

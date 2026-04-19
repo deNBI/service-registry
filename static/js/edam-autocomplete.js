@@ -85,14 +85,16 @@ function buildEdamPicker(sel) {
   const warn    = root.querySelector("#" + uid + "-warn");
   let hiIdx = -1, timer = null;
 
-  /* 6. Sync to native select */
-  function sync() {
+  /* 6. Sync to native select. `silent` skips the change event — used only
+     during the initial render at build time so we don't trigger form-level
+     `change` listeners (draft autosave, etc.) before the user has interacted. */
+  function sync(silent) {
     Array.from(sel.options).forEach(o => { o.selected = chosen.has(o.value); });
-    sel.dispatchEvent(new Event("change", {bubbles:true}));
+    if (!silent) sel.dispatchEvent(new Event("change", {bubbles:true}));
   }
 
   /* 7. Render pills */
-  function render() {
+  function render(silent) {
     pills.querySelectorAll(".ep-pill").forEach(p => p.remove());
     const n = chosen.size;
     counter.textContent = n + " / " + MAX;
@@ -118,7 +120,7 @@ function buildEdamPicker(sel) {
       pill.querySelector("button").addEventListener("click", () => { chosen.delete(val); render(); sync(); inp.focus(); });
       pills.appendChild(pill);
     });
-    sync();
+    sync(silent);
   }
 
   clrBtn.addEventListener("click", () => { chosen.clear(); render(); inp.focus(); });
@@ -204,12 +206,8 @@ function buildEdamPicker(sel) {
     getValue:   ()   => Array.from(chosen),
     setValue:   vals => { chosen.clear(); vals.forEach(v => { if (chosen.size<MAX) chosen.add(v); }); render(); },
   };
-  sel._tomSelect = {
-    getValue: () => Array.from(chosen),
-    addItem:  v  => sel._edamPicker.addItem(v),
-    clear:    ()  => { chosen.clear(); render(); },
-    options:  Object.fromEntries(ALL.map(o=>[o.val,{value:o.val,text:o.txt}])),
-  };
+  // Shared draft-restore hook consumed by form_scripts.html
+  sel._draftRestore = vals => sel._edamPicker.setValue(Array.isArray(vals) ? vals : [vals].filter(Boolean));
 
   /* 10. Inject keyframe animation once */
   if (!document.getElementById("ep-style")) {
@@ -219,7 +217,7 @@ function buildEdamPicker(sel) {
     document.head.appendChild(s);
   }
 
-  render();
+  render(true);  // initial paint only — don't fire change (would trip draft autosave before restore)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -307,6 +305,14 @@ function buildCompactSelect(sel, label) {
   searchI.addEventListener("input", () => renderList(searchI.value));
   searchI.addEventListener("focus", () => { searchI.style.borderColor="#5c9d25"; searchI.style.boxShadow="0 0 0 3px rgba(92,157,37,.2)"; });
   searchI.addEventListener("blur",  () => { searchI.style.borderColor="#e5e7eb"; searchI.style.boxShadow="none"; });
+
+  // Shared draft-restore hook
+  sel._draftRestore = function(vals) {
+    const list = Array.isArray(vals) ? vals : [vals].filter(Boolean);
+    chosen.clear();
+    list.forEach(v => { if (ALL.find(o => o.val === v)) chosen.add(v); });
+    sync(); renderList(searchI.value); renderSel();
+  };
 
   renderList(); renderSel();
 }
@@ -401,6 +407,14 @@ function buildCompactSelectSingle(sel, label) {
   searchI.addEventListener("focus", () => { searchI.style.borderColor="#5c9d25"; searchI.style.boxShadow="0 0 0 3px rgba(92,157,37,.2)"; });
   searchI.addEventListener("blur",  () => { searchI.style.borderColor="#e5e7eb"; searchI.style.boxShadow="none"; });
 
+  // Shared draft-restore hook (single-select: first value wins)
+  sel._draftRestore = function(vals) {
+    const v = Array.isArray(vals) ? vals[0] : vals;
+    chosen.clear();
+    if (v && ALL.find(o => o.val === v)) chosen.add(v);
+    sync(); renderList(searchI.value); renderSel();
+  };
+
   renderList(); renderSel();
 }
 
@@ -445,8 +459,27 @@ function initBioToolsPrefill() {
   function apply(d) {
     const m={id_service_name:d.name,id_service_description:d.description,id_website_url:d.homepage,id_github_url:d.github_url,id_publications_pmids:d.publications};
     Object.entries(m).forEach(([id,val])=>{ if(!val)return; const el=document.getElementById(id); if(el&&!el.value){el.value=val;el.dispatchEvent(new Event("change",{bubbles:true}));} });
-    const lic=document.getElementById("id_license");
-    if(lic&&d.license&&!lic.value){const n=d.license.toLowerCase().replace(/[^a-z0-9]/g,"");for(const o of lic.options){if(o.value.toLowerCase().replace(/[^a-z0-9]/g,"")==n){lic.value=o.value;break;}}}
+    if (d.license) {
+      const lic=document.getElementById("id_licenses");
+      const note=document.getElementById("id_license_note");
+      let matched=false;
+      if (lic && lic._edamPicker && !lic.selectedOptions.length) {
+        const n=d.license.toLowerCase().replace(/[^a-z0-9]/g,"");
+        for (const o of lic.options) {
+          if (o.value.toLowerCase().replace(/[^a-z0-9]/g,"")===n) {
+            lic._edamPicker.addItem(o.value);
+            matched=true;
+            break;
+          }
+        }
+      }
+      // Fallback: if bio.tools returned a non-SPDX license string, capture it in license_note
+      // (truncate to the field's max_length=200 to avoid a silent backend validation error).
+      if (!matched && note && !note.value) {
+        note.value=d.license.slice(0,200);
+        note.dispatchEvent(new Event("change",{bubbles:true}));
+      }
+    }
     applyEdam("id_edam_topics",d.edam_topics||[]);
     applyEdam("id_edam_operations",d.edam_operations||[]);
   }

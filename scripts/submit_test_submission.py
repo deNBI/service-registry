@@ -92,7 +92,9 @@ _STATIC_PAYLOAD: dict = {
     # ── Section D: Websites & links ───────────────────────────────────────
     "website_url": "https://github.com/kalininalab/metaprofi",
     "terms_of_use_url": "https://github.com/kalininalab/metaprofi/blob/main/LICENSE",
-    "license": "gpl2",
+    "licenses": [
+        "MIT"
+    ],
     "github_url": "https://github.com/kalininalab/metaprofi",
     "biotools_url": "https://bio.tools/metaprofi",
     "fairsharing_url": "",
