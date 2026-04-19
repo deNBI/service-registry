@@ -432,32 +432,24 @@ class TestServiceMaturityTags:
 
 
 # ===========================================================================
-# License field — YAML-driven choices
+# SPDX License M2M field
 # ===========================================================================
 
 
-class TestLicenseField:
-    def test_license_field_has_no_hardcoded_choices(self):
-        """After migration, the model field must carry no choices."""
+class TestSpdxLicenseM2M:
+    def test_licenses_field_exists(self):
+        """The licenses M2M field must exist on ServiceSubmission."""
         from apps.submissions.models import ServiceSubmission
 
-        field = ServiceSubmission._meta.get_field("license")
-        assert not field.choices
+        field = ServiceSubmission._meta.get_field("licenses")
+        assert field.related_model.__name__ == "SpdxLicense"
 
-    def test_license_field_max_length_is_50(self):
+    def test_license_note_field_exists(self):
+        """The license_note CharField must exist on ServiceSubmission."""
         from apps.submissions.models import ServiceSubmission
 
-        field = ServiceSubmission._meta.get_field("license")
-        assert field.max_length == 50
-
-    @pytest.mark.django_db
-    def test_license_accepts_new_slug_not_in_old_list(self, db):
-        """eupl12 was not in the old hardcoded list — must save cleanly now."""
-        from tests.factories import ServiceSubmissionFactory
-
-        sub = ServiceSubmissionFactory(license="eupl12")
-        sub.refresh_from_db()
-        assert sub.license == "eupl12"
+        field = ServiceSubmission._meta.get_field("license_note")
+        assert field.max_length == 200
 
 
 # ===========================================================================

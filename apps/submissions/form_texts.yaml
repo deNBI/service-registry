@@ -159,31 +159,17 @@ terms_of_use_url:
   help: "Terms of use."
   tooltip: "Link to terms, conditions, or usage policies of the service."
 
-license:
-  help: "Service license."
-  tooltip: "Select the license under which the service or software is provided."
-  choices:
-    agpl3: "GNU AGPLv3"
-    gpl3: "GNU GPLv3"
-    gpl2: "GNU GPLv2"
-    lgpl3: "GNU LGPLv3"
-    lgpl21: "GNU LGPLv2.1"
-    mpl2: "Mozilla Public License 2.0"
-    apache2: "Apache License 2.0"
-    mit: "MIT License"
-    bsd2: "BSD 2-Clause License"
-    bsd3: "BSD 3-Clause License"
-    isc: "ISC License"
-    boost: "Boost Software License 1.0"
-    epl2: "Eclipse Public License 2.0"
-    eupl12: "European Union Public License 1.2"
-    cc0: "Creative Commons Zero (CC0 1.0)"
-    cc_by4: "Creative Commons Attribution 4.0"
-    cc_by_sa4: "Creative Commons Attribution-ShareAlike 4.0"
-    artistic2: "Artistic License 2.0"
-    unlicense: "The Unlicense"
-    other: "None of the above"
-    na: "Not applicable"
+# licenses and license_note work together - at least one is required.
+# licenses: Select SPDX identifiers (MIT, Apache-2.0, etc.). Multiple can be selected.
+# license_note: Use ONLY for non-SPDX licenses - "Not applicable", "None of the above",
+#               "Proprietary", or a custom license name. Do not add comments or explanations.
+licenses:
+  help: "License(s) under which this service is published."
+  tooltip: "Start typing to search (e.g. MIT, Apache-2.0). Multiple licenses may be selected for dual/mixed licensing. Leave empty and use the note field below if no standard identifier applies."
+
+license_note:
+  help: "Free-text note for cases where no standard license identifier fits (e.g. 'Not applicable', 'Proprietary', or a custom license name)."
+  tooltip: "Use this field when no standard license applies. You can enter 'Not applicable', 'None of the above', 'Proprietary', or a custom license name. At least one of License(s) or this note must be provided."
 
 github_url:
   help: "GitHub repository (optional)."

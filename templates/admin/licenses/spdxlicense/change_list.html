@@ -1,0 +1,10 @@
+{% extends "admin/change_list.html" %}
+
+{% block object-tools-items %}
+  <li>
+    <a href="sync-now/" class="button">
+      ↻ Sync SPDX licenses from upstream
+    </a>
+  </li>
+  {{ block.super }}
+{% endblock %}

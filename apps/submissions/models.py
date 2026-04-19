@@ -379,9 +379,22 @@ class ServiceSubmission(models.Model):
         validators=[_validate_https_url],
         help_text="URL to the service's terms of use (must use https://).",
     )
-    license = models.CharField(
-        max_length=50,
-        help_text="License governing use of this service.",
+    licenses = models.ManyToManyField(
+        "licenses.SpdxLicense",
+        blank=True,
+        related_name="submissions",
+        help_text=(
+            "Licenses governing this service. "
+            "Multiple allowed for dual/mixed licensing."
+        ),
+    )
+    license_note = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text=(
+            "Free-text note for cases where no standard license applies "
+            "(e.g. 'Not applicable', 'Proprietary', or a custom license name)."
+        ),
     )
     github_url = models.URLField(
         max_length=2000,

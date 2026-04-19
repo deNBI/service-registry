@@ -2,7 +2,7 @@
 icon: material/shield-account
 ---
 
-# Admin Guide — de.NBI Service Registry
+# Admin Guide
 
 ## Accessing the Admin Portal
 
@@ -195,22 +195,35 @@ The **Key Management** panel is shown only to users with `manage_apikeys`.
 
 The detail view is organised into collapsible fieldsets. The fieldset layout is:
 
-| Fieldset | Collapsed by default | Contents |
-|---|---|---|
-| **Status & Metadata** | No | ID, Status (read-only display), submitted/updated timestamps, Submission IP (superusers only), **Status action buttons**, Primary maturity tag (radio), Secondary maturity tags (checkboxes) |
-| **Last Change Summary** | Yes | Most recent field-level diff |
-| **Change History** | Yes | Full diff log (most recent 50 entries, each collapsible); a footer line shows the total count when the log exceeds 50 entries |
-| **A — General** | No | Date of entry, submitter name/affiliation, ELIXIR-DE flag |
-| **B — Service Master Data** | No | Service name, description, year, categories, toolbox, EDAM, publications, logo + preview |
-| **C — Responsibilities** | No | Responsible PIs, host institute, service centre, contact details |
-| **D — Websites & Links** | No | All URL fields |
-| **E — KPIs** | No | KPI monitoring, start year |
-| **F — Discoverability & Outreach** | No | Keywords, survey, comments |
-| **G — Consent** | No | Data protection consent (read-only) |
-| **🔑 API Key Management** | No | Inline key list + Revoke / Reset / Issue controls (hidden if user lacks `manage_apikeys`) |
+| Fieldset                           | Collapsed by default | Contents                                                                                                                                                                                     |
+| ---------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Status & Metadata**              | No                   | ID, Status (read-only display), submitted/updated timestamps, Submission IP (superusers only), **Status action buttons**, Primary maturity tag (radio), Secondary maturity tags (checkboxes) |
+| **Last Change Summary**            | Yes                  | Most recent field-level diff                                                                                                                                                                 |
+| **Change History**                 | Yes                  | Full diff log (most recent 50 entries, each collapsible); a footer line shows the total count when the log exceeds 50 entries                                                                |
+| **A — General**                    | No                   | Date of entry, submitter name/affiliation, ELIXIR-DE flag                                                                                                                                    |
+| **B — Service Master Data**        | No                   | Service name, description, year, categories, toolbox, EDAM, publications, logo + preview                                                                                                     |
+| **C — Responsibilities**           | No                   | Responsible PIs, host institute, service centre, contact details                                                                                                                             |
+| **D — Websites & Links**           | No                   | All URL fields                                                                                                                                                                               |
+| **E — KPIs**                       | No                   | KPI monitoring, start year                                                                                                                                                                   |
+| **F — Discoverability & Outreach** | No                   | Keywords, survey, comments                                                                                                                                                                   |
+| **G — Consent**                    | No                   | Data protection consent (read-only)                                                                                                                                                          |
+| **🔑 API Key Management**          | No                   | Inline key list + Revoke / Reset / Issue controls (hidden if user lacks `manage_apikeys`)                                                                                                    |
+
+### Submission Edit Form (Submitter View)
+
+When a submitter edits their submission via `/update/`, they see the same form structure as the initial registration. The edit form includes:
+
+| Feature                 | Description                                                                  |
+| ----------------------- | ---------------------------------------------------------------------------- |
+| **Sidebar navigation**  | Links to jump between sections (A-G) and a progress bar for required fields  |
+| **Completion progress** | Real-time percentage showing required field completion                       |
+| **Danger Zone card**    | Only shown for non-deprecated services; allows marking service as deprecated |
+| **Deprecated badge**    | Shows if service is deprecated; only admins can reverse                      |
+
+The sidebar is shared between registration (`/register/`) and edit (`/update/`) forms.
 
 !!! note "Status is read-only"
-    The `Status` field is displayed for information only — it cannot be edited directly. All status transitions are made via the **Status action buttons** panel in the same fieldset (see below).
+The `Status` field is displayed for information only — it cannot be edited directly. All status transitions are made via the **Status action buttons** panel in the same fieldset (see below).
 
 ### Changing Submission Status
 
@@ -221,16 +234,16 @@ The detail view is organised into collapsible fieldsets. The fieldset layout is:
 
 **Individual status change (change view):** Open a submission. The **Status & Metadata** fieldset contains a row of action buttons — the current status is highlighted and its button is disabled. Click any other button to trigger the transition:
 
-| Button | Required permission | Result |
-|---|---|---|
-| **Approve** | `approve_servicesubmission` | → `Approved` |
-| **Reject** | `approve_servicesubmission` | → `Rejected` |
-| **Mark Under Review** | `change_servicesubmission` | → `Under Review` |
-| **Deprecate** | `change_servicesubmission` | → `Deprecated` |
-| **Undeprecate → Submitted** | `change_servicesubmission` | → `Submitted` (re-enters review queue) |
+| Button                      | Required permission         | Result                                 |
+| --------------------------- | --------------------------- | -------------------------------------- |
+| **Approve**                 | `approve_servicesubmission` | → `Approved`                           |
+| **Reject**                  | `approve_servicesubmission` | → `Rejected`                           |
+| **Mark Under Review**       | `change_servicesubmission`  | → `Under Review`                       |
+| **Deprecate**               | `change_servicesubmission`  | → `Deprecated`                         |
+| **Undeprecate → Submitted** | `change_servicesubmission`  | → `Submitted` (re-enters review queue) |
 
 !!! note "Status actions bypass the form diff"
-    Status button clicks are processed separately from the regular form save — they do **not** produce a field-level diff entry in the **Last Change Summary** or **Change History**. They are recorded in the **Django LogEntry** (History tab) with a plain text message.
+Status button clicks are processed separately from the regular form save — they do **not** produce a field-level diff entry in the **Last Change Summary** or **Change History**. They are recorded in the **Django LogEntry** (History tab) with a plain text message.
 
 Two emails are sent automatically on every status transition:
 
@@ -239,26 +252,26 @@ Two emails are sent automatically on every status transition:
 
 **Bulk status changes:** Select submissions in the list view, then choose an action from the dropdown:
 
-| Action | Required permission | Result |
-|---|---|---|
-| Approve selected | `approve_servicesubmission` | → `Approved` |
-| Reject selected | `approve_servicesubmission` | → `Rejected` |
-| Mark selected as Under Review | `change_servicesubmission` | → `Under Review` |
-| Deprecate selected | `change_servicesubmission` | → `Deprecated` |
-| Undeprecate selected | `change_servicesubmission` | → `Submitted` (returns to review queue) |
+| Action                        | Required permission         | Result                                  |
+| ----------------------------- | --------------------------- | --------------------------------------- |
+| Approve selected              | `approve_servicesubmission` | → `Approved`                            |
+| Reject selected               | `approve_servicesubmission` | → `Rejected`                            |
+| Mark selected as Under Review | `change_servicesubmission`  | → `Under Review`                        |
+| Deprecate selected            | `change_servicesubmission`  | → `Deprecated`                          |
+| Undeprecate selected          | `change_servicesubmission`  | → `Submitted` (returns to review queue) |
 
 All bulk transitions fire the admin + submitter email notifications via Celery and are logged to Django's LogEntry.
 
 !!! note "Maturity tags are auto-cleared on any non-approved transition"
-    Both individual buttons and bulk actions call the same underlying `_change_status` function, which clears maturity tags whenever moving away from `Approved`. See [Assigning Maturity Tags](#assigning-maturity-tags) for details.
+Both individual buttons and bulk actions call the same underlying `_change_status` function, which clears maturity tags whenever moving away from `Approved`. See [Assigning Maturity Tags](#assigning-maturity-tags) for details.
 
 !!! note "Deprecation is owner-reversible only by admins"
 Service owners can mark their own service as deprecated via the edit form. Only admins can reverse a deprecation (via bulk action or the change view button), which resets status to `Submitted` for re-review.
 
 !!! note "Draft status"
-    `draft` is defined in the data model but is not set by the submission form
-    or any automated workflow. It can only be assigned via direct admin edit
-    and is reserved for a future "save as draft" feature.
+`draft` is defined in the data model but is not set by the submission form
+or any automated workflow. It can only be assigned via direct admin edit
+and is reserved for a future "save as draft" feature.
 
 ## Audit Logging
 
@@ -325,13 +338,13 @@ Each record captures:
 
 ### Which to use?
 
-| Use Case                                                           | Recommended                       |
-| ------------------------------------------------------------------ | --------------------------------- |
-| Track ALL changes to a submission (submitter + admin + API)        | **Submission Change Log**         |
-| Quick audit of admin actions only                                  | **Django LogEntry (History tab)** |
+| Use Case                                                          | Recommended                       |
+| ----------------------------------------------------------------- | --------------------------------- |
+| Track ALL changes to a submission (submitter + admin + API)       | **Submission Change Log**         |
+| Quick audit of admin actions only                                 | **Django LogEntry (History tab)** |
 | Query changes programmatically (e.g., "who changed X on date Y?") | **Submission Change Log**         |
-| Simple overview of admin activity                                  | **Django LogEntry**               |
-| Audit trail for hard-deleted submissions                           | **Deletion Audit Log**            |
+| Simple overview of admin activity                                 | **Django LogEntry**               |
+| Audit trail for hard-deleted submissions                          | **Deletion Audit Log**            |
 
 ---
 
@@ -339,16 +352,16 @@ Each record captures:
 
 Every submission change view includes a collapsible **Last Change Summary** section (collapsed by default — click to expand). It shows the most recent edit only.
 
-| Column         | Description                                                    |
-| -------------- | -------------------------------------------------------------- |
+| Column         | Description                                                                                        |
+| -------------- | -------------------------------------------------------------------------------------------------- |
 | **Changed by** | `submitter` (edit form), `admin:<username>` (admin backend), or `api:<key_label>` (REST API PATCH) |
-| **Changed at** | UTC timestamp of the edit                                      |
-| **Field**      | Human-readable field name                                      |
-| **Before**     | Previous value (shown in red)                                  |
-| **After**      | New value (shown in green)                                     |
+| **Changed at** | UTC timestamp of the edit                                                                          |
+| **Field**      | Human-readable field name                                                                          |
+| **Before**     | Previous value (shown in red)                                                                      |
+| **After**      | New value (shown in green)                                                                         |
 
 !!! note "Status button clicks are not captured here"
-    The **Last Change Summary** (and **Change History**) only reflect field-level edits saved through the regular form. Status transitions triggered by the action buttons (Approve, Reject, etc.) do **not** produce a `SubmissionChangeLog` entry and will not appear here. Those actions are recorded in the **Django LogEntry** (History tab) instead.
+The **Last Change Summary** (and **Change History**) only reflect field-level edits saved through the regular form. Status transitions triggered by the action buttons (Approve, Reject, etc.) do **not** produce a `SubmissionChangeLog` entry and will not appear here. Those actions are recorded in the **Django LogEntry** (History tab) instead.
 
 ### Email notifications for edits (updated event)
 
@@ -392,9 +405,9 @@ Both formats include all submission fields:
 | bio.tools (sync)       | `biotools_last_synced_at` — ISO datetime of last successful sync, or empty                                                                                                                       |
 
 !!! note "JSON export uses a nested submitter object"
-    In the JSON export, submitter fields are grouped under a `"submitter"` key:
-    `{"submitter": {"first_name": "…", "last_name": "…", "affiliation": "…"}, …}`.
-    The CSV export keeps these fields flat (`submitter_first_name`, `submitter_last_name`, `submitter_affiliation`).
+In the JSON export, submitter fields are grouped under a `"submitter"` key:
+`{"submitter": {"first_name": "…", "last_name": "…", "affiliation": "…"}, …}`.
+The CSV export keeps these fields flat (`submitter_first_name`, `submitter_last_name`, `submitter_affiliation`).
 
 ---
 
@@ -457,11 +470,11 @@ Each submission detail page shows the **Submission API Keys** section. This show
 **Key scope:** All keys issued from the submission change page have **write** scope. To issue a **read-only** key, use the standalone **Submission API Keys** list view (see below) where a scope selector is available.
 
 !!! note "Key operations do not email the submitter"
-    Revoke, Reset, and Issue actions are silent — no notification is sent to the submitter. Communicate the new key manually (e.g. encrypted email, phone).
+Revoke, Reset, and Issue actions are silent — no notification is sent to the submitter. Communicate the new key manually (e.g. encrypted email, phone).
 
 !!! warning "Key shown once only"
-    Key plaintexts are shown once in the admin interface and are never stored anywhere.
-    If you accidentally close the browser before copying the key, you must reset it again.
+Key plaintexts are shown once in the admin interface and are never stored anywhere.
+If you accidentally close the browser before copying the key, you must reset it again.
 
 All key operations are logged in Django's admin audit log (**History** tab, top right of the submission change view).
 
@@ -686,24 +699,6 @@ docker compose up -d web
 
 No code changes, no migrations, no template edits required.
 
-### Adding or updating a license option
-
-To add a new license to the submission form, edit `apps/submissions/form_texts.yaml`
-and add a line under `license.choices`:
-
-```yaml
-license:
-  choices:
-    myslug: "My License Name"   # ← add here
-```
-
-Open a PR with this change. **No migration, no model edit, no schema change required.**
-The new option appears on the form after the next deployment.
-
-To rename a label, update the value. To remove a choice, delete the line
-(note: existing submissions that stored the old slug will still display the raw
-slug in the change log — they do not need to be updated).
-
 ---
 
 ## Customising Email Notification Text
@@ -822,6 +817,62 @@ docker compose exec web python manage.py shell -c \
   "from apps.edam.models import EdamTerm; print(EdamTerm.objects.count())"
 # Expected: ~3400. If 0, the auto-seed failed (check migrate output for [edam] lines).
 # Fix: docker compose exec web python manage.py sync_edam
+```
+
+---
+
+## SPDX License Management {#spdx-management}
+
+**Location:** Admin → Licenses → SPDX Licenses
+
+SPDX licenses are imported from the canonical [SPDX License List](https://spdx.org/licenses/) and are read-only in the admin. Entries cannot be added or deleted manually — all changes come through a sync.
+
+### How seeding works
+
+| Trigger                          | When                      | Notes                                                                                                                         |
+| -------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **Auto-seed on first migrate**   | Once, on a fresh database | Fires as a `post_migrate` signal when the `SpdxLicense` table is empty. Downloads ~500 KB from the SPDX GitHub raw URL, fast. |
+| **Fortnightly beat schedule**    | Every 15 days             | Celery beat task `licenses.sync` refreshes the table as SPDX publishes new releases.                                          |
+| **Admin "Sync Licenses" button** | On demand                 | Queues a background Celery task. Useful after a known SPDX release or if the automatic sync failed.                           |
+| **CLI**                          | On demand                 | `python manage.py sync_spdx_licenses` — synchronous, progress shown in terminal.                                              |
+
+### Viewing Licenses
+
+The list shows: SPDX id (e.g. `MIT`, `Apache-2.0`), name, OSI approval, FSF libre, deprecated flag, SPDX version. Filter by **OSI-approved**, **deprecated**, or search by id/name.
+
+### Deprecated entries
+
+Licenses that are either deprecated upstream in SPDX, or that disappear from upstream in a subsequent sync, are marked `is_deprecated=True`. Deprecated entries are hidden from new submission pickers but **retained in the database** so existing submissions referencing them are not broken.
+
+### Triggering a manual sync
+
+**From the admin UI**:
+
+1. Go to **Licenses → SPDX Licenses**
+2. Click **↻ Sync Licenses from SPDX** in the top-right toolbar
+3. A green message confirms the task was queued
+4. Refresh the page after a few seconds to see the updated license count and version
+
+**From the CLI**:
+
+```bash
+# Download and import the latest SPDX License List
+docker compose exec web python manage.py sync_spdx_licenses
+
+# Dry-run — parse and count licenses without writing to the database
+docker compose exec web python manage.py sync_spdx_licenses --dry-run
+
+# Load from a local file (air-gapped servers)
+docker compose exec web python manage.py sync_spdx_licenses --url /app/licenses.json
+```
+
+### If the Form Shows No SPDX Licenses
+
+```bash
+docker compose exec web python manage.py shell -c \
+  "from apps.licenses.models import SpdxLicense; print(SpdxLicense.objects.count())"
+# Expected: 600+. If 0, the auto-seed failed.
+# Fix: docker compose exec web python manage.py sync_spdx_licenses
 ```
 
 ---

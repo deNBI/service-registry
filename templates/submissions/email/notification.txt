@@ -30,7 +30,8 @@ Description:
 Categories: {{ categories|join:", " }}
 Year Established: {{ submission.year_established }}
 Website: {{ submission.website_url }}
-License: {{ submission.get_license_display }}
+Licenses: {% for lic in submission.licenses.all %}{{ lic.license_id }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}
+License Note: {{ submission.license_note|default:"—" }}
 
 Publications/PMIDs:
 {{ submission.publications_pmids }}

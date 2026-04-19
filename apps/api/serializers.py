@@ -20,6 +20,7 @@ from rest_framework import serializers
 
 from apps.biotools.models import BioToolsFunction, BioToolsRecord
 from apps.edam.models import EdamTerm
+from apps.licenses.models import SpdxLicense
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
 from apps.submissions.models import (
     DESCRIPTION_MAX_LENGTH,
@@ -164,11 +165,24 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
     )
     logo_url = serializers.SerializerMethodField()
 
-    # License field — CharField so DRF's built-in ChoiceField rejection does not
-    # fire before validate_license, which needs to allow legacy slugs on existing
-    # submissions. All slug validation is handled in validate_license below.
-    license = serializers.CharField(
-        help_text="License governing use of this service.",
+    licenses = serializers.SlugRelatedField(
+        many=True,
+        slug_field="license_id",
+        queryset=SpdxLicense.objects.all(),
+        required=False,
+        help_text=(
+            "SPDX licenseId strings governing this service. "
+            "Multiple allowed for dual/mixed licensing."
+        ),
+    )
+    license_note = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=200,
+        help_text=(
+            "Free-text note for custom, unusual, or 'not applicable' licenses. "
+            "Use when no SPDX identifier fits."
+        ),
     )
 
     links = serializers.SerializerMethodField()
@@ -216,7 +230,8 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
             # Section D
             "website_url",
             "terms_of_use_url",
-            "license",
+            "licenses",
+            "license_note",
             "github_url",
             "biotools_url",
             "fairsharing_url",
@@ -343,35 +358,6 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(e.message)
         return value
 
-    def validate_license(self, value):
-        """Validate license slug against YAML choices or allow existing legacy values.
-
-        For new submissions (no instance): only accept YAML-defined licenses.
-        For existing submissions (instance exists): also allow previously valid
-        licenses that may have been removed from YAML (preserves audit trail).
-        """
-        if not value:
-            return value
-
-        from apps.submissions.forms import _LICENSE_CHOICES
-
-        allowed_slugs = {slug for slug, _ in _LICENSE_CHOICES}
-
-        # If slug is in current YAML choices, it's always valid
-        if value in allowed_slugs:
-            return value
-
-        # For new submissions (no PK yet), reject unknown slugs
-        if self.instance is None or not self.instance.pk:
-            raise serializers.ValidationError(
-                f"'{value}' is not a valid license. "
-                "Please select a license from the list."
-            )
-
-        # For existing submissions, allow the value to pass through (legacy data)
-        # The diff system will display the raw slug if no label is defined
-        return value
-
     def validate(self, data: dict) -> dict:
         """Cross-field validation mirroring model.clean() and the web form."""
         errors = {}
@@ -454,6 +440,28 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
                 errors["associated_partner_note"] = (
                     "Please provide the name and affiliation of the associated partner."
                 )
+
+        # License invariant: every submission must have at least one of
+        # licenses (M2M) or license_note. Validate on create, PATCH, and PUT —
+        # including PATCHes that don't touch license fields, to catch any
+        # legacy/migrated submission drifting into a license-less state.
+        licenses = (
+            data["licenses"]
+            if "licenses" in data
+            else list(self.instance.licenses.all())
+            if self.instance
+            else []
+        )
+        license_note = (
+            data["license_note"]
+            if "license_note" in data
+            else getattr(self.instance, "license_note", "")
+        )
+        if not licenses and not (license_note and license_note.strip()):
+            errors["licenses"] = (
+                "Please select at least one license, or fill in a license note "
+                "if no standard license applies."
+            )
 
         if errors:
             raise serializers.ValidationError(errors)

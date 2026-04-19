@@ -116,7 +116,8 @@ All URL fields must use `https://`. Domain-specific validators are applied on sa
 |---|---|---|---|
 | `website_url` | varchar(2000) | HTTPS only | Required |
 | `terms_of_use_url` | varchar(2000) | HTTPS only | Required |
-| `license` | varchar(50) | — | Valid values are YAML-driven from `apps/submissions/form_texts.yaml`. Model field has no choices constraint; validation is at form/serializer level. Legacy license slugs are allowed on existing submissions. |
+| `licenses` (M2M → `licenses.SpdxLicense`) | — | — | Zero or more SPDX-identified licenses (multi-select). Form validation requires at least one selection OR a non-empty `license_note`. See the SPDX License table below. |
+| `license_note` | varchar(200) | — | Optional free-text fallback when no SPDX identifier fits (e.g. "Other", "Not applicable", "None of the above", or a custom license name). |
 | `github_url` | varchar(2000) | `https://github.com/` prefix | Optional |
 | `biotools_url` | varchar(2000) | `https://bio.tools/` prefix | Optional; triggers bio.tools sync on save |
 | `fairsharing_url` | varchar(2000) | `https://fairsharing.org/` prefix | Optional |
@@ -332,6 +333,32 @@ CREATE INDEX ON edam_edamterm (label);
 | `topic` | Section B — scientific domain of the service |
 | `operation` | Section B — what the service does computationally |
 | `data`, `format`, `identifier` | Stored via bio.tools sync; not directly selectable in the form |
+
+---
+
+## `licenses_spdxlicense`
+
+**Source:** `apps/licenses/models.py` → `SpdxLicense`
+
+Local cache of the SPDX License List (600+ entries). Seeded by `manage.py sync_spdx_licenses` (and auto-seeded post-migrate on first deploy, refreshed fortnightly via Celery beat).
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | serial | PK | |
+| `license_id` | varchar(80) | UNIQUE, indexed | SPDX canonical id, e.g. `MIT`, `Apache-2.0` |
+| `name` | varchar(200) | indexed | Human-readable name, e.g. `MIT License` |
+| `reference_url` | varchar(500) | | Canonical SPDX page URL |
+| `see_also` | jsonb | default `[]` | Additional reference URLs |
+| `is_osi_approved` | boolean | default `false`, indexed | OSI open-source approval |
+| `is_fsf_libre` | boolean | default `false` | FSF Free Software Foundation libre |
+| `is_deprecated` | boolean | default `false`, indexed | Hidden from new picks; retained so existing submissions keep their selection |
+| `spdx_version` | varchar(20) | | SPDX list version, e.g. `3.23` |
+
+**Sync behaviour:**
+
+- On-demand from the admin via the "Sync Now" button on the SPDX License list.
+- Monthly Celery beat task `licenses.sync` refreshes the table.
+- Sweep step marks any rows missing from upstream as `is_deprecated=True` so references from existing submissions are preserved.
 
 ---
 

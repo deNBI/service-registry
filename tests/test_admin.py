@@ -230,7 +230,8 @@ class TestExportCSV:
         "publications_pmids",
         "website_url",
         "terms_of_use_url",
-        "license",
+        "licenses",
+        "license_note",
         "github_url",
         "biotools_url",
         "fairsharing_url",
@@ -462,7 +463,8 @@ class TestExportJSON:
         "publications_pmids",
         "website_url",
         "terms_of_use_url",
-        "license",
+        "licenses",
+        "license_note",
         "github_url",
         "biotools_url",
         "fairsharing_url",
@@ -686,7 +688,8 @@ def _edit_form_payload(sub, **overrides):
         "internal_contact_email": sub.internal_contact_email,
         "website_url": sub.website_url,
         "terms_of_use_url": sub.terms_of_use_url,
-        "license": sub.license,
+        "licenses": [lic.pk for lic in sub.licenses.all()],
+        "license_note": sub.license_note or "",
         "github_url": sub.github_url or "",
         "biotools_url": sub.biotools_url or "",
         "fairsharing_url": sub.fairsharing_url or "",
@@ -929,25 +932,24 @@ class TestServiceSubmissionAdminTags:
 
 @pytest.mark.django_db
 class TestAdminLicenseField:
-    def test_change_form_renders_license_as_select(self, admin_client):
-        """The license field must render as a <select> widget, not a text input."""
+    def test_change_form_renders_licenses_as_select(self, admin_client):
+        """The licenses field must render as a <select multiple> widget."""
         sub = ServiceSubmissionFactory()
         url = reverse("admin:submissions_servicesubmission_change", args=[sub.pk])
         resp = admin_client.get(url)
         assert resp.status_code == 200
-        # A <select> for license must be present in the rendered HTML
-        assert b'name="license"' in resp.content
-        assert b"<select" in resp.content
+        # A <select multiple> for licenses must be present in the rendered HTML
+        assert b'name="licenses"' in resp.content
+        assert b"<select multiple" in resp.content or b"<select" in resp.content
 
-    def test_change_form_license_select_contains_yaml_options(self, admin_client):
-        """The license select must include slugs from form_texts.yaml."""
+    def test_change_form_license_note_rendered(self, admin_client):
+        """The license_note field must be rendered."""
         sub = ServiceSubmissionFactory()
         url = reverse("admin:submissions_servicesubmission_change", args=[sub.pk])
         resp = admin_client.get(url)
         assert resp.status_code == 200
-        # Options derived from YAML must be present
-        assert b'value="mit"' in resp.content
-        assert b'value="eupl12"' in resp.content
+        # license_note text input must be present
+        assert b'name="license_note"' in resp.content
 
 
 # ===========================================================================

@@ -1,18 +1,20 @@
 {% comment %}
-Shared form behaviour scripts — included by both register.html and form_body.html.
+Shared form behaviour scripts — included by both register.html and edit.html.
 
 Covers:
-  - Toolbox name toggle
-  - Associated partner note toggle (with page-load init for pre-populated edit forms)
-  - KPI start year toggle (with page-load init)
-  - Error highlighting (is-invalid classes, scroll-to-first-error)
   - Affiliation combobox (TomSelect)
   - Sidebar progress bar & active section highlighting
   - Date of entry auto-fill
-  - localStorage draft save/restore
+  - Conditional toggles (toolbox, associated partner, KPI)
+  - Error highlighting (is-invalid, scroll-to-first-error)
+  - localStorage draft save/restore (per-form namespaced)
 
-All templates that include form_body.html or have the registration form structure
-should include this partial to get consistent behaviour.
+The draft key is read from `data-draft-key` on the form element, so register
+and edit use different localStorage buckets and cannot overwrite each other.
+
+All custom multi/single-select pickers (EDAM, SPDX licenses, CompactSelect,
+CompactSelectSingle, AffiliationCombobox) expose a `_draftRestore(vals)` hook
+that this module calls uniformly — no widget-specific branching here.
 {% endcomment %}
 {% load static %}
 <script src="{% static 'js/tom-select.complete.min.js' %}"></script>
@@ -21,11 +23,10 @@ should include this partial to get consistent behaviour.
 
 // ---------------------------------------------------------------------------
 // Affiliation combobox — Tom Select with create
-// Support multiple fields (submitter_affiliation, host_institute)
+// Supports multiple fields (submitter_affiliation, host_institute)
 // ---------------------------------------------------------------------------
 (function() {
   document.querySelectorAll('[data-affiliation-combobox="true"]').forEach(function(el) {
-    if (typeof TomSelect === 'undefined') return;
     var ts = new TomSelect(el, {
       create: true,
       maxItems: 1,
@@ -38,27 +39,26 @@ should include this partial to get consistent behaviour.
         }
       }
     });
-    el._tomSelect = ts;  // expose for draft restore
+    el._tomSelect = ts;  // expose for legacy callers
     if (el.classList.contains('is-invalid')) {
       var wrapper = el.closest('.ts-wrapper');
       if (wrapper) wrapper.classList.add('is-invalid');
     }
+    // Shared draft-restore hook
+    el._draftRestore = function(vals) {
+      var v = Array.isArray(vals) ? vals[0] : vals;
+      if (!v) return;
+      if (!ts.options[v]) ts.addOption({ value: v, text: v });
+      ts.setValue(v, true);
+    };
   });
-  // Signal that all TomSelect instances are initialised so draft restore
-  // can run immediately instead of relying on a fixed setTimeout delay.
-  document.dispatchEvent(new CustomEvent('tomselect:ready'));
 })();
 
 // ---------------------------------------------------------------------------
-// Sidebar: progress bar + active section highlighting + section error dots
+// Sidebar: progress bar + active section highlighting
 // ---------------------------------------------------------------------------
 (function() {
-  // Count total required fields and compute % filled
   function updateProgress() {
-    const required = document.querySelectorAll(
-      '#registration-form [required], #registration-form [aria-required="true"]'
-    );
-    // Also count fields that are wrapped in a required field-wrapper
     const wrappers = document.querySelectorAll('[id^="field-wrapper-"]');
     let total = 0, filled = 0;
     wrappers.forEach(w => {
@@ -79,7 +79,6 @@ should include this partial to get consistent behaviour.
     if (label) label.textContent = pct + '%';
   }
 
-  // Intersection observer — highlight active section in sidebar
   const sections = document.querySelectorAll('[id^="section-"]');
   const navLinks  = document.querySelectorAll('.sidebar-nav .nav-link[data-section]');
   if (sections.length && 'IntersectionObserver' in window) {
@@ -101,10 +100,8 @@ should include this partial to get consistent behaviour.
   updateProgress();
 })();
 
-
 // ---------------------------------------------------------------------------
 // Date of entry — auto-fill with today's date if empty
-// Works as a reliable fallback alongside the backend initial value.
 // ---------------------------------------------------------------------------
 (function() {
   var d = document.getElementById('id_date_of_entry');
@@ -118,146 +115,9 @@ should include this partial to get consistent behaviour.
 })();
 
 // ---------------------------------------------------------------------------
-// localStorage draft — save & restore form fields across page loads
-// Excluded: CSRF token, data_protection_consent (must re-check deliberately)
-// ALTCHA widget: Explicitly reset when draft is cleared to prevent stale state
+// Conditional field toggles — shared by register and edit.
+// Each also runs on page load so pre-populated edit forms initialise correctly.
 // ---------------------------------------------------------------------------
-(function formDraft() {
-  const DRAFT_KEY = 'denbi_registration_draft';
-  const SKIP_NAMES = new Set(['csrfmiddlewaretoken', 'data_protection_consent', 'altcha']);
-  const form = document.getElementById('registration-form');
-  if (!form) return;
-
-  // Guard flag to prevent change events from triggering widget updates during draft restoration
-  let isRestoringDraft = false;
-
-  // --- Restore draft on page load (only if form has no server-side errors) ---
-  // Detect both field-level errors and non-field errors (e.g. CAPTCHA failure shown in alert-danger)
-  const hasServerErrors =
-    document.querySelector('[id^="field-errors-"] .text-danger') !== null ||
-    document.querySelector('.alert-danger') !== null;
-
-  function resetAltchaWidget() {
-    // Reset the Altcha widget to fetch a fresh challenge and clear the solution
-    const widget = form.querySelector('altcha-widget');
-    if (widget) {
-      // Clear the hidden altcha field (where widget stores the solution)
-      const altchaField = form.querySelector('input[name="altcha"]');
-      if (altchaField) altchaField.value = '';
-
-      // If widget has a reset or refresh method, call it
-      if (typeof widget.reset === 'function') {
-        widget.reset();
-      } else if (typeof widget.refresh === 'function') {
-        widget.refresh();
-      }
-    }
-  }
-
-  function restoreDraft() {
-    let draft;
-    try { draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch(e) { return; }
-    if (!draft) return;
-
-    Object.entries(draft).forEach(function([name, value]) {
-      if (SKIP_NAMES.has(name)) return;
-      const els = form.querySelectorAll('[name="' + CSS.escape(name) + '"]');
-      if (!els.length) return;
-      const el = els[0];
-
-      if (el.type === 'checkbox') {
-        el.checked = value === true || value === 'true';
-      } else if (el.type === 'radio') {
-        // For radio groups, set the right one
-        els.forEach(r => { r.checked = (r.value === value); });
-      } else if (el.tagName === 'SELECT' && el.multiple) {
-        const vals = Array.isArray(value) ? value : [value];
-        Array.from(el.options).forEach(opt => {
-          opt.selected = vals.includes(opt.value);
-        });
-        // Sync TomSelect if present
-        if (el._tomSelect) {
-          el._tomSelect.clear(true);
-          vals.forEach(v => { try { el._tomSelect.addItem(v, true); } catch(e){} });
-        }
-      } else if (el.tagName === 'SELECT' && el._tomSelect && !el.multiple) {
-        // Single-value Tom Select combobox (e.g. affiliation): add option if missing, then select
-        var ts = el._tomSelect;
-        if (!ts.options[value]) ts.addOption({ value: value, text: value });
-        ts.setValue(value, true);
-      } else if (el.tagName === 'SELECT') {
-        el.value = value;
-      } else {
-        el.value = value;
-      }
-    });
-  }
-
-  // Only restore if there are no server-side errors (so the user sees real errors, not draft)
-  if (!hasServerErrors) {
-    // Wait for TomSelect to signal it's ready before restoring multi-select fields.
-    // The 'tomselect:ready' event is dispatched synchronously at the end of the
-    // TomSelect init block above, so this fires immediately on a normal page load
-    // and never relies on a fixed timer.
-    document.addEventListener('tomselect:ready', function() {
-      isRestoringDraft = true;
-      restoreDraft();
-      isRestoringDraft = false;
-    }, { once: true });
-  }
-
-  // --- Save draft on every input change (skip during restoration) ---
-  function saveDraft() {
-    if (isRestoringDraft) return;  // Don't save while restoring draft
-
-    const draft = {};
-    const data = new FormData(form);
-    for (const [name, value] of data.entries()) {
-      if (SKIP_NAMES.has(name)) continue;
-      // Handle multi-select: store as array
-      if (draft[name] !== undefined) {
-        draft[name] = [].concat(draft[name], value);
-      } else {
-        draft[name] = value;
-      }
-    }
-    try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch(e) {}
-  }
-
-  form.addEventListener('input', saveDraft);
-  form.addEventListener('change', saveDraft);
-
-  // --- Clear draft on successful submit ---
-  form.addEventListener('submit', function() {
-    try { localStorage.removeItem(DRAFT_KEY); } catch(e) {}
-  });
-
-  // --- Draft indicator ---
-  try {
-    const existing = localStorage.getItem(DRAFT_KEY);
-    if (existing && !hasServerErrors) {
-      const indicator = document.createElement('div');
-      indicator.className = 'alert alert-info alert-sm py-2 mb-3 d-flex align-items-center justify-content-between';
-      indicator.innerHTML = '<span><strong>Draft restored</strong> — your previously entered data has been reloaded.</span>'
-        + '<button type="button" class="btn btn-sm btn-outline-secondary ms-3" id="clear-draft-btn">Clear draft</button>';
-      form.insertBefore(indicator, form.firstChild);
-      document.getElementById('clear-draft-btn').addEventListener('click', function() {
-        localStorage.removeItem(DRAFT_KEY);
-        indicator.remove();
-        form.reset();
-        resetAltchaWidget();  // Reset Altcha to fetch a fresh challenge
-      });
-    }
-  } catch(e) {}
-})();
-
-// ---------------------------------------------------------------------------
-// Conditional fields — shared by register and edit forms.
-// Each toggle also runs immediately on page load so pre-populated edit forms
-// initialise correctly without requiring a user interaction first.
-// ---------------------------------------------------------------------------
-
-// Toolbox name: show when is_toolbox = True
 document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
   radio.addEventListener('change', function() {
     var wrapper = document.getElementById('toolbox-name-wrapper');
@@ -265,7 +125,6 @@ document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
   });
 });
 
-// Associated partner note: show when any selected PI is an associated partner
 (function() {
   var piSelect = document.getElementById('id_responsible_pis');
   if (!piSelect) return;
@@ -279,7 +138,6 @@ document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
   updateAssociatedPartner();
 })();
 
-// KPI start year: hide when monitoring is "planned"
 (function() {
   var kpiSelect = document.getElementById('id_kpi_monitoring');
   if (!kpiSelect) return;
@@ -293,7 +151,6 @@ document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
 
 // ---------------------------------------------------------------------------
 // Error highlighting — mark invalid fields, scroll to first error.
-// Shared because both register and edit forms can render validation errors.
 // ---------------------------------------------------------------------------
 (function highlightErrors() {
   var firstErrorEl = null;
@@ -324,5 +181,171 @@ document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
     }
     setTimeout(function() { firstErrorEl.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 100);
   }
+})();
+
+// ---------------------------------------------------------------------------
+// localStorage draft — save & restore form fields across page loads
+// Draft key is per-form (data-draft-key on the <form>). Registration and edit
+// use separate buckets so they cannot overwrite each other.
+// Excluded: CSRF token, data_protection_consent (must re-check deliberately),
+// altcha (stale challenges are rejected server-side), logo (file input).
+// ---------------------------------------------------------------------------
+(function formDraft() {
+  const form = document.getElementById('registration-form');
+  if (!form) return;
+
+  const DRAFT_KEY = form.dataset.draftKey;
+  if (!DRAFT_KEY) return;  // Draft system disabled for this form
+
+  const SKIP_NAMES = new Set(['csrfmiddlewaretoken', 'data_protection_consent', 'altcha', 'logo']);
+  let isRestoringDraft = false;
+
+  // Detect server-side errors so the user sees the real error, not the draft
+  const hasServerErrors =
+    document.querySelector('[id^="field-errors-"] .text-danger') !== null ||
+    document.querySelector('.alert-danger') !== null;
+
+  function resetAltchaWidget() {
+    const widget = form.querySelector('altcha-widget');
+    if (!widget) return;
+    const altchaField = form.querySelector('input[name="altcha"]');
+    if (altchaField) altchaField.value = '';
+    if (typeof widget.reset === 'function') widget.reset();
+    else if (typeof widget.refresh === 'function') widget.refresh();
+  }
+
+  function restoreDraft() {
+    let draft;
+    try { draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch(e) { return false; }
+    if (!draft) return false;
+
+    let restoredCount = 0;
+
+    Object.entries(draft).forEach(function([name, value]) {
+      if (SKIP_NAMES.has(name)) return;
+      const els = form.querySelectorAll('[name="' + CSS.escape(name) + '"]');
+      if (!els.length) return;
+      const el = els[0];
+
+      // Custom widgets expose a uniform hook — take it if present
+      if (typeof el._draftRestore === 'function') {
+        // Only count as restored if there's at least one valid (truthy) value
+        // Arrays: filter to check if any truthy values exist
+        // Scalars: check if truthy directly
+        var hasValidValue;
+        if (Array.isArray(value)) {
+          hasValidValue = value.some(v => v);
+        } else {
+          hasValidValue = value;
+        }
+        if (hasValidValue) {
+          try { el._draftRestore(value); } catch(e) {}
+          restoredCount++;
+        }
+        return;
+      }
+
+      if (el.type === 'checkbox') {
+        el.checked = value === true || value === 'true';
+        restoredCount++;
+      } else if (el.type === 'radio') {
+        els.forEach(r => { r.checked = (r.value === value); });
+        restoredCount++;
+      } else if (el.tagName === 'SELECT' && el.multiple) {
+        const vals = Array.isArray(value) ? value : [value];
+        // Only count if there are truthy values to restore
+        if (vals.some(v => v)) {
+          Array.from(el.options).forEach(opt => {
+            opt.selected = vals.includes(opt.value);
+          });
+          restoredCount++;
+        }
+      } else {
+        // For text inputs, only count if value is non-empty
+        if (value) {
+          el.value = value;
+          restoredCount++;
+        }
+      }
+    });
+
+    // Only return true if we actually restored something
+    return restoredCount > 0;
+  }
+
+  function saveDraft() {
+    if (isRestoringDraft) return;
+
+    // Sync Tom Select values back to native selects before saving
+    // Tom Select with persist: false doesn't update the underlying select
+    document.querySelectorAll('[data-affiliation-combobox="true"]').forEach(function(el) {
+      var ts = el._tomSelect;
+      if (ts) {
+        var val = ts.getValue();
+        if (val) {
+          el.value = val;
+        } else {
+          el.value = '';
+        }
+      }
+    });
+
+    const draft = {};
+    const data = new FormData(form);
+    for (const [name, value] of data.entries()) {
+      if (SKIP_NAMES.has(name)) continue;
+      if (draft[name] !== undefined) {
+        draft[name] = [].concat(draft[name], value);
+      } else {
+        draft[name] = value;
+      }
+    }
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch(e) {}
+  }
+
+  function onReady(cb) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', cb, { once: true });
+    } else {
+      // Defer to the next microtask so picker-building DOMContentLoaded handlers
+      // registered earlier still get to run first.
+      queueMicrotask(cb);
+    }
+  }
+
+  // Restore once all custom pickers have had their DOMContentLoaded init.
+  // Suppress HTMX during restore so per-field `hx-post` validators don't fire
+  // a burst of server requests on page load for every restored field.
+  if (!hasServerErrors) {
+    onReady(function() {
+      isRestoringDraft = true;
+      form.setAttribute('hx-disable', 'true');
+      const restored = restoreDraft();
+      form.removeAttribute('hx-disable');
+      isRestoringDraft = false;
+
+      if (restored) {
+        const indicator = document.createElement('div');
+        indicator.className = 'alert alert-info alert-sm py-2 mb-3 d-flex align-items-center justify-content-between';
+        indicator.innerHTML =
+          '<span><strong>Draft restored</strong> — your previously entered data has been reloaded.</span>' +
+          '<button type="button" class="btn btn-sm btn-outline-secondary ms-3" id="clear-draft-btn">Clear draft</button>';
+        form.insertBefore(indicator, form.firstChild);
+        document.getElementById('clear-draft-btn').addEventListener('click', function() {
+          try { localStorage.removeItem(DRAFT_KEY); } catch(e) {}
+          indicator.remove();
+          form.reset();
+          resetAltchaWidget();
+        });
+      }
+    });
+  }
+
+  // `change` alone covers every widget type (text, select, radio, checkbox,
+  // textarea). Adding `input` on top caused every keystroke to double-save.
+  form.addEventListener('change', saveDraft);
+  form.addEventListener('submit', function() {
+    try { localStorage.removeItem(DRAFT_KEY); } catch(e) {}
+  });
 })();
 </script>

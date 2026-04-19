@@ -225,7 +225,7 @@ Two semantic permissions are defined on `ServiceSubmission` beyond the standard 
 | `submissions.approve_servicesubmission` | Approve and reject status transitions; bulk approve/reject actions. | Admin-only via `/admin/`. Not exposed via API. |
 | `submissions.manage_apikeys`            | Issue, reset, and revoke `SubmissionAPIKey` objects.                | Admin-only via `/admin/`. Not exposed via API. |
 
-These permissions are enforced in the Django admin backend (see [Admin Guide → Custom permission codenames](admin-guide.md#custom-permission-codenames)). They are kept separate from standard CRUD permissions so editors can fix data without having final-decision authority or being able to create credentials that grant submitters write access.
+These permissions are enforced solely in the Django admin backend. See [Admin Guide → Custom permission codenames](admin-guide.md#custom-permission-codenames) for more detail.
 
 ---
 
@@ -453,8 +453,8 @@ header and in error bodies. Use it when reporting issues.
 | ----------------------- | ---------- | ------------ | ---------------------------------------------- |
 | `internal_contact_name` | required   | never        | Write-only; stored for admin use only          |
 | `internal_contact_email`| required   | never        | Write-only; stored for admin use only          |
-| `primary_maturity_tag`  | ignored    | yes          | Read-only in API; set by admins via backend    |
-| `secondary_maturity_tags`| ignored   | yes          | Read-only in API; set by admins via backend    |
+| `primary_maturity_tag`  | ignored    | yes          | Read-only in API; set by admins via backend. See [Maturity Tags](#maturity-tags) |
+| `secondary_maturity_tags`| ignored   | yes          | Read-only in API; set by admins via backend. See [Maturity Tags](#maturity-tags) |
 | `submission_ip`         | —          | never        | Server-generated; not exposed via API          |
 | `user_agent_hash`       | —          | never        | Server-generated; not exposed via API          |
 

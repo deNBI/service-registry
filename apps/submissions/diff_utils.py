@@ -17,31 +17,10 @@ imports at module level) so they can be unit-tested without a database.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
-
-import yaml
 
 if TYPE_CHECKING:
     from apps.submissions.models import ServiceSubmission
-
-# ---------------------------------------------------------------------------
-# YAML-based label lookup for license field
-# ---------------------------------------------------------------------------
-_FORM_TEXTS_PATH = Path(__file__).resolve().parent / "form_texts.yaml"
-try:
-    _ft = yaml.safe_load(_FORM_TEXTS_PATH.read_text(encoding="utf-8")) or {}
-except FileNotFoundError:
-    _ft = {}
-
-# Fields whose display labels are defined in form_texts.yaml choices dicts.
-# Maps field name → {slug: label} for lookup in snapshot().
-_YAML_CHOICE_FIELDS: dict[str, dict[str, str]] = {
-    "license": dict((_ft.get("license", {}).get("choices") or {}).items()),
-}
-# _ft is a temporary variable used only to build _YAML_CHOICE_FIELDS above.
-# Delete it to avoid it leaking into the module namespace.
-del _ft
 
 # ---------------------------------------------------------------------------
 # Field definitions
@@ -73,7 +52,7 @@ DIFFABLE_FIELDS: list[tuple[str, str]] = [
     ("internal_contact_email", "Internal Contact Email"),
     ("website_url", "Website URL"),
     ("terms_of_use_url", "Terms of Use URL"),
-    ("license", "License"),
+    ("license_note", "License Note"),
     ("github_url", "GitHub URL"),
     ("biotools_url", "bio.tools URL"),
     ("fairsharing_url", "FAIRsharing URL"),
@@ -97,6 +76,7 @@ DIFFABLE_M2M: list[tuple[str, str]] = [
     ("responsible_pis", "Responsible PIs"),
     ("edam_topics", "EDAM Topics"),
     ("edam_operations", "EDAM Operations"),
+    ("licenses", "Licenses"),
 ]
 
 # Fields that have a get_FOO_display() method (choice fields).
@@ -115,16 +95,6 @@ _FILE_FIELDS = {"logo"}
 # Each field in this set MUST have a corresponding get_FOO_display_list() model
 # method that returns human-readable labels, matching the _CHOICE_FIELDS pattern.
 _LIST_FIELDS = {"secondary_maturity_tags"}
-
-# snapshot() checks _CHOICE_FIELDS before _YAML_CHOICE_FIELDS in its elif chain.
-# A field present in both would silently use the wrong branch. Guard against this.
-_overlap = _CHOICE_FIELDS & set(_YAML_CHOICE_FIELDS)
-assert not _overlap, (
-    f"Fields {_overlap} appear in both _CHOICE_FIELDS and _YAML_CHOICE_FIELDS. "
-    "Remove them from _CHOICE_FIELDS so the YAML label lookup takes precedence."
-)
-del _overlap
-
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -147,9 +117,6 @@ def snapshot(instance: "ServiceSubmission") -> dict:
         if field in _CHOICE_FIELDS:
             display_method = f"get_{field}_display"
             value = getattr(instance, display_method, lambda: "")() or ""
-        elif field in _YAML_CHOICE_FIELDS:
-            slug = getattr(instance, field, "") or ""
-            value = _YAML_CHOICE_FIELDS[field].get(slug, slug)
         elif field in _FK_FIELDS:
             related = getattr(instance, field, None)
             value = str(related) if related is not None else ""
@@ -187,6 +154,10 @@ def snapshot_m2m(instance: "ServiceSubmission") -> dict:
         manager = getattr(instance, field, None)
         if manager is None:
             data[field] = []
+        elif field == "licenses":
+            # For licenses M2M, use license_id instead of str(item) for consistency
+            # with the original license field behavior
+            data[field] = sorted(license.license_id for license in manager.all())
         else:
             data[field] = sorted(str(item) for item in manager.all())
     return data

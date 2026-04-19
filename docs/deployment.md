@@ -17,26 +17,7 @@ icon: material/rocket-launch
 
 ## Configuration
 
-Configuration is split across two files:
-
-- **`.env`** — secrets and environment-specific overrides (database password, secret key, SMTP credentials). Copy from `.env.example`.
-- **`config/site.toml`** — non-secret settings: branding, contact email, feature flags, admin URL prefix. Edit this file for any site customisation; no image rebuild required.
-
-Copy `.env.example` to `.env` and fill in the three required values:
-
-```bash
-cp .env.example .env
-```
-
-**Required — startup fails without these:**
-
-| Variable         | Description                                                                                                                                    |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SECRET_KEY`     | Django secret key — generate with `python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"` |
-| `DB_PASSWORD`    | PostgreSQL password — must match `POSTGRES_PASSWORD` used to initialise the DB volume                                                          |
-| `REDIS_PASSWORD` | Redis password                                                                                                                                 |
-
-Everything else has sensible defaults for development. See `.env.example` for the full reference.
+See [Configuration Reference](configuration.md) for all settings including `.env` and `config/site.toml`. The production deployment below uses these settings.
 
 ---
 

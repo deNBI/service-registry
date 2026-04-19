@@ -2,7 +2,7 @@
 icon: material/account
 ---
 
-# User Guide — de.NBI Service Registration
+# User Guide
 
 ## What is this?
 
@@ -15,6 +15,11 @@ bioinformatics service for inclusion in the [de.NBI services catalogue](https://
 
 1. Go to **/register/** and fill in the form. All fields marked **(\*)** are required.
 
+   The form features a **sidebar on the right** with:
+   - Quick navigation links to jump between sections (A-G)
+   - A progress bar showing required field completion percentage
+   - Contact information for support
+
 2. Work through each section:
 
    | Section              | What you need                                                                  |
@@ -23,8 +28,8 @@ bioinformatics service for inclusion in the [de.NBI services catalogue](https://
    | B — Service Data     | Service name, description, year, category, EDAM annotations, publications      |
    | C — Responsibilities | Responsible PI(s), host institute, contact emails                              |
    | D — Links            | Service website, terms of use, license, optional repository and registry links |
-   | E — KPIs             | Whether KPI monitoring is in place                                             |
-   | F — Discoverability  | Keywords for search and citation tracking                                      |
+   | E — KPIs             | Whether KPI monitoring is in place, start year (if applicable)                |
+   | F — Discoverability  | Keywords for search, citation tracking, and survey participation                    |
    | G — Consent          | Data protection consent (required to submit)                                   |
 
 3. Click **Submit Registration**.
@@ -35,6 +40,10 @@ bioinformatics service for inclusion in the [de.NBI services catalogue](https://
    - Is shown **exactly once** — it will not be emailed to you.
    - Is required to edit your submission later.
    - If lost, contact [servicecoordination@denbi.de](mailto:servicecoordination@denbi.de) to have a new one issued.
+
+### API Key Scope
+
+Each submission gets a **write-scope** API key by default, which allows full editing of your service registration. The registry team can also issue **read-scope** keys upon request for external consumers (e.g., dashboards or automated systems) that only need to view data without making changes.
 
 ---
 
@@ -51,7 +60,7 @@ bioinformatics service for inclusion in the [de.NBI services catalogue](https://
 > **Note:** If your submission was already approved and you edit it, the status will reset to "Submitted" for re-review.
 
 !!! info "Security notice"
-    If you receive a "your registration has been updated" email that you did not initiate, contact the de.NBI administration office immediately. The email will include instructions at the bottom.
+If you receive a "your registration has been updated" email that you did not initiate, contact the de.NBI administration office immediately. The email will include instructions at the bottom.
 
 ---
 
@@ -166,11 +175,11 @@ linking here helps with discoverability and FAIR compliance metadata.
 
 You can optionally upload a logo for your service. This field is not required.
 
-| Property | Value |
-|---|---|
+| Property         | Value          |
+| ---------------- | -------------- |
 | Accepted formats | PNG, JPEG, SVG |
-| Maximum size | 10 MB |
-| Required | No |
+| Maximum size     | 10 MB          |
+| Required         | No             |
 
 **How to upload:**
 
@@ -189,6 +198,12 @@ To replace a logo, simply upload a new one when editing your submission. Previou
 
 ---
 
+### Form Auto-Save / Draft
+
+While filling out the form, your progress is automatically saved to your browser's session storage. If you navigate away or close the tab, you can return later and your partially completed form will still be there. This is a **draft** submission — it won't be visible to the registry team until you click Submit.
+
+---
+
 ### Outreach and Survey fields (Section F)
 
 | Field                    | What it means                                                                                                                                                 |
@@ -198,8 +213,15 @@ To replace a logo, simply upload a new one when editing your submission. Previou
 
 ### License
 
-Select the license that governs how users may use your service.
-Select "Not applicable" for services without a software license (e.g. pure databases).
+Select the license that governs how users may use your service. You can select one or more standard licenses from the list (e.g. MIT, Apache-2.0).
+
+If none of the standard licenses apply, use the **License note** field below to enter:
+- "Not applicable"
+- "None of the above"
+- "Proprietary"
+- Or a custom license name
+
+**Note:** At least one of License(s) or License note must be provided.
 
 ---
 
@@ -207,16 +229,24 @@ Select "Not applicable" for services without a software license (e.g. pure datab
 
 Your submission moves through these states:
 
-| Status           | Meaning                                                                                               |
-| ---------------- | ----------------------------------------------------------------------------------------------------- |
-| **Draft**        | Saved locally but not yet submitted. Draft submissions older than 30 days are automatically deleted.  |
-| **Submitted**    | Form submitted. The de.NBI administration office has been notified.                                   |
-| **Under Review** | Actively being reviewed by the service coordination team.                                             |
-| **Approved**     | Your service has been accepted and will appear in the de.NBI services catalogue.                      |
-| **Rejected**     | The submission was not accepted. You will receive an email explaining why. You may edit and resubmit. |
-| **Deprecated**   | The service is no longer active. You can mark your own service as deprecated via the edit form (see below). Only the registry team can reverse this. |
+| Status           | Meaning                                                                                                                                              |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Draft**        | Saved locally but not yet submitted. Draft submissions older than 30 days are automatically deleted.                                                 |
+| **Submitted**    | Form submitted. The de.NBI administration office has been notified.                                                                                  |
+| **Under Review** | Actively being reviewed by the service coordination team.                                                                                            |
+| **Approved**     | Your service has been accepted and will appear in the de.NBI services catalogue.                                                                     |
+| **Rejected**     | The submission was not accepted. You will receive an email explaining why. You may edit and resubmit.                                                |
+| **Deprecated**   | The service is no longer active. You can mark your own service as deprecated via the edit form (see below). Only the registry team can reverse this. Deprecated services are hidden from public listings but retain their history. |
 
 If you edit a submission that was already **Approved**, the status resets to **Submitted** and the administration office is notified to re-review your changes.
+
+### What happens after submission?
+
+1. The de.NBI Service Coordination Office reviews your submission.
+2. You will receive an email at your internal contact address when the status changes.
+3. If approved, your service will appear in the de.NBI services catalogue.
+4. You can update your submission at any time using your API key.
+5. Every time you edit your submission, you will receive a confirmation email listing exactly what changed — so you always have a record of your updates.
 
 ### Deprecating Your Service
 
@@ -230,13 +260,6 @@ The status will be set to **Deprecated** and the registry team will be notified.
 
 ---
 
-## What happens after submission?
-
-1. The de.NBI Service Coordination Office reviews your submission.
-2. You will receive an email at your internal contact address when the status changes.
-3. If approved, your service will appear in the de.NBI services catalogue.
-4. You can update your submission at any time using your API key.
-5. Every time you edit your submission, you will receive a confirmation email listing exactly what changed — so you always have a record of your updates.
 
 ---
 

@@ -9,6 +9,7 @@ email confirmation matching, conditional field visibility, and logo upload.
 import io
 
 import pytest
+from django import forms
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from tests.factories import PIFactory, ServiceCategoryFactory, ServiceCenterFactory
@@ -50,7 +51,8 @@ def _base_form_data(overrides=None):
         # Section D
         "website_url": "https://example.com",
         "terms_of_use_url": "https://example.com/tos",
-        "license": "mit",
+        "licenses": [],
+        "license_note": "Other",
         "github_url": "",
         "biotools_url": "",
         "fairsharing_url": "",
@@ -1142,42 +1144,156 @@ class TestAffiliationCombobox:
 
 
 # ===========================================================================
-# License field — YAML-driven choices
+# License/M2M field - SPDX license selection
 # ===========================================================================
 
 
-class TestLicenseChoices:
-    def test_license_choices_loaded_from_yaml(self):
-        """_LICENSE_CHOICES must be derived from form_texts.yaml at module load."""
-        from apps.submissions.forms import _LICENSE_CHOICES
+@pytest.mark.django_db
+class TestSpdxLicenseField:
+    """Tests for the SPDX license M2M field and widget."""
 
-        slugs = [slug for slug, _ in _LICENSE_CHOICES]
-        assert "mit" in slugs
-        assert "agpl3" in slugs
-        assert "eupl12" in slugs  # new entry not in old hardcoded list
-        assert len(slugs) >= 21
-
-    def test_license_choices_include_labels(self):
-        from apps.submissions.forms import _LICENSE_CHOICES
-
-        label_map = dict(_LICENSE_CHOICES)
-        assert label_map["mit"] == "MIT License"
-        assert label_map["na"] == "Not applicable"
-        assert label_map["other"] == "None of the above"
-
-    @pytest.mark.django_db
-    def test_license_form_rejects_unknown_slug(self):
+    def test_licenses_field_is_selectmultiple(self):
+        """The licenses field must use a SelectMultiple widget."""
         from apps.submissions.forms import SubmissionForm
 
-        data = _base_form_data({"license": "unknown_license_xyz"})
-        form = SubmissionForm(data=data)
+        form = SubmissionForm()
+        assert isinstance(form.fields["licenses"].widget, forms.SelectMultiple)
+
+    @pytest.mark.django_db
+    def test_licenses_field_filters_out_deprecated(self):
+        """Deprecated licenses must not appear in queryset for new submissions."""
+        from apps.licenses.models import SpdxLicense
+        from apps.submissions.forms import SubmissionForm
+
+        # Create a deprecated license
+        SpdxLicense.objects.create(
+            license_id="DEPRECATED-TEST",
+            name="Deprecated Test License",
+            is_deprecated=True,
+        )
+
+        form = SubmissionForm()
+        license_ids = [lic.license_id for lic in form.fields["licenses"].queryset]
+        assert "DEPRECATED-TEST" not in license_ids
+
+    @pytest.mark.django_db
+    def test_form_rejects_empty_licenses_and_empty_license_note(self):
+        """Form must fail when neither licenses nor license_note are provided."""
+        from apps.submissions.forms import SubmissionForm
+
+        data = _base_form_data({"licenses": [], "license_note": ""})
+        form = SubmissionForm(data)
         assert not form.is_valid()
-        assert "license" in form.errors
+        assert form.non_field_errors()
 
     @pytest.mark.django_db
-    def test_license_form_accepts_new_yaml_slug(self):
+    def test_form_accepts_license_note_only(self):
+        """Form must pass when license_note is provided without licenses."""
         from apps.submissions.forms import SubmissionForm
 
-        data = _base_form_data({"license": "eupl12"})
-        form = SubmissionForm(data=data)
+        data = _base_form_data({"licenses": [], "license_note": "Custom license"})
+        form = SubmissionForm(data)
         assert form.is_valid(), form.errors
+
+    @pytest.mark.django_db
+    def test_form_accepts_licenses_only(self):
+        """Form must pass when at least one license is selected without license_note."""
+        from apps.submissions.forms import SubmissionForm
+        from apps.licenses.models import SpdxLicense
+
+        mit = SpdxLicense.objects.create(
+            license_id="MIT-TEST",
+            name="MIT Test License",
+            is_deprecated=False,
+        )
+        data = _base_form_data({"licenses": [mit.pk], "license_note": ""})
+        form = SubmissionForm(data)
+        assert form.is_valid(), form.errors
+
+    @pytest.mark.django_db
+    def test_form_accepts_both_licenses_and_license_note(self):
+        """Form must pass when both licenses and license_note are provided."""
+        from apps.submissions.forms import SubmissionForm
+        from apps.licenses.models import SpdxLicense
+
+        mit = SpdxLicense.objects.create(
+            license_id="MIT-TEST2",
+            name="MIT Test License 2",
+            is_deprecated=False,
+        )
+        data = _base_form_data({"licenses": [mit.pk], "license_note": "Notes"})
+        form = SubmissionForm(data)
+        assert form.is_valid(), form.errors
+
+
+# ===========================================================================
+# Deprecated license behavior
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestDeprecatedLicenseBehavior:
+    """Tests for deprecated license filtering and persistence."""
+
+    def test_deprecated_licenses_hidden_from_new_selection(self):
+        """Deprecated licenses must not appear in the queryset for new submissions."""
+        from apps.submissions.forms import SubmissionForm
+        from apps.licenses.models import SpdxLicense
+
+        # Create a deprecated license
+        SpdxLicense.objects.create(
+            license_id="DEPRECATED-1",
+            name="Deprecated License",
+            is_deprecated=True,
+        )
+
+        form = SubmissionForm()
+        license_ids = [lic.license_id for lic in form.fields["licenses"].queryset]
+        assert "DEPRECATED-1" not in license_ids
+
+    def test_deprecated_licenses_shown_if_already_selected(self):
+        """Deprecated licenses must appear if they were already selected on an existing instance."""
+        from apps.submissions.forms import SubmissionForm
+        from apps.licenses.models import SpdxLicense
+        from tests.factories import ServiceSubmissionFactory
+
+        deprecated = SpdxLicense.objects.create(
+            license_id="DEPRECATED-2",
+            name="Previously Selected Deprecated License",
+            is_deprecated=True,
+        )
+        submission = ServiceSubmissionFactory()
+        submission.licenses.add(deprecated)
+
+        form = SubmissionForm(instance=submission)
+        license_ids = [lic.license_id for lic in form.fields["licenses"].queryset]
+        assert "DEPRECATED-2" in license_ids
+
+    def test_deprecated_licenses_removed_after_deselecting(self):
+        """When editing, if a deprecated license is deselected, it should be removed."""
+        from apps.submissions.forms import SubmissionForm
+        from apps.licenses.models import SpdxLicense
+        from tests.factories import ServiceSubmissionFactory
+
+        deprecated = SpdxLicense.objects.create(
+            license_id="DEPRECATED-3",
+            name="To Be Deselected",
+            is_deprecated=True,
+        )
+        submission = ServiceSubmissionFactory()
+        submission.licenses.add(deprecated)
+
+        # Initial form should show the deprecated license
+        form = SubmissionForm(instance=submission)
+        assert any(
+            lic.license_id == "DEPRECATED-3" for lic in form.fields["licenses"].queryset
+        )
+
+        # Form data that doesn't include the deprecated license should work
+        data = _base_form_data({"licenses": [], "license_note": "Custom"})
+        form = SubmissionForm(data, instance=submission)
+        assert form.is_valid(), form.errors
+        # After save, the deprecated license should no longer be associated
+        form.save()
+        submission.refresh_from_db()
+        assert not submission.licenses.filter(license_id="DEPRECATED-3").exists()
