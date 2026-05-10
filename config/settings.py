@@ -51,6 +51,7 @@ _sc_edam = _sc.get("edam", {})
 _sc_licenses = _sc.get("licenses", {})
 _sc_admin = _sc.get("admin", {})
 _sc_uploads = _sc.get("uploads", {})
+_sc_catalogue = _sc.get("catalogue", {})
 
 
 def env(key, default=None, required=False):
@@ -121,6 +122,7 @@ INSTALLED_APPS = [
     "apps.edam",
     "apps.biotools",
     "apps.licenses",
+    "apps.catalogue",
 ]
 
 # ---------------------------------------------------------------------------
@@ -159,6 +161,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "apps.submissions.context_processors.site_context",
+                "apps.catalogue.context_processors.catalogue_context",
             ],
         },
     },

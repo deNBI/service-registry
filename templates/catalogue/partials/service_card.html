@@ -1,0 +1,147 @@
+{% load static catalogue_tags %}
+{% catalogue_service_url service as service_url %}
+
+<div class="card h-100 catalogue-card">
+  <div class="card-body d-flex flex-column p-4">
+    {# ── Header row: avatar + title ── #}
+    <div class="d-flex align-items-center gap-3 mb-3">
+      <div class="catalogue-avatar flex-shrink-0" aria-hidden="true">
+        {% if service.logo %}
+        <img
+          src="{{ service.logo.url }}"
+          alt=""
+          class="catalogue-avatar-img"
+          loading="lazy"
+          onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
+        />
+        <span class="catalogue-avatar-initial" style="display:none;">{{ service.service_name|first|upper }}</span>
+        {% else %}
+        <span class="catalogue-avatar-initial">{{ service.service_name|first|upper }}</span>
+        {% endif %}
+      </div>
+
+      <div class="min-width-0">
+        <h3 class="catalogue-card-title mb-0">
+          {% if service_url %}
+          <a
+            href="{{ service_url }}"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-decoration-none text-dark"
+          >{{ service.service_name }}</a>
+          {% else %}{{ service.service_name }}{% endif %}
+        </h3>
+        {% if service.service_center %}
+        <div class="catalogue-meta-tiny mt-1">{{ service.service_center.short_name }}</div>
+        {% endif %}
+      </div>
+    </div>
+
+    {# ── Description ── #}
+    <p class="text-muted small catalogue-description mb-3">{{ service.service_description }}</p>
+
+    {# ── Category badges ── #}
+    {% with cats=service.service_categories.all %}
+      {% if cats %}
+      <div class="d-flex flex-wrap gap-1 mb-3">
+        {% for cat in cats %}
+        <span class="badge catalogue-cat-badge">{{ cat.name }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+    {% endwith %}
+
+    {# ── EDAM topics (if configured) ── #}
+    {% if "edam_topics" in card_fields %}
+      {% with topics=service.edam_topics.all %}
+        {% if topics %}
+        <div class="d-flex flex-wrap gap-1 mb-2">
+          {% for t in topics|slice:":3" %}
+          <span class="badge bg-light text-dark border small">{{ t.label }}</span>
+          {% endfor %}
+          {% if topics|length > 3 %}
+          <span class="text-muted small">+{{ topics|length|add:"-3" }}</span>
+          {% endif %}
+        </div>
+        {% endif %}
+      {% endwith %}
+    {% endif %}
+
+    {# ── Maturity tag (if configured) ── #}
+    {% if "maturity_tag" in card_fields and service.primary_maturity_tag %}
+    <div class="mb-2">
+      <span class="badge bg-success">{{ service.get_primary_maturity_tag_display }}</span>
+    </div>
+    {% endif %}
+
+    {# ── Footer: updated date + actions ── #}
+    <div class="mt-auto pt-3 border-top">
+      {% if "updated_at" in card_fields %}
+      <div class="catalogue-meta-tiny mb-2">Updated {{ service.updated_at|date:"j M Y" }}</div>
+      {% endif %}
+
+      <div class="d-flex align-items-center justify-content-between">
+        {% if service_url %}
+        <a
+          href="{{ service_url }}"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="btn btn-sm btn-outline-success fw-semibold"
+          aria-label="Visit {{ service.service_name }}"
+        >Visit Service</a>
+        {% else %}
+        <span></span>
+        {% endif %}
+
+        <div class="d-flex gap-2 align-items-center">
+          {% if service.github_url %}
+          <a
+            href="{{ service.github_url }}"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-secondary catalogue-icon-link"
+            title="View on GitHub"
+            aria-label="View {{ service.service_name }} on GitHub"
+          >
+            <img src="{% static 'img/icons/github.svg' %}" alt="GitHub" width="20" height="20" aria-hidden="true"/>
+          </a>
+          {% endif %}
+          {% if service.biotools_url %}
+          <a
+            href="{{ service.biotools_url }}"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="View on bio.tools"
+            aria-label="View {{ service.service_name }} on bio.tools"
+          >
+            <img src="{% static 'img/icons/biotools.png' %}" alt="bio.tools" width="20" height="20" aria-hidden="true" style="object-fit:contain;"/>
+          </a>
+          {% endif %}
+          {% if service.fairsharing_url %}
+          <a
+            href="{{ service.fairsharing_url }}"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="View on FAIRsharing"
+            aria-label="View {{ service.service_name }} on FAIRsharing"
+          >
+            <img src="{% static 'img/icons/fairsharing.svg' %}" alt="FAIRsharing" width="32" height="16" aria-hidden="true"/>
+          </a>
+          {% endif %}
+          {% if service.other_registry_url %}
+          <a
+            href="{{ service.other_registry_url }}"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-secondary catalogue-icon-link"
+            title="View in other registry"
+            aria-label="View {{ service.service_name }} in another registry"
+          >
+            <img src="{% static 'img/icons/link.svg' %}" alt="Other registry" width="20" height="20" aria-hidden="true"/>
+          </a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

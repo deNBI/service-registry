@@ -1,0 +1,239 @@
+{% extends "base/base.html" %}
+{% load static catalogue_tags %}
+
+{% block title %}Service Catalogue — {{ SITE_NAME }}{% endblock %}
+{% block meta_description %}{{ CATALOGUE_META_DESCRIPTION }}{% endblock %}
+
+{% block extra_head %}
+<meta property="og:title" content="Service Catalogue — {{ SITE_NAME }}">
+<meta property="og:description" content="{{ CATALOGUE_META_DESCRIPTION }}">
+<meta property="og:url" content="{{ SITE_URL }}/catalogue/">
+<link rel="canonical" href="{{ SITE_URL }}/catalogue/">
+<meta name="htmx-config" content='{"historyCacheSize":0}'>
+{% endblock %}
+
+{% block content %}
+{# ── Page header ── #}
+<div class="catalogue-page-header mb-4">
+  <div class="d-flex align-items-end justify-content-between gap-3 flex-wrap">
+    <div>
+      <h1 class="mb-1">Service Catalogue</h1>
+      <p class="text-muted mb-0">{{ CATALOGUE_META_DESCRIPTION }}</p>
+    </div>
+    <div class="text-muted small catalogue-result-count">
+      {% if page_obj.paginator.count %}
+      <strong>{{ page_obj.paginator.count }}</strong> service{{ page_obj.paginator.count|pluralize }} registered
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+
+<form id="filter-form" method="get" action="{% url 'catalogue:index' %}">
+  <input type="hidden" name="page" value="1">
+  <input type="hidden" name="view" id="view-mode-input" value="{{ params.view }}">
+
+  <div class="row g-4">
+    {# ── Filter sidebar ── #}
+    <div class="col-12 col-lg-3">
+      <button
+        class="btn btn-outline-secondary btn-sm d-lg-none mb-2 w-100"
+        type="button"
+        aria-controls="catalogue-filters"
+        aria-expanded="false"
+        onclick="document.getElementById('catalogue-filters').classList.toggle('show')"
+      >☰ Show / hide filters</button>
+      <div id="catalogue-filters">
+        {% include "catalogue/partials/filters.html" %}
+      </div>
+    </div>
+
+    {# ── Main content ── #}
+    <div class="col-12 col-lg-9">
+      {# Sticky toolbar #}
+      <div class="catalogue-toolbar mb-3">
+        {# Row 1: search (full width) #}
+        <div class="mb-2">
+          <label for="catalogue-search" class="visually-hidden">Search services</label>
+          <input
+            type="search"
+            id="catalogue-search"
+            class="form-control form-control-lg catalogue-search-input"
+            placeholder="Search services…"
+            name="q"
+            value="{{ params.search }}"
+            autocomplete="off"
+            onkeydown="if(event.key==='Enter') event.preventDefault();"
+            hx-get="{% url 'catalogue:grid' %}"
+            hx-trigger="keyup delay:300ms, search"
+            hx-target="#catalogue-grid"
+            hx-push-url="true"
+            hx-include="#filter-form"
+            hx-indicator="#catalogue-spinner"
+          />
+        </div>
+
+        {# Row 2: sort + group + view toggle #}
+        <div class="d-flex gap-2 align-items-center flex-wrap">
+          <div class="flex-grow-1" style="max-width:200px;">
+            <label for="sort-select" class="visually-hidden">Sort by</label>
+            <div class="catalogue-select-wrap">
+              <select
+                id="sort-select"
+                class="form-select form-select-sm catalogue-select"
+                name="sort"
+                hx-get="{% url 'catalogue:grid' %}"
+                hx-trigger="change"
+                hx-target="#catalogue-grid"
+                hx-push-url="true"
+                hx-include="#filter-form"
+                hx-indicator="#catalogue-spinner"
+              >
+                <option value="name_asc"    {% if params.sort == "name_asc"    %}selected{% endif %}>A → Z</option>
+                <option value="name_desc"   {% if params.sort == "name_desc"   %}selected{% endif %}>Z → A</option>
+                <option value="updated_desc"{% if params.sort == "updated_desc"%}selected{% endif %}>Recently updated</option>
+                <option value="added_desc"  {% if params.sort == "added_desc"  %}selected{% endif %}>Recently added</option>
+              </select>
+            </div>
+          </div>
+          <div class="flex-grow-1" style="max-width:200px;">
+            <label for="group-select" class="visually-hidden">Group by</label>
+            <div class="catalogue-select-wrap">
+              <select
+                id="group-select"
+                class="form-select form-select-sm catalogue-select"
+                name="group_by"
+                hx-get="{% url 'catalogue:grid' %}"
+                hx-trigger="change"
+                hx-target="#catalogue-grid"
+                hx-push-url="true"
+                hx-include="#filter-form"
+                hx-indicator="#catalogue-spinner"
+              >
+                <option value=""             {% if not params.group_by                   %}selected{% endif %}>No grouping</option>
+                <option value="category"     {% if params.group_by == "category"         %}selected{% endif %}>By category</option>
+                <option value="service_center"{% if params.group_by == "service_center"  %}selected{% endif %}>By service centre</option>
+                <option value="pi"           {% if params.group_by == "pi"               %}selected{% endif %}>By PI</option>
+              </select>
+            </div>
+          </div>
+
+          {# View toggle ── grid / list #}
+          <div class="btn-group ms-auto" role="group" aria-label="View mode">
+            <button
+              type="button"
+              class="btn btn-sm {% if params.view == 'grid' %}btn-success{% else %}btn-outline-secondary{% endif %} catalogue-view-btn"
+              data-view="grid"
+              title="Grid view"
+              aria-pressed="{% if params.view == 'grid' %}true{% else %}false{% endif %}"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5zm8 0A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5zm-8 8A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5zm8 0A1.5 1.5 0 0 1 10.5 9h3A1.5 1.5 0 0 1 15 10.5v3A1.5 1.5 0 0 1 13.5 15h-3A1.5 1.5 0 0 1 9 13.5z"/>
+              </svg>
+              <span class="visually-hidden">Grid view</span>
+            </button>
+            <button
+              type="button"
+              class="btn btn-sm {% if params.view == 'list' %}btn-success{% else %}btn-outline-secondary{% endif %} catalogue-view-btn"
+              data-view="list"
+              title="List view"
+              aria-pressed="{% if params.view == 'list' %}true{% else %}false{% endif %}"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                <path fill-rule="evenodd" d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5"/>
+              </svg>
+              <span class="visually-hidden">List view</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {# Grid swap target #}
+      <div id="catalogue-grid" role="region" aria-live="polite" aria-label="Service listings">
+        {% include "catalogue/partials/service_grid.html" %}
+      </div>
+      <div class="htmx-indicator" id="catalogue-spinner" aria-hidden="true">
+        {% include "catalogue/partials/skeleton_cards.html" %}
+      </div>
+    </div>
+    {# /col-lg-9 #}
+  </div>
+  {# /row #}
+</form>
+
+<script>
+  (function () {
+    // Safe localStorage wrapper — throws SecurityError in some private-browsing modes
+    function lsGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+    function lsSet(key, val) { try { localStorage.setItem(key, val); } catch (e) {} }
+
+    // ── Element-specific init: runs on page load AND after HTMX history restore ──
+    function catalogueInit() {
+      var viewInput = document.getElementById('view-mode-input');
+      var storedView = lsGet('catalogue-view');
+      if (viewInput && storedView && storedView !== viewInput.value) {
+        viewInput.value = storedView;
+      }
+
+      var urlParams = new URLSearchParams(window.location.search);
+      var clearBtn = document.getElementById('sidebar-clear-btn');
+      if (clearBtn) {
+        clearBtn.classList.toggle('d-none', !urlParams.has('category') && !urlParams.has('center'));
+      }
+
+      // Re-attach toggle persistence listeners to (possibly new) filter details elements
+      document.querySelectorAll('.catalogue-filter-group[id]').forEach(function (details) {
+        var key = 'catalogue-filter-' + details.id;
+        if (lsGet(key) === 'open') details.open = true;
+        details.addEventListener('toggle', function () {
+          lsSet(key, details.open ? 'open' : 'closed');
+        });
+      });
+    }
+
+    catalogueInit();
+
+    // Document-level listeners are bound once; guard against re-execution on
+    // history restore (HTMX replaces <body> but keeps <script> tags in memory,
+    // so the IIFE re-runs — duplicate document listeners would otherwise accumulate).
+    if (!document._catalogueListenersBound) {
+      document._catalogueListenersBound = true;
+
+      document.addEventListener('htmx:historyRestore', catalogueInit);
+
+      document.addEventListener('click', function (e) {
+        var btn = e.target.closest('.catalogue-view-btn');
+        if (!btn) return;
+        var view = btn.dataset.view;
+        var viewInput = document.getElementById('view-mode-input');
+        if (viewInput) viewInput.value = view;
+        lsSet('catalogue-view', view);
+        document.querySelectorAll('.catalogue-view-btn').forEach(function (b) {
+          var active = b.dataset.view === view;
+          b.classList.toggle('btn-success', active);
+          b.classList.toggle('btn-outline-secondary', !active);
+          b.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        var searchInput = document.getElementById('catalogue-search');
+        if (searchInput) htmx.trigger(searchInput, 'search');
+      });
+
+      document.addEventListener('change', function (e) {
+        if (!e.target.closest('#catalogue-filters')) return;
+        var clearBtn = document.getElementById('sidebar-clear-btn');
+        if (!clearBtn) return;
+        var anyChecked = document.querySelectorAll('#catalogue-filters input[type="checkbox"]:checked').length > 0;
+        clearBtn.classList.toggle('d-none', !anyChecked);
+      });
+
+      document.addEventListener('htmx:pushedIntoHistory', function () {
+        var urlParams = new URLSearchParams(window.location.search);
+        var clearBtn = document.getElementById('sidebar-clear-btn');
+        if (clearBtn) {
+          clearBtn.classList.toggle('d-none', !urlParams.has('category') && !urlParams.has('center'));
+        }
+      });
+    }
+  })();
+</script>
+{% endblock %}

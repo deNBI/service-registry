@@ -33,6 +33,8 @@ urlpatterns = [
     path("", include("apps.submissions.urls")),
     # bio.tools form integration (HTMX prefill + name search)
     path("biotools/", include("apps.biotools.urls")),
+    # Public Service Catalogue
+    path("catalogue/", include("apps.catalogue.urls")),
     # REST API v1
     path("api/v1/", include("apps.api.urls")),
     # OpenAPI schema + docs

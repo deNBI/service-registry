@@ -110,7 +110,27 @@ license_name = "MIT"
 [features]
 biotools_prefill  = true   # Show bio.tools prefill banner on the form
 edam_annotations  = true   # Show EDAM ontology fields on the form
+catalogue         = false  # Enable the public Service Catalogue at /catalogue/
 ```
+
+### Service Catalogue
+
+```toml
+[catalogue]
+card_fields      = ["categories", "service_center", "edam_topics", "updated_at", "maturity_tag"]
+per_page         = 12
+meta_description = "Browse all approved de.NBI & ELIXIR-DE bioinformatics services."
+```
+
+The catalogue is a public, read-only page at `/catalogue/` that lets anonymous users browse, search, filter, sort, and group all approved services. It is disabled by default — set `[features] catalogue = true` to enable it.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `card_fields` | `["categories", "service_center", "edam_topics", "updated_at", "maturity_tag"]` | Fields shown on each service card. Remove a key to hide that field. Available: `"categories"`, `"service_center"`, `"edam_topics"`, `"maturity_tag"`, `"updated_at"` |
+| `per_page` | `12` | Number of service cards per page (server-side pagination). |
+| `meta_description` | `"Browse all approved…"` | Content of the catalogue page `<meta name="description">` and OpenGraph description tags. |
+
+After enabling, the "Service Catalogue" link appears automatically in the navbar. Disabling the flag hides the link and makes the route return 404.
 
 ### EDAM ontology sync
 
@@ -407,6 +427,13 @@ All values from `site.toml` are injected into every Django template via the
 {{ SITE.contact.email }}
 {{ SITE.links.kpi_cheatsheet }}
 {{ SITE.features.biotools_prefill }}
+{{ SITE.features.catalogue }}
+
+{# Catalogue-specific variables (from apps/catalogue/context_processors.py) #}
+{{ CATALOGUE_CARD_FIELDS }}
+{{ CATALOGUE_PER_PAGE }}
+{{ CATALOGUE_ENABLED }}
+{{ CATALOGUE_META_DESCRIPTION }}
 {{ SITE.email.subject_prefix }}
 ```
 

@@ -143,6 +143,14 @@
         <li class="nav-item">
           <a class="nav-link" href="{% url 'submissions:update' %}">Update a Registration</a>
         </li>
+        {% if SITE.features.catalogue %}
+        <li class="nav-item">
+          <a class="nav-link {% if '/catalogue' in request.path %}active{% endif %}"
+             href="{% url 'catalogue:index' %}">
+            Service Catalogue
+          </a>
+        </li>
+        {% endif %}
         {% if USER_GUIDE_URL %}
         <li class="nav-item">
           <a class="nav-link" href="{{ USER_GUIDE_URL }}" target="_blank" rel="noopener noreferrer">User Guide</a>
@@ -199,9 +207,7 @@
 <script src="{% static 'js/htmx.min.js' %}"></script>
 
 <script>
-  document.body.setAttribute('hx-headers', JSON.stringify({
-    'X-CSRFToken': document.cookie.match(/csrftoken=([^;]+)/)?.[1] || ''
-  }));
+  document.body.setAttribute('hx-headers', '{"X-CSRFToken": "' + (document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '') + '"}');
 </script>
 
 <script src="{% static 'js/edam-autocomplete.js' %}"></script>

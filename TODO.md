@@ -32,17 +32,6 @@ If a submitter loses their API key, they are currently locked out with no self-s
 3. The recovery link (signed token, short TTL) issues a new API key and invalidates old ones
 4. Document in `docs/user-guide.md`
 
-### Public Service Directory
-A public-facing `/services/` page listing all approved service registrations with search and filter by category/centre.
-
-**Why:** Currently the registry is input-only from the public's perspective. A browsable directory would make it useful as a reference.
-
-**Approach:**
-1. Add a `ServiceListView` in `apps/submissions/views.py` filtered to `status=approved`
-2. Add a template with search (client-side or HTMX) and category filter
-3. Add to `apps/submissions/urls.py` and link from the home page
-4. Decide whether EDAM topics and bio.tools links should be shown
-
 ---
 
 ## Code Quality

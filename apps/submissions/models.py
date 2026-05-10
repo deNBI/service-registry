@@ -521,6 +521,9 @@ class ServiceSubmission(models.Model):
             models.Index(fields=["service_center"]),
             # Compound index for the admin list view default sort + status filter
             models.Index(fields=["-submitted_at", "status"]),
+            # Catalogue sort indexes
+            models.Index(fields=["updated_at"]),
+            models.Index(fields=["status", "-updated_at"]),
         ]
 
     def __str__(self) -> str:

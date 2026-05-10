@@ -42,6 +42,7 @@ The project follows Django's app-per-domain convention. Each app has a single cl
 | `registry` | Reference data. `PrincipalInvestigator`, `ServiceCategory`, `ServiceCenter` models. |
 | `biotools` | bio.tools integration. HTTP client, sync logic, Celery tasks, post_save signal. |
 | `edam` | EDAM ontology. `EdamTerm` model, `sync_edam` management command. |
+| `catalogue` | Public Service Catalogue. Read-only browsing of approved services at `/catalogue/`. Isolated app with no new models; queries `ServiceSubmission` via `selectors.py`. Feature-flagged via `site.toml [features] catalogue`. |
 
 ---
 
@@ -176,6 +177,8 @@ terms_by_uri = {t.uri: t for t in EdamTerm.objects.filter(uri__in=uris)}
 | `BioToolsRecord.biotools_id` | Primary lookup key for the bio.tools API endpoint |
 | `EdamTerm.uri`, `.accession`, `.branch`, `.label` | EDAM endpoint filters and lookups |
 | `EdamTerm (branch, is_obsolete)` | Compound — form queryset always filters both |
+| Compound `(status, -updated_at)` | Catalogue sort by "recently updated" filtered to approved services |
+| `ServiceSubmission.updated_at` | Catalogue sort by recently updated |
 
 ---
 
@@ -231,6 +234,8 @@ All static assets are vendored locally in `static/` — zero CDN requests at run
 | `static/redoc/bundles/redoc.standalone.js` | ReDoc 2.2.0 | `/api/redoc/` |
 | `static/img/favicon.ico` | de.NBI favicon | All pages |
 | `static/css/registry.css` | Project custom | All pages |
+| `static/img/icons/biotools.svg` | — | Service card bio.tools link icon |
+| `static/img/icons/fairsharing.svg` | — | Service card FAIRsharing link icon |
 
 WhiteNoise serves these through Gunicorn with long `Cache-Control: public, immutable` headers.
 

@@ -131,6 +131,9 @@ biotools_prefill = true
 # Enable EDAM ontology annotation fields on the registration form.
 edam_annotations = true
 
+# Enable the public Service Catalogue page.
+catalogue = true
+
 #-----------------------------------------------------------------------------
 # [edam] — EDAM Ontology sync settings
 # -----------------------------------------------------------------------------
@@ -186,3 +189,19 @@ url_prefix = "admin-denbi"
 # Default: 10 MB. Set lower to tighten limits, higher to allow larger files.
 # After changing, restart the web container: docker compose restart web
 logo_max_bytes = 10_485_760
+
+
+# -----------------------------------------------------------------------------
+# [catalogue] — Public Service Catalogue settings
+# -----------------------------------------------------------------------------
+[catalogue]
+
+# Fields shown on each service card. Remove a key to hide that field.
+# Available: "categories", "service_center", "edam_topics", "maturity_tag", "updated_at"
+card_fields = ["categories", "service_center", "edam_topics", "updated_at", "maturity_tag"]
+
+# Number of service cards per page (server-side pagination).
+per_page = 12
+
+# Meta description used in the catalogue page <meta name="description"> and OpenGraph tags.
+meta_description = "Browse all approved de.NBI & ELIXIR-DE bioinformatics services."

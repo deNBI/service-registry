@@ -1,0 +1,46 @@
+{# Six placeholder skeleton cards shown during HTMX loading #}
+<div class="row g-3" aria-hidden="true" aria-label="Loading services…">
+  {% for i in "123456" %}
+  <div class="col-12 col-sm-6 col-xl-4">
+    <div class="catalogue-skeleton-card">
+      <div class="d-flex align-items-center gap-3 mb-3">
+        <div
+          class="catalogue-skeleton rounded-circle"
+          style="width:44px;height:44px;flex-shrink:0;"
+        ></div>
+        <div class="flex-grow-1">
+          <div
+            class="catalogue-skeleton mb-2"
+            style="height:14px;width:70%;"
+          ></div>
+          <div class="catalogue-skeleton" style="height:11px;width:40%;"></div>
+        </div>
+      </div>
+      <div
+        class="catalogue-skeleton mb-2"
+        style="height:11px;width:100%;"
+      ></div>
+      <div class="catalogue-skeleton mb-3" style="height:11px;width:80%;"></div>
+      <div class="d-flex gap-2 mb-3">
+        <div
+          class="catalogue-skeleton rounded-pill"
+          style="height:20px;width:70px;"
+        ></div>
+        <div
+          class="catalogue-skeleton rounded-pill"
+          style="height:20px;width:55px;"
+        ></div>
+      </div>
+      <div
+        class="border-top pt-3 d-flex justify-content-between align-items-center"
+      >
+        <div class="catalogue-skeleton" style="height:11px;width:90px;"></div>
+        <div
+          class="catalogue-skeleton rounded"
+          style="height:28px;width:90px;"
+        ></div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
