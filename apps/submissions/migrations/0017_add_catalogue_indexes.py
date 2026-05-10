@@ -4,21 +4,24 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('edam', '0002_add_indexes_and_elixir_year_fields'),
-        ('licenses', '0001_initial'),
-        ('registry', '0002_add_indexes_and_elixir_year_fields'),
-        ('submissions', '0016_add_spdx_licenses_m2m'),
+        ("edam", "0002_add_indexes_and_elixir_year_fields"),
+        ("licenses", "0001_initial"),
+        ("registry", "0002_add_indexes_and_elixir_year_fields"),
+        ("submissions", "0016_add_spdx_licenses_m2m"),
     ]
 
     operations = [
         migrations.AddIndex(
-            model_name='servicesubmission',
-            index=models.Index(fields=['updated_at'], name='submissions_updated_dc2d71_idx'),
+            model_name="servicesubmission",
+            index=models.Index(
+                fields=["updated_at"], name="submissions_updated_dc2d71_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='servicesubmission',
-            index=models.Index(fields=['status', '-updated_at'], name='submissions_status_e2625f_idx'),
+            model_name="servicesubmission",
+            index=models.Index(
+                fields=["status", "-updated_at"], name="submissions_status_e2625f_idx"
+            ),
         ),
     ]

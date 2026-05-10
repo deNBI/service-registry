@@ -1,4 +1,3 @@
-import pytest
 from urllib.parse import urlencode
 
 from django.http import QueryDict
@@ -26,7 +25,14 @@ class TestCatalogueQueryParams:
         assert params.sort == "name_asc"
 
     def test_all_valid_sort_values_accepted(self):
-        for sort in ["name_asc", "name_desc", "updated_desc", "updated_asc", "added_desc", "added_asc"]:
+        for sort in [
+            "name_asc",
+            "name_desc",
+            "updated_desc",
+            "updated_asc",
+            "added_desc",
+            "added_asc",
+        ]:
             params = CatalogueQueryParams.from_request(qd({"sort": sort}))
             assert params.sort == sort
 
@@ -66,7 +72,9 @@ class TestCatalogueQueryParams:
         assert params.categories == ["1", "2", "3"]
 
     def test_unknown_params_ignored(self):
-        params = CatalogueQueryParams.from_request(qd({"unknown_key": "ignored", "q": "test"}))
+        params = CatalogueQueryParams.from_request(
+            qd({"unknown_key": "ignored", "q": "test"})
+        )
         assert params.search == "test"
 
     def test_to_selector_kwargs_empty_values_become_none(self):
@@ -77,7 +85,9 @@ class TestCatalogueQueryParams:
         assert kwargs["centers"] is None
 
     def test_to_selector_kwargs_passes_values(self):
-        params = CatalogueQueryParams.from_request(qd({"q": "galaxy", "sort": "name_desc"}))
+        params = CatalogueQueryParams.from_request(
+            qd({"q": "galaxy", "sort": "name_desc"})
+        )
         kwargs = params.to_selector_kwargs()
         assert kwargs["search"] == "galaxy"
         assert kwargs["sort"] == "name_desc"
@@ -87,7 +97,9 @@ class TestCatalogueQueryParams:
         assert params.to_query_string_dict() == {}
 
     def test_to_query_string_dict_includes_non_defaults(self):
-        params = CatalogueQueryParams.from_request(qd({"q": "galaxy", "sort": "name_desc"}))
+        params = CatalogueQueryParams.from_request(
+            qd({"q": "galaxy", "sort": "name_desc"})
+        )
         d = params.to_query_string_dict()
         assert d["q"] == "galaxy"
         assert d["sort"] == "name_desc"
@@ -102,8 +114,10 @@ def test_view_defaults_to_grid():
     class FakeGET(dict):
         def get(self, key, default=""):
             return super().get(key, default)
+
         def getlist(self, key):
             return []
+
     params = CatalogueQueryParams.from_request(FakeGET({}))
     assert params.view == "grid"
 
@@ -112,6 +126,7 @@ def test_view_list_accepted():
     class FakeGET(dict):
         def get(self, key, default=""):
             return super().get(key, default)
+
         def getlist(self, key):
             return []
 
@@ -124,6 +139,7 @@ def test_view_invalid_falls_back_to_grid():
     class FakeGET(dict):
         def get(self, key, default=""):
             return super().get(key, default)
+
         def getlist(self, key):
             return []
 

@@ -80,13 +80,16 @@ def get_filter_options() -> dict:
 
 def group_services(services, group_by: str) -> list:
     if group_by == "category":
+
         def key_fn(s):
             cats = list(s.service_categories.all())
             return cats[0].name if cats else "Uncategorised"
     elif group_by == "service_center":
+
         def key_fn(s):
             return s.service_center.short_name if s.service_center else "Unknown"
     elif group_by == "pi":
+
         def key_fn(s):
             pis = list(s.responsible_pis.all())
             return str(pis[0]) if pis else "Unknown"
@@ -94,4 +97,6 @@ def group_services(services, group_by: str) -> list:
         return [("All Services", list(services))]
 
     items = sorted(list(services), key=key_fn)
-    return [(label, list(group)) for label, group in itertools.groupby(items, key=key_fn)]
+    return [
+        (label, list(group)) for label, group in itertools.groupby(items, key=key_fn)
+    ]

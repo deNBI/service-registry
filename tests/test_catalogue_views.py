@@ -1,8 +1,15 @@
 import pytest
 
 CATALOGUE_ON = {
-    "features": {"catalogue": True, "biotools_prefill": False, "edam_annotations": False},
-    "catalogue": {"per_page": 12, "card_fields": ["categories", "service_center", "updated_at"]},
+    "features": {
+        "catalogue": True,
+        "biotools_prefill": False,
+        "edam_annotations": False,
+    },
+    "catalogue": {
+        "per_page": 12,
+        "card_fields": ["categories", "service_center", "updated_at"],
+    },
     "site": {"name": "Test Registry", "url": "https://example.com"},
     "contact": {},
     "links": {},
@@ -108,6 +115,7 @@ class TestCatalogueListView:
     def test_catalogue_grid_view_default_is_grid(self, client, settings):
         settings.SITE_CONFIG = CATALOGUE_ON
         from tests.factories import ServiceSubmissionFactory
+
         ServiceSubmissionFactory(status="approved", biotools_url="")
         resp = client.get("/catalogue/grid/")
         assert resp.status_code == 200
@@ -116,12 +124,15 @@ class TestCatalogueListView:
     def test_catalogue_grid_view_list_mode(self, client, settings):
         settings.SITE_CONFIG = CATALOGUE_ON
         from tests.factories import ServiceSubmissionFactory
+
         ServiceSubmissionFactory(status="approved", biotools_url="")
         resp = client.get("/catalogue/grid/?view=list")
         assert resp.status_code == 200
         assert b"catalogue-list-item" in resp.content
 
-    def test_catalogue_grid_view_returns_full_page_on_history_restore(self, client, settings):
+    def test_catalogue_grid_view_returns_full_page_on_history_restore(
+        self, client, settings
+    ):
         settings.SITE_CONFIG = CATALOGUE_ON
         resp = client.get(
             "/catalogue/grid/",
@@ -145,7 +156,9 @@ class TestCatalogueListView:
         assert "q=bio" in resp["HX-Push-Url"]
         assert "sort=updated_desc" in resp["HX-Push-Url"]
 
-    def test_catalogue_view_returns_full_page_on_history_restore(self, client, settings):
+    def test_catalogue_view_returns_full_page_on_history_restore(
+        self, client, settings
+    ):
         settings.SITE_CONFIG = CATALOGUE_ON
         resp = client.get(
             "/catalogue/?q=bio",

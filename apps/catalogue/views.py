@@ -12,9 +12,7 @@ from .selectors import get_approved_services, get_filter_options, group_services
 
 def _catalogue_enabled() -> bool:
     return (
-        getattr(settings, "SITE_CONFIG", {})
-        .get("features", {})
-        .get("catalogue", False)
+        getattr(settings, "SITE_CONFIG", {}).get("features", {}).get("catalogue", False)
     )
 
 

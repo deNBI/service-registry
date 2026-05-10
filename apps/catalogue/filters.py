@@ -1,10 +1,15 @@
 from dataclasses import dataclass, field
 
-VALID_SORT_OPTIONS = frozenset({
-    "name_asc", "name_desc",
-    "updated_desc", "updated_asc",
-    "added_desc", "added_asc",
-})
+VALID_SORT_OPTIONS = frozenset(
+    {
+        "name_asc",
+        "name_desc",
+        "updated_desc",
+        "updated_asc",
+        "added_desc",
+        "added_asc",
+    }
+)
 VALID_GROUP_OPTIONS = frozenset({"", "category", "service_center", "pi"})
 VALID_VIEW_OPTIONS = frozenset({"grid", "list"})
 MAX_SEARCH_LENGTH = 200

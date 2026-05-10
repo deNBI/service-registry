@@ -1,6 +1,10 @@
 import pytest
 
-from apps.catalogue.selectors import get_approved_services, get_filter_options, group_services
+from apps.catalogue.selectors import (
+    get_approved_services,
+    get_filter_options,
+    group_services,
+)
 from tests.factories import (
     PIFactory,
     ServiceCategoryFactory,
@@ -190,7 +194,9 @@ class TestGetFilterOptions:
         assert "name" in opts["categories"][0]
 
     def test_returns_id_short_name_full_name_for_centers(self):
-        ServiceCenterFactory(short_name="CTR", full_name="Centre Full Name", is_active=True)
+        ServiceCenterFactory(
+            short_name="CTR", full_name="Centre Full Name", is_active=True
+        )
         opts = get_filter_options()
         assert "id" in opts["centers"][0]
         assert "short_name" in opts["centers"][0]
