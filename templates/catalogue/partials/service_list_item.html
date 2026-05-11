@@ -1,0 +1,79 @@
+{% load static catalogue_tags %}
+{% catalogue_service_url service as service_url %}
+
+<div class="catalogue-list-item">
+  <div class="d-flex align-items-start gap-3 p-3">
+
+    {# Avatar — 36px #}
+    <div class="catalogue-avatar catalogue-avatar-sm flex-shrink-0" aria-hidden="true">
+      {% if service.logo %}
+      <img src="{{ service.logo.url }}" alt="" class="catalogue-avatar-img" loading="lazy"
+           onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+      <span class="catalogue-avatar-initial" style="display:none;">{{ service.service_name|first|upper }}</span>
+      {% else %}
+      <span class="catalogue-avatar-initial">{{ service.service_name|first|upper }}</span>
+      {% endif %}
+    </div>
+
+    {# Content #}
+    <div class="flex-grow-1 min-width-0">
+
+      {# Title row #}
+      <div class="d-flex align-items-start justify-content-between gap-3 mb-1">
+        <h3 class="catalogue-list-title mb-0">
+          {% if service_url %}
+          <a href="{{ service_url }}" target="_blank" rel="noopener noreferrer"
+             class="text-decoration-none text-dark catalogue-list-name-link">
+            {{ service.service_name }}
+          </a>
+          {% else %}{{ service.service_name }}{% endif %}
+          <span class="catalogue-list-visit-arrow" aria-hidden="true">→</span>
+        </h3>
+
+        {# Icon links — dimmed, sharpen on hover #}
+        <div class="d-flex align-items-center gap-2 flex-shrink-0 mt-1">
+          {% if service.github_url %}
+          <a href="{{ service.github_url }}" target="_blank" rel="noopener noreferrer"
+             class="catalogue-list-icon-link"
+             title="View on GitHub" aria-label="View {{ service.service_name }} on GitHub">
+            <img src="{% static 'img/icons/github.svg' %}" alt="" width="18" height="18">
+          </a>
+          {% endif %}
+          {% if service.biotools_url %}
+          <a href="{{ service.biotools_url }}" target="_blank" rel="noopener noreferrer"
+             class="catalogue-list-icon-link"
+             title="View on bio.tools" aria-label="View {{ service.service_name }} on bio.tools">
+            <img src="{% static 'img/icons/biotools.png' %}" alt="" width="18" height="18" style="object-fit:contain;">
+          </a>
+          {% endif %}
+        </div>
+      </div>
+
+      {# Metadata: centre · date · category badges #}
+      <div class="d-flex flex-wrap align-items-center gap-1 mb-2">
+        {% if service.service_center %}
+        <span class="catalogue-meta-tiny">{{ service.service_center.short_name }}</span>
+        <span class="catalogue-meta-dot" aria-hidden="true">·</span>
+        {% endif %}
+        <span class="catalogue-meta-tiny">{{ service.updated_at|date:"j M Y" }}</span>
+        {% with cats=service.service_categories.all %}
+          {% if cats %}
+          <span class="catalogue-meta-dot" aria-hidden="true">·</span>
+          {% for cat in cats %}
+          <span class="badge catalogue-cat-badge">{{ cat.name }}</span>
+          {% endfor %}
+          {% endif %}
+        {% endwith %}
+      </div>
+
+      {# Foldable description #}
+      {% if service.service_description %}
+      <details class="catalogue-list-desc-toggle">
+        <summary>Description</summary>
+        <p class="catalogue-list-desc-text">{{ service.service_description }}</p>
+      </details>
+      {% endif %}
+
+    </div>
+  </div>
+</div>

@@ -1,0 +1,92 @@
+<div class="catalogue-filter-sidebar">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h2 class="h6 fw-bold mb-0">Filters</h2>
+    <a id="sidebar-clear-btn"
+       href="{% url 'catalogue:index' %}"
+       class="btn btn-sm btn-link text-danger p-0 text-decoration-none{% if not params.categories and not params.centers %} d-none{% endif %}"
+       aria-label="Clear all active filters">
+      Clear all
+    </a>
+  </div>
+
+  {% if filter_options.categories %}
+  <details id="filter-group-category" class="catalogue-filter-group mb-3" {% if params.categories %}open{% endif %}>
+    <summary class="catalogue-filter-legend d-flex justify-content-between align-items-center">
+      <span class="d-flex align-items-center gap-2">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16" class="catalogue-filter-chevron" aria-hidden="true">
+          <path fill-rule="evenodd" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+        </svg>
+        Category
+        {% if params.categories %}
+        <span class="badge bg-success rounded-pill" aria-label="{{ params.categories|length }} selected">
+          {{ params.categories|length }}
+        </span>
+        {% endif %}
+      </span>
+    </summary>
+    <fieldset class="mt-2 border-0 p-0 m-0">
+      <legend class="visually-hidden">Category</legend>
+      {% for cat in filter_options.categories %}
+      <div class="form-check mb-1">
+        <input class="form-check-input"
+               type="checkbox"
+               name="category"
+               value="{{ cat.id }}"
+               id="cat-{{ cat.id }}"
+               {% if cat.id|stringformat:"s" in params.categories %}checked{% endif %}
+               hx-get="{% url 'catalogue:grid' %}"
+               hx-trigger="change"
+               hx-target="#catalogue-grid"
+               hx-push-url="true"
+               hx-include="#filter-form"
+               hx-indicator="#catalogue-spinner">
+        <label class="form-check-label small" for="cat-{{ cat.id }}">
+          {{ cat.name }}
+        </label>
+      </div>
+      {% endfor %}
+    </fieldset>
+  </details>
+  {% endif %}
+
+  {% if filter_options.centers %}
+  <details id="filter-group-center" class="catalogue-filter-group mb-3" {% if params.centers %}open{% endif %}>
+    <summary class="catalogue-filter-legend d-flex justify-content-between align-items-center">
+      <span class="d-flex align-items-center gap-2">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16" class="catalogue-filter-chevron" aria-hidden="true">
+          <path fill-rule="evenodd" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+        </svg>
+        Service Centre
+        {% if params.centers %}
+        <span class="badge bg-success rounded-pill" aria-label="{{ params.centers|length }} selected">
+          {{ params.centers|length }}
+        </span>
+        {% endif %}
+      </span>
+    </summary>
+    <fieldset class="mt-2 border-0 p-0 m-0">
+      <legend class="visually-hidden">Service Centre</legend>
+      {% for ctr in filter_options.centers %}
+      <div class="form-check mb-1">
+        <input class="form-check-input"
+               type="checkbox"
+               name="center"
+               value="{{ ctr.id }}"
+               id="ctr-{{ ctr.id }}"
+               {% if ctr.id|stringformat:"s" in params.centers %}checked{% endif %}
+               hx-get="{% url 'catalogue:grid' %}"
+               hx-trigger="change"
+               hx-target="#catalogue-grid"
+               hx-push-url="true"
+               hx-include="#filter-form"
+               hx-indicator="#catalogue-spinner">
+        <label class="form-check-label small" for="ctr-{{ ctr.id }}">
+          {{ ctr.short_name }}
+        </label>
+      </div>
+      {% endfor %}
+    </fieldset>
+  </details>
+  {% endif %}
+
+</div>

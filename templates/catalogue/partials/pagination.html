@@ -1,0 +1,58 @@
+{% load catalogue_tags %}
+
+{% if page_obj.paginator.num_pages > 1 %}
+<nav class="mt-4" aria-label="Registry catalogue pages">
+  <ul class="pagination justify-content-center flex-wrap gap-1">
+
+    {% if page_obj.has_previous %}
+    <li class="page-item">
+      <a class="page-link"
+         href="?page={{ page_obj.previous_page_number }}&{{ params|as_query_string }}"
+         hx-get="{% url 'catalogue:grid' %}?page={{ page_obj.previous_page_number }}&{{ params|as_query_string }}"
+         hx-target="#catalogue-grid"
+         hx-push-url="true"
+         aria-label="Previous page">
+        ← Previous
+      </a>
+    </li>
+    {% endif %}
+
+    {% for num in page_obj.paginator.page_range %}
+      {% if num == page_obj.number %}
+      <li class="page-item active" aria-current="page">
+        <span class="page-link">{{ num }}</span>
+      </li>
+      {% elif num >= page_obj.number|add:"-2" and num <= page_obj.number|add:"2" %}
+      <li class="page-item">
+        <a class="page-link"
+           href="?page={{ num }}&{{ params|as_query_string }}"
+           hx-get="{% url 'catalogue:grid' %}?page={{ num }}&{{ params|as_query_string }}"
+           hx-target="#catalogue-grid"
+           hx-push-url="true"
+           aria-label="Page {{ num }}">
+          {{ num }}
+        </a>
+      </li>
+      {% endif %}
+    {% endfor %}
+
+    {% if page_obj.has_next %}
+    <li class="page-item">
+      <a class="page-link"
+         href="?page={{ page_obj.next_page_number }}&{{ params|as_query_string }}"
+         hx-get="{% url 'catalogue:grid' %}?page={{ page_obj.next_page_number }}&{{ params|as_query_string }}"
+         hx-target="#catalogue-grid"
+         hx-push-url="true"
+         aria-label="Next page">
+        Next →
+      </a>
+    </li>
+    {% endif %}
+
+  </ul>
+  <p class="text-center text-muted small mt-1">
+    Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}
+    ({{ page_obj.paginator.count }} service{{ page_obj.paginator.count|pluralize }})
+  </p>
+</nav>
+{% endif %}

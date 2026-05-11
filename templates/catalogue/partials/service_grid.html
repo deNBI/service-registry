@@ -1,0 +1,88 @@
+{% load catalogue_tags %}
+{% if params.search or params.categories or params.centers %}
+<div class="d-flex flex-wrap gap-2 mb-3 align-items-center" id="catalogue-filter-pills">
+  <span class="text-muted small">Active filters:</span>
+  {% if params.search %}
+  <span class="badge bg-light text-dark border">Search: "{{ params.search }}"</span>
+  {% endif %}
+  {% for cat_id in params.categories %}
+    {% for opt in filter_options.categories %}
+      {% if opt.id|stringformat:"s" == cat_id %}
+      <span class="badge bg-light text-dark border">{{ opt.name }}</span>
+      {% endif %}
+    {% endfor %}
+  {% endfor %}
+  {% for ctr_id in params.centers %}
+    {% for opt in filter_options.centers %}
+      {% if opt.id|stringformat:"s" == ctr_id %}
+      <span class="badge bg-light text-dark border">{{ opt.short_name }}</span>
+      {% endif %}
+    {% endfor %}
+  {% endfor %}
+  <a href="{% url 'catalogue:index' %}" class="badge bg-secondary text-white text-decoration-none">× Clear all</a>
+</div>
+{% endif %}
+{% if grouped %}
+  {# ── Grouped view ── #}
+  {% for group_label, services in grouped %}
+  <details open class="mb-4">
+    <summary
+      class="h5 fw-semibold py-2 border-bottom mb-3"
+      style="cursor:pointer; list-style:none;"
+    >
+      {{ group_label }}
+      <span class="badge bg-secondary ms-2">{{ services|length }}</span>
+    </summary>
+    {% if params.view == "list" %}
+    <div class="catalogue-list-view">
+      {% for service in services %}
+      {% include "catalogue/partials/service_list_item.html" %}
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="row g-3 catalogue-card-grid">
+      {% for service in services %}
+      <div class="col-12 col-sm-6 col-xl-4">
+        {% include "catalogue/partials/service_card.html" %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </details>
+  {% endfor %}
+{% else %}
+  {# ── Flat view ── #}
+  {% if page_obj.object_list %}
+  {% if params.view == "list" %}
+  <div class="catalogue-list-view">
+    {% for service in page_obj.object_list %}
+    {% include "catalogue/partials/service_list_item.html" %}
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="row g-3 catalogue-card-grid">
+    {% for service in page_obj.object_list %}
+    <div class="col-12 col-sm-6 col-xl-4">
+      {% include "catalogue/partials/service_card.html" %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="catalogue-empty-state text-center py-5">
+    <div class="catalogue-empty-icon mb-3" aria-hidden="true">🔍</div>
+    <h3 class="h5 fw-semibold mb-2">No services found</h3>
+    <p class="text-muted mb-3">
+      {% if params.search or params.categories or params.centers %} No services
+      match your current filters or search. {% else %} No approved services are
+      available yet. {% endif %}
+    </p>
+    {% if params.search or params.categories or params.centers %}
+    <a href="{% url 'catalogue:index' %}" class="btn btn-outline-secondary btn-sm">
+      Clear all filters
+    </a>
+    {% endif %}
+  </div>
+  {% endif %}
+{% endif %}
+{% if not grouped %}{% include "catalogue/partials/pagination.html" %}{% endif %}

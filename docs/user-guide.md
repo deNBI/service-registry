@@ -64,6 +64,24 @@ If you receive a "your registration has been updated" email that you did not ini
 
 ---
 
+## Browsing the Service Catalogue
+
+When the Service Catalogue is enabled by the site administrators, a **Service Catalogue** link appears in the top navigation bar.
+
+The catalogue at **/catalogue/** lists all approved services and supports:
+
+- **Search** — type in the search box to find services by name, description, host institute, or keywords (debounced, no page reload)
+- **Filter** — use the sidebar to filter by category or service centre (multi-select, combined with AND across dimensions)
+- **Sort** — choose A→Z, Z→A, recently updated, or recently added
+- **Group** — group results by category, service centre, or responsible PI (accordion sections)
+- **Pagination** — results are paginated server-side; URL state is preserved so you can share or bookmark any view
+
+Each service card shows the service name, description, category, service centre, and optional EDAM topic badges. Where available, icon badges link directly to the service's GitHub repository, bio.tools entry, FAIRsharing record, or other registry.
+
+The catalogue is read-only and requires no login.
+
+---
+
 ## Field Help
 
 ### Publications (PMIDs/DOIs)
