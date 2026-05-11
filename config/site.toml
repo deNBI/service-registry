@@ -131,7 +131,7 @@ biotools_prefill = true
 # Enable EDAM ontology annotation fields on the registration form.
 edam_annotations = true
 
-# Enable the public Service Catalogue page.
+# Enable the public Registry Catalogue page.
 catalogue = true
 
 #-----------------------------------------------------------------------------
@@ -192,7 +192,7 @@ logo_max_bytes = 10_485_760
 
 
 # -----------------------------------------------------------------------------
-# [catalogue] — Public Service Catalogue settings
+# [catalogue] — Public Registry Catalogue settings
 # -----------------------------------------------------------------------------
 [catalogue]
 

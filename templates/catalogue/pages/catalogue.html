@@ -1,11 +1,11 @@
 {% extends "base/base.html" %}
 {% load static catalogue_tags %}
 
-{% block title %}Service Catalogue — {{ SITE_NAME }}{% endblock %}
+{% block title %}Registry Catalogue — {{ SITE_NAME }}{% endblock %}
 {% block meta_description %}{{ CATALOGUE_META_DESCRIPTION }}{% endblock %}
 
 {% block extra_head %}
-<meta property="og:title" content="Service Catalogue — {{ SITE_NAME }}">
+<meta property="og:title" content="Registry Catalogue — {{ SITE_NAME }}">
 <meta property="og:description" content="{{ CATALOGUE_META_DESCRIPTION }}">
 <meta property="og:url" content="{{ SITE_URL }}/catalogue/">
 <link rel="canonical" href="{{ SITE_URL }}/catalogue/">
@@ -17,7 +17,7 @@
 <div class="catalogue-page-header mb-4">
   <div class="d-flex align-items-end justify-content-between gap-3 flex-wrap">
     <div>
-      <h1 class="mb-1">Service Catalogue</h1>
+      <h1 class="mb-1">Registry Catalogue</h1>
       <p class="text-muted mb-0">{{ CATALOGUE_META_DESCRIPTION }}</p>
     </div>
     <div class="text-muted small catalogue-result-count">

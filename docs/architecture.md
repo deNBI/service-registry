@@ -35,14 +35,14 @@ Traffic enters the host nginx, which terminates TLS and proxies to the Gunicorn 
 
 The project follows Django's app-per-domain convention. Each app has a single clear responsibility.
 
-| App | Responsibility |
-|---|---|
-| `submissions` | Core domain. The `ServiceSubmission` model, registration form, views, and admin. |
-| `api` | REST API layer. DRF viewsets, serializers, API key authentication, permissions. |
-| `registry` | Reference data. `PrincipalInvestigator`, `ServiceCategory`, `ServiceCenter` models. |
-| `biotools` | bio.tools integration. HTTP client, sync logic, Celery tasks, post_save signal. |
-| `edam` | EDAM ontology. `EdamTerm` model, `sync_edam` management command. |
-| `catalogue` | Public Service Catalogue. Read-only browsing of approved services at `/catalogue/`. Isolated app with no new models; queries `ServiceSubmission` via `selectors.py`. Feature-flagged via `site.toml [features] catalogue`. |
+| App           | Responsibility                                                                                                                                                                                                              |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `submissions` | Core domain. The `ServiceSubmission` model, registration form, views, and admin.                                                                                                                                            |
+| `api`         | REST API layer. DRF viewsets, serializers, API key authentication, permissions.                                                                                                                                             |
+| `registry`    | Reference data. `PrincipalInvestigator`, `ServiceCategory`, `ServiceCenter` models.                                                                                                                                         |
+| `biotools`    | bio.tools integration. HTTP client, sync logic, Celery tasks, post_save signal.                                                                                                                                             |
+| `edam`        | EDAM ontology. `EdamTerm` model, `sync_edam` management command.                                                                                                                                                            |
+| `catalogue`   | Public Registry Catalogue. Read-only browsing of approved services at `/catalogue/`. Isolated app with no new models; queries `ServiceSubmission` via `selectors.py`. Feature-flagged via `site.toml [features] catalogue`. |
 
 ---
 
@@ -106,13 +106,13 @@ Client → GET/PATCH /api/v1/submissions/{id}/
 
 Celery workers connect to Redis and process three categories of tasks:
 
-| Queue | Tasks | Schedule |
-|---|---|---|
-| Default | `send_submission_notification` — admin email on create/update/status change; submitter email on status change | On demand |
-| Default | bio.tools record sync | On demand (post_save signal) |
-| Beat (periodic) | `sync_all_biotools_records` — refresh all bio.tools records | Daily |
-| Beat (periodic) | `edam.sync` — refresh EDAM ontology terms | Monthly (30 days) |
-| Beat (periodic) | `cleanup_stale_drafts` — purge old incomplete submissions | Daily (24 hours) |
+| Queue           | Tasks                                                                                                         | Schedule                     |
+| --------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| Default         | `send_submission_notification` — admin email on create/update/status change; submitter email on status change | On demand                    |
+| Default         | bio.tools record sync                                                                                         | On demand (post_save signal) |
+| Beat (periodic) | `sync_all_biotools_records` — refresh all bio.tools records                                                   | Daily                        |
+| Beat (periodic) | `edam.sync` — refresh EDAM ontology terms                                                                     | Monthly (30 days)            |
+| Beat (periodic) | `cleanup_stale_drafts` — purge old incomplete submissions                                                     | Daily (24 hours)             |
 
 Celery beat runs in its own container alongside the worker container. The worker container's Docker healthcheck uses `celery inspect ping` via the Redis broker; beat has no inspection API so its healthcheck is disabled.
 
@@ -166,37 +166,37 @@ terms_by_uri = {t.uri: t for t in EdamTerm.objects.filter(uri__in=uris)}
 
 ### Indexes
 
-| Field | Reason |
-|---|---|
-| `ServiceSubmission.status` | `list_filter` in admin; `?status=` API filter |
-| `ServiceSubmission.submitted_at` | Default ordering |
-| `ServiceSubmission.service_center` | FK lookup + `list_filter` |
-| `ServiceSubmission.register_as_elixir` | `?register_as_elixir=` API filter |
-| `ServiceSubmission.year_established` | `?year_established=` API filter |
-| Compound `(-submitted_at, status)` | Admin default list view: sort + status filter together |
-| `BioToolsRecord.biotools_id` | Primary lookup key for the bio.tools API endpoint |
-| `EdamTerm.uri`, `.accession`, `.branch`, `.label` | EDAM endpoint filters and lookups |
-| `EdamTerm (branch, is_obsolete)` | Compound — form queryset always filters both |
-| Compound `(status, -updated_at)` | Catalogue sort by "recently updated" filtered to approved services |
-| `ServiceSubmission.updated_at` | Catalogue sort by recently updated |
+| Field                                             | Reason                                                             |
+| ------------------------------------------------- | ------------------------------------------------------------------ |
+| `ServiceSubmission.status`                        | `list_filter` in admin; `?status=` API filter                      |
+| `ServiceSubmission.submitted_at`                  | Default ordering                                                   |
+| `ServiceSubmission.service_center`                | FK lookup + `list_filter`                                          |
+| `ServiceSubmission.register_as_elixir`            | `?register_as_elixir=` API filter                                  |
+| `ServiceSubmission.year_established`              | `?year_established=` API filter                                    |
+| Compound `(-submitted_at, status)`                | Admin default list view: sort + status filter together             |
+| `BioToolsRecord.biotools_id`                      | Primary lookup key for the bio.tools API endpoint                  |
+| `EdamTerm.uri`, `.accession`, `.branch`, `.label` | EDAM endpoint filters and lookups                                  |
+| `EdamTerm (branch, is_obsolete)`                  | Compound — form queryset always filters both                       |
+| Compound `(status, -updated_at)`                  | Catalogue sort by "recently updated" filtered to approved services |
+| `ServiceSubmission.updated_at`                    | Catalogue sort by recently updated                                 |
 
 ---
 
 ## Security design
 
-| Control | Implementation |
-|---|---|
-| CSRF protection | Django's built-in CSRF middleware — all POST form views protected |
-| API authentication | HMAC-based API key: plaintext hashed with PBKDF2, stored as `key_hash` |
-| Admin authentication | Django auth + django-axes (brute-force lockout) |
-| Content Security Policy | `django-csp` middleware — all third-party JS/CSS vendored locally; `script-src 'unsafe-inline'` retained for Django template inline scripts |
-| Rate limiting | `django-ratelimit` on form submit and API create endpoints |
-| Input sanitisation | `bleach` on all free-text fields in `ServiceSubmission.save()` |
-| Sensitive field isolation | IP, user-agent hash, internal contact excluded from all API serializers |
-| Logging scrubber | `ScrubSensitiveFilter` redacts `Authorization` and `Cookie` headers from logs |
-| HSTS | Set in host nginx config (`max-age=31536000; includeSubDomains; preload`) |
-| TLS | TLSv1.2+ only; OCSP stapling enabled in nginx |
-| Admin URL | Configurable prefix via `ADMIN_URL_PREFIX` env var (default: `admin-denbi`) |
+| Control                   | Implementation                                                                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| CSRF protection           | Django's built-in CSRF middleware — all POST form views protected                                                                           |
+| API authentication        | HMAC-based API key: plaintext hashed with PBKDF2, stored as `key_hash`                                                                      |
+| Admin authentication      | Django auth + django-axes (brute-force lockout)                                                                                             |
+| Content Security Policy   | `django-csp` middleware — all third-party JS/CSS vendored locally; `script-src 'unsafe-inline'` retained for Django template inline scripts |
+| Rate limiting             | `django-ratelimit` on form submit and API create endpoints                                                                                  |
+| Input sanitisation        | `bleach` on all free-text fields in `ServiceSubmission.save()`                                                                              |
+| Sensitive field isolation | IP, user-agent hash, internal contact excluded from all API serializers                                                                     |
+| Logging scrubber          | `ScrubSensitiveFilter` redacts `Authorization` and `Cookie` headers from logs                                                               |
+| HSTS                      | Set in host nginx config (`max-age=31536000; includeSubDomains; preload`)                                                                   |
+| TLS                       | TLSv1.2+ only; OCSP stapling enabled in nginx                                                                                               |
+| Admin URL                 | Configurable prefix via `ADMIN_URL_PREFIX` env var (default: `admin-denbi`)                                                                 |
 
 ---
 
@@ -220,22 +220,22 @@ All `site.toml` values are injected into every template via the `site_context` c
 
 All static assets are vendored locally in `static/` — zero CDN requests at runtime (GDPR requirement):
 
-| File | Version | Used by |
-|---|---|---|
-| `static/css/bootstrap.min.css` | Bootstrap 5.3.3 | All pages |
-| `static/js/bootstrap.bundle.min.js` | Bootstrap 5.3.3 | All pages |
-| `static/js/htmx.min.js` | HTMX 1.9.12 | bio.tools prefill |
-| `static/css/tom-select.bootstrap5.min.css` | Tom-Select 2.3.1 | EDAM multi-select, affiliation combobox |
-| `static/js/tom-select.complete.min.js` | Tom-Select 2.3.1 | EDAM multi-select, affiliation combobox |
-| `static/swagger-ui/swagger-ui.css` | swagger-ui-dist 5.18.2 | `/api/docs/` |
-| `static/swagger-ui/swagger-ui-bundle.js` | swagger-ui-dist 5.18.2 | `/api/docs/` |
-| `static/swagger-ui/swagger-ui-standalone-preset.js` | swagger-ui-dist 5.18.2 | `/api/docs/` |
-| `static/swagger-ui/favicon-32x32.png` | swagger-ui-dist 5.18.2 | `/api/docs/` |
-| `static/redoc/bundles/redoc.standalone.js` | ReDoc 2.2.0 | `/api/redoc/` |
-| `static/img/favicon.ico` | de.NBI favicon | All pages |
-| `static/css/registry.css` | Project custom | All pages |
-| `static/img/icons/biotools.svg` | — | Service card bio.tools link icon |
-| `static/img/icons/fairsharing.svg` | — | Service card FAIRsharing link icon |
+| File                                                | Version                | Used by                                 |
+| --------------------------------------------------- | ---------------------- | --------------------------------------- |
+| `static/css/bootstrap.min.css`                      | Bootstrap 5.3.3        | All pages                               |
+| `static/js/bootstrap.bundle.min.js`                 | Bootstrap 5.3.3        | All pages                               |
+| `static/js/htmx.min.js`                             | HTMX 1.9.12            | bio.tools prefill                       |
+| `static/css/tom-select.bootstrap5.min.css`          | Tom-Select 2.3.1       | EDAM multi-select, affiliation combobox |
+| `static/js/tom-select.complete.min.js`              | Tom-Select 2.3.1       | EDAM multi-select, affiliation combobox |
+| `static/swagger-ui/swagger-ui.css`                  | swagger-ui-dist 5.18.2 | `/api/docs/`                            |
+| `static/swagger-ui/swagger-ui-bundle.js`            | swagger-ui-dist 5.18.2 | `/api/docs/`                            |
+| `static/swagger-ui/swagger-ui-standalone-preset.js` | swagger-ui-dist 5.18.2 | `/api/docs/`                            |
+| `static/swagger-ui/favicon-32x32.png`               | swagger-ui-dist 5.18.2 | `/api/docs/`                            |
+| `static/redoc/bundles/redoc.standalone.js`          | ReDoc 2.2.0            | `/api/redoc/`                           |
+| `static/img/favicon.ico`                            | de.NBI favicon         | All pages                               |
+| `static/css/registry.css`                           | Project custom         | All pages                               |
+| `static/img/icons/biotools.svg`                     | —                      | Service card bio.tools link icon        |
+| `static/img/icons/fairsharing.svg`                  | —                      | Service card FAIRsharing link icon      |
 
 WhiteNoise serves these through Gunicorn with long `Cache-Control: public, immutable` headers.
 

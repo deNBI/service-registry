@@ -110,10 +110,10 @@ license_name = "MIT"
 [features]
 biotools_prefill  = true   # Show bio.tools prefill banner on the form
 edam_annotations  = true   # Show EDAM ontology fields on the form
-catalogue         = false  # Enable the public Service Catalogue at /catalogue/
+catalogue         = false  # Enable the public Registry Catalogue at /catalogue/
 ```
 
-### Service Catalogue
+### Registry Catalogue
 
 ```toml
 [catalogue]
@@ -130,7 +130,7 @@ The catalogue is a public, read-only page at `/catalogue/` that lets anonymous u
 | `per_page` | `12` | Number of service cards per page (server-side pagination). |
 | `meta_description` | `"Browse all approved…"` | Content of the catalogue page `<meta name="description">` and OpenGraph description tags. |
 
-After enabling, the "Service Catalogue" link appears automatically in the navbar. Disabling the flag hides the link and makes the route return 404.
+After enabling, the "Registry Catalogue" link appears automatically in the navbar. Disabling the flag hides the link and makes the route return 404.
 
 ### EDAM ontology sync
 

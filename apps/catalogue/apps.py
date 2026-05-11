@@ -4,4 +4,4 @@ from django.apps import AppConfig
 class CatalogueConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "apps.catalogue"
-    verbose_name = "Service Catalogue"
+    verbose_name = "Registry Catalogue"
