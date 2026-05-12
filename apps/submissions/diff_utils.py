@@ -47,7 +47,7 @@ DIFFABLE_FIELDS: list[tuple[str, str]] = [
     ("associated_partner_note", "Associated Partner Note"),
     ("host_institute", "Host Institute"),
     ("service_center", "Service Centre"),
-    ("public_contact_email", "Public Contact Email"),
+    ("public_contact_email", "Public Contact (Email or URL)"),
     ("internal_contact_name", "Internal Contact Name"),
     ("internal_contact_email", "Internal Contact Email"),
     ("website_url", "Website URL"),

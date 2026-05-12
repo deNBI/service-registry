@@ -22,6 +22,7 @@ import uuid
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import URLValidator, validate_email
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -49,6 +50,9 @@ PUBLICATIONS_MAX_COUNT: int = 50
 #: Pre-compiled regexes for publication validation (reused by PublicationsField).
 _PMID_RE = re.compile(r"^\d{1,8}$")
 _DOI_RE = re.compile(r"^10\.\d{4,}/\S+$")
+
+#: Pre-compiled URL validator (reused by _validate_public_contact).
+_URL_VALIDATOR = URLValidator()
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +92,29 @@ def _validate_https_url(value: str) -> None:
                 "URL must use the https:// scheme. Plain http:// and other schemes are not accepted."
             ),
             code="insecure_url",
+        )
+
+
+def _validate_public_contact(value: str) -> None:
+    """Accept a valid email address or a valid https:// URL; reject everything else."""
+    if not value:
+        return
+    value = value.strip()
+    if value.startswith("https://"):
+        try:
+            _URL_VALIDATOR(value)
+        except ValidationError:
+            raise ValidationError(
+                _("Enter a valid email address or a URL starting with https://."),
+                code="invalid_public_contact",
+            )
+        return
+    try:
+        validate_email(value)
+    except ValidationError:
+        raise ValidationError(
+            _("Enter a valid email address or a URL starting with https://."),
+            code="invalid_public_contact",
         )
 
 
@@ -351,12 +378,19 @@ class ServiceSubmission(models.Model):
         related_name="submissions",
         help_text="Associated de.NBI service centre.",
     )
-    public_contact_email = models.EmailField(
+    public_contact_email = models.CharField(
+        max_length=2000,
+        validators=[_validate_public_contact],
         help_text=(
-            "Contact email displayed publicly on the de.NBI services page. "
-            "This address is publicly visible."
+            "Contact email address or support URL displayed publicly on the de.NBI services page. "
+            "This value is publicly visible."
         ),
     )
+
+    @property
+    def public_contact_is_url(self) -> bool:
+        return self.public_contact_email.startswith("https://")
+
     internal_contact_name = models.CharField(
         max_length=200,
         help_text="Name and affiliation of the internal contact person (admin use only).",
@@ -879,7 +913,11 @@ class SubmissionDeletionAudit(models.Model):
     submitter_first_name = models.CharField(max_length=100, blank=True)
     submitter_last_name = models.CharField(max_length=100, blank=True)
     submitter_affiliation = models.CharField(max_length=300, blank=True)
-    public_contact_email = models.EmailField(blank=True)
+    public_contact_email = models.CharField(max_length=2000, blank=True)
+
+    @property
+    def public_contact_is_url(self) -> bool:
+        return self.public_contact_email.startswith("https://")
 
     # Deletion metadata
     deleted_by = models.CharField(

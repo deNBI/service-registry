@@ -211,6 +211,26 @@ class TestSubmissionCreate:
         assert sub.primary_maturity_tag is None or sub.primary_maturity_tag == ""
         assert sub.secondary_maturity_tags == []
 
+    def test_create_with_https_url_public_contact(self, api_client):
+        """API accepts an https URL for public_contact_email."""
+        payload = {
+            **_valid_payload(),
+            "public_contact_email": "https://support.example.com",
+        }
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 201
+        assert resp.json()["public_contact_email"] == "https://support.example.com"
+
+    def test_create_with_invalid_public_contact_rejected(self, api_client):
+        """API rejects a value that is neither a valid email nor an https URL."""
+        payload = {**_valid_payload(), "public_contact_email": "not-valid"}
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 400
+        data = resp.json()
+        # Error envelope: validation errors are nested under "error"
+        error_body = data.get("error", data)
+        assert "public_contact_email" in error_body
+
 
 # ===========================================================================
 # GET /api/v1/submissions/{id}/ — ApiKey auth, full detail

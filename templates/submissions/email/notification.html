@@ -73,7 +73,13 @@ th      { background: #e8f0f8; font-weight: bold; text-align: left; }
 <tr><th>Publications</th><td>{{ submission.publications_pmids }}</td></tr>
 <tr><th>Responsible PIs</th><td>{% for pi in pis %}{{ pi }}{% if not forloop.last %}, {% endif %}{% endfor %}</td></tr>
 <tr><th>KPI Monitoring</th><td>{{ submission.get_kpi_monitoring_display }} ({{ submission.kpi_start_year }})</td></tr>
-<tr><th>Public Contact</th><td>{{ submission.public_contact_email }}</td></tr>
+<tr><th>Public Contact</th><td>
+  {% if submission.public_contact_is_url %}
+    <a href="{{ submission.public_contact_email }}">{{ submission.public_contact_email }}</a>
+  {% else %}
+    <a href="mailto:{{ submission.public_contact_email }}">{{ submission.public_contact_email }}</a>
+  {% endif %}
+</td></tr>
 <tr><th>Internal Contact</th><td>{{ submission.internal_contact_name }} &lt;{{ submission.internal_contact_email }}&gt;</td></tr>
 </table>
 
