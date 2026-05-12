@@ -488,3 +488,143 @@ class TestSanitiseText:
     def test_leading_trailing_whitespace_stripped(self):
         sub = self._make(service_name="  My Service  ")
         assert sub.service_name == "My Service"
+
+
+# ===========================================================================
+# _validate_public_contact
+# ===========================================================================
+
+
+class TestValidatePublicContact:
+    """Unit tests for the _validate_public_contact validator."""
+
+    def _call(self, value):
+        from apps.submissions.models import _validate_public_contact
+
+        _validate_public_contact(value)
+
+    def test_valid_email_passes(self):
+        self._call("user@example.com")  # no exception
+
+    def test_valid_https_url_passes(self):
+        self._call("https://support.example.com/helpdesk")  # no exception
+
+    def test_https_url_with_path_and_query_passes(self):
+        self._call("https://example.org/support?lang=en")  # no exception
+
+    def test_http_url_rejected(self):
+        from django.core.exceptions import ValidationError
+
+        with pytest.raises(ValidationError, match="https://"):
+            self._call("http://support.example.com")
+
+    def test_javascript_scheme_rejected(self):
+        from django.core.exceptions import ValidationError
+
+        with pytest.raises(ValidationError):
+            self._call("javascript:alert(1)")
+
+    def test_data_scheme_rejected(self):
+        from django.core.exceptions import ValidationError
+
+        with pytest.raises(ValidationError):
+            self._call("data:text/html,<h1>hi</h1>")
+
+    def test_plain_string_rejected(self):
+        from django.core.exceptions import ValidationError
+
+        with pytest.raises(ValidationError):
+            self._call("not-an-email-or-url")
+
+    def test_empty_string_passes(self):
+        self._call("")  # blank — required check is handled by the field, not here
+
+    def test_leading_trailing_whitespace_stripped_before_check(self):
+        self._call("  user@example.com  ")  # no exception — whitespace stripped
+
+    def test_malformed_https_url_rejected(self):
+        from django.core.exceptions import ValidationError
+
+        with pytest.raises(ValidationError):
+            self._call("https://")
+
+    def test_leading_trailing_whitespace_stripped_https_url(self):
+        self._call(
+            "  https://support.example.com  "
+        )  # no exception — whitespace stripped
+
+    def test_rejection_has_correct_error_code(self):
+        from django.core.exceptions import ValidationError
+
+        with pytest.raises(ValidationError) as exc_info:
+            self._call("http://example.com")
+        assert exc_info.value.code == "invalid_public_contact"
+
+
+@pytest.mark.django_db
+class TestPublicContactFieldAcceptsUrl:
+    """Integration tests: model field accepts email or https URL, rejects others."""
+
+    def _make(self, public_contact_email):
+        from tests.factories import ServiceSubmissionFactory
+
+        return ServiceSubmissionFactory(
+            public_contact_email=public_contact_email, biotools_url=""
+        )
+
+    def test_email_value_passes_full_clean(self):
+        sub = self._make("contact@example.com")
+        sub.full_clean()  # no exception
+
+    def test_https_url_passes_full_clean(self):
+        sub = self._make("https://support.example.com")
+        sub.full_clean()  # no exception
+
+    def test_http_url_fails_full_clean(self):
+        from django.core.exceptions import ValidationError
+
+        sub = self._make("http://support.example.com")
+        with pytest.raises(ValidationError) as exc_info:
+            sub.full_clean()
+        assert "public_contact_email" in exc_info.value.message_dict
+
+    def test_plain_string_fails_full_clean(self):
+        from django.core.exceptions import ValidationError
+
+        sub = self._make("not-valid")
+        with pytest.raises(ValidationError) as exc_info:
+            sub.full_clean()
+        assert "public_contact_email" in exc_info.value.message_dict
+
+
+@pytest.mark.django_db
+class TestPublicContactIsUrl:
+    def test_email_value_returns_false(self):
+        from tests.factories import ServiceSubmissionFactory
+
+        sub = ServiceSubmissionFactory(
+            public_contact_email="user@example.com", biotools_url=""
+        )
+        assert sub.public_contact_is_url is False
+
+    def test_https_url_returns_true(self):
+        from tests.factories import ServiceSubmissionFactory
+
+        sub = ServiceSubmissionFactory(
+            public_contact_email="https://support.example.com", biotools_url=""
+        )
+        assert sub.public_contact_is_url is True
+
+    def test_audit_email_value_returns_false(self):
+        from apps.submissions.models import SubmissionDeletionAudit
+
+        audit = SubmissionDeletionAudit(public_contact_email="user@example.com")
+        assert audit.public_contact_is_url is False
+
+    def test_audit_https_url_returns_true(self):
+        from apps.submissions.models import SubmissionDeletionAudit
+
+        audit = SubmissionDeletionAudit(
+            public_contact_email="https://support.example.com"
+        )
+        assert audit.public_contact_is_url is True

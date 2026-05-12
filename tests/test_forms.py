@@ -1297,3 +1297,54 @@ class TestDeprecatedLicenseBehavior:
         form.save()
         submission.refresh_from_db()
         assert not submission.licenses.filter(license_id="DEPRECATED-3").exists()
+
+
+@pytest.mark.django_db
+class TestPublicContactFormField:
+    def test_https_url_accepted(self):
+        from apps.submissions.forms import SubmissionForm
+
+        form = SubmissionForm(
+            _base_form_data({"public_contact_email": "https://support.example.com"})
+        )
+        assert form.is_valid(), form.errors
+
+    def test_email_still_accepted(self):
+        from apps.submissions.forms import SubmissionForm
+
+        form = SubmissionForm(
+            _base_form_data({"public_contact_email": "contact@example.com"})
+        )
+        assert form.is_valid(), form.errors
+
+    def test_http_url_rejected(self):
+        from apps.submissions.forms import SubmissionForm
+
+        form = SubmissionForm(
+            _base_form_data({"public_contact_email": "http://support.example.com"})
+        )
+        assert not form.is_valid()
+        assert "public_contact_email" in form.errors
+
+    def test_plain_string_rejected(self):
+        from apps.submissions.forms import SubmissionForm
+
+        form = SubmissionForm(_base_form_data({"public_contact_email": "not-valid"}))
+        assert not form.is_valid()
+        assert "public_contact_email" in form.errors
+
+    def test_whitespace_stripped(self):
+        from apps.submissions.forms import SubmissionForm
+
+        form = SubmissionForm(
+            _base_form_data({"public_contact_email": "  contact@example.com  "})
+        )
+        assert form.is_valid(), form.errors
+        assert form.cleaned_data["public_contact_email"] == "contact@example.com"
+
+    def test_blank_rejected(self):
+        from apps.submissions.forms import SubmissionForm
+
+        form = SubmissionForm(_base_form_data({"public_contact_email": ""}))
+        assert not form.is_valid()
+        assert "public_contact_email" in form.errors

@@ -134,8 +134,9 @@ service_center:
   tooltip: "Select a single de.NBI service centre from the dropdown. Start typing to filter the list of available centres. This helps organize services within the de.NBI network."
 
 public_contact_email:
-  help: "Public contact email."
-  tooltip: "This email will be displayed on the de.NBI website. Functional addresses (e.g. service@...) are recommended."
+  label: "Public contact email or support form"
+  help: "Displayed publicly on the de.NBI services page. Enter a functional email address or a valid https:// support URL."
+  tooltip: "This email address or support URL will be displayed publicly on the de.NBI services page. Use a functional email address (e.g. service@institution.de) or a valid https:// URL pointing to a support form or helpdesk."
 
 internal_contact_name:
   help: "Internal contact person."

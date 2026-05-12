@@ -1,4 +1,4 @@
-de.NBI Service Registry — Submission Status Update
+de.NBI Service Registration Platform — Submission Status Update
 ====================================================
 
 Dear {{ submission.submitter_first_name }} {{ submission.submitter_last_name }},

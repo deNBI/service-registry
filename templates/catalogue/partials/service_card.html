@@ -45,7 +45,7 @@
       {% if cats %}
       <div class="d-flex flex-wrap gap-1 mb-3">
         {% for cat in cats %}
-        <span class="badge catalogue-cat-badge">{{ cat.name }}</span>
+        <span class="badge catalogue-cat-badge" title="Service category">{{ cat.name }}</span>
         {% endfor %}
       </div>
       {% endif %}
@@ -57,7 +57,7 @@
         {% if topics %}
         <div class="d-flex flex-wrap gap-1 mb-2">
           {% for t in topics|slice:":3" %}
-          <span class="badge bg-light text-dark border small">{{ t.label }}</span>
+          <span class="badge bg-light text-dark border small" title="EDAM topic">{{ t.label }}</span>
           {% endfor %}
           {% if topics|length > 3 %}
           <span class="text-muted small">+{{ topics|length|add:"-3" }}</span>
@@ -70,7 +70,7 @@
     {# ── Maturity tag (if configured) ── #}
     {% if "maturity_tag" in card_fields and service.primary_maturity_tag %}
     <div class="mb-2">
-      <span class="badge bg-success">{{ service.get_primary_maturity_tag_display }}</span>
+      <span class="badge bg-success" title="Service maturity">{{ service.get_primary_maturity_tag_display }}</span>
     </div>
     {% endif %}
 

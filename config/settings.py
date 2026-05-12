@@ -1,5 +1,5 @@
 """
-de.NBI Service Registry — Django Settings
+de.NBI Service Registration Platform — Django Settings
 ==========================================
 All configuration is read from environment variables.
 Copy .env.example to .env and fill in values for local development.
@@ -389,9 +389,9 @@ REST_FRAMEWORK = {
 # drf-spectacular
 # ---------------------------------------------------------------------------
 SPECTACULAR_SETTINGS = {
-    "TITLE": _sc_api.get("title", "de.NBI Service Registry API"),
+    "TITLE": _sc_api.get("title", "de.NBI Service Registration Platform API"),
     "DESCRIPTION": (
-        "REST API for the de.NBI & ELIXIR-DE Service Registration system.\n\n"
+        "REST API for the de.NBI & ELIXIR-DE Service Registration Platform.\n\n"
         "## Authentication\n\n"
         "### Admin API Key (list all submissions)\n"
         "Create an admin API key in the Django admin under **API → Admin API Keys**. "

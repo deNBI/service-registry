@@ -4,7 +4,7 @@ icon: material/api
 
 # API Guide
 
-The de.NBI Service Registry REST API allows programmatic access to service registrations.
+The de.NBI Service Registration Platform REST API allows programmatic access to service registrations.
 
 Interactive documentation is available at:
 
@@ -283,7 +283,7 @@ Approved services can be tagged with a **primary maturity stage** (Mature, Emerg
 - `secondary_maturity_tags`: array of strings (e.g., `["unstable"]` or `[]`)
 
 !!! warning "Admin-only — read-only in the API"
-    Maturity tags are assigned exclusively by admins via the Django admin backend. Any `primary_maturity_tag` or `secondary_maturity_tags` values included in a `POST` or `PATCH` request body are **silently ignored**. Tags appear in GET responses so consumers can read the admin-assigned lifecycle stage.
+Maturity tags are assigned exclusively by admins via the Django admin backend. Any `primary_maturity_tag` or `secondary_maturity_tags` values included in a `POST` or `PATCH` request body are **silently ignored**. Tags appear in GET responses so consumers can read the admin-assigned lifecycle stage.
 
 **Filter by maturity:**
 
@@ -298,7 +298,7 @@ curl https://service-registry.bi.denbi.de/api/v1/submissions/?secondary_maturity
 ```
 
 !!! info "Tags are cleared on unapproval"
-    When an admin changes a service's status away from Approved (via the admin backend), all maturity tags are automatically cleared. The API will return `null` / `[]` for the tag fields on such services. Tags can be reassigned after the service is re-approved.
+When an admin changes a service's status away from Approved (via the admin backend), all maturity tags are automatically cleared. The API will return `null` / `[]` for the tag fields on such services. Tags can be reassigned after the service is re-approved.
 
 ---
 
@@ -449,14 +449,14 @@ header and in error bodies. Use it when reporting issues.
 
 ## Field visibility
 
-| Field                   | POST/PATCH | GET response | Notes                                          |
-| ----------------------- | ---------- | ------------ | ---------------------------------------------- |
-| `internal_contact_name` | required   | never        | Write-only; stored for admin use only          |
-| `internal_contact_email`| required   | never        | Write-only; stored for admin use only          |
-| `primary_maturity_tag`  | ignored    | yes          | Read-only in API; set by admins via backend. See [Maturity Tags](#maturity-tags) |
-| `secondary_maturity_tags`| ignored   | yes          | Read-only in API; set by admins via backend. See [Maturity Tags](#maturity-tags) |
-| `submission_ip`         | —          | never        | Server-generated; not exposed via API          |
-| `user_agent_hash`       | —          | never        | Server-generated; not exposed via API          |
+| Field                     | POST/PATCH | GET response | Notes                                                                            |
+| ------------------------- | ---------- | ------------ | -------------------------------------------------------------------------------- |
+| `internal_contact_name`   | required   | never        | Write-only; stored for admin use only                                            |
+| `internal_contact_email`  | required   | never        | Write-only; stored for admin use only                                            |
+| `primary_maturity_tag`    | ignored    | yes          | Read-only in API; set by admins via backend. See [Maturity Tags](#maturity-tags) |
+| `secondary_maturity_tags` | ignored    | yes          | Read-only in API; set by admins via backend. See [Maturity Tags](#maturity-tags) |
+| `submission_ip`           | —          | never        | Server-generated; not exposed via API                                            |
+| `user_agent_hash`         | —          | never        | Server-generated; not exposed via API                                            |
 
 ---
 

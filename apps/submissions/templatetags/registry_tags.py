@@ -1,5 +1,5 @@
 """
-Custom template tags for de.NBI Service Registry.
+Custom template tags for de.NBI Service Registration Platform.
 Provides access to site configuration values in templates that don't
 receive the submissions context processor (e.g. admin templates).
 """

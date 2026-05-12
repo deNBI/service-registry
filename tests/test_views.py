@@ -216,6 +216,66 @@ class TestRegisterView:
         sub = ServiceSubmission.objects.get(service_name="Logo Upload Service")
         assert sub.logo  # logo was stored
 
+    def test_registration_with_https_url_public_contact(self, client):
+        """A support URL is accepted end-to-end through the registration form."""
+        from tests.factories import (
+            PIFactory,
+            ServiceCategoryFactory,
+            ServiceCenterFactory,
+        )
+        from django.urls import reverse
+        from django.utils import timezone
+
+        cat = ServiceCategoryFactory()
+        center = ServiceCenterFactory()
+        pi = PIFactory()
+
+        data = {
+            "date_of_entry": timezone.now().date().isoformat(),
+            "submitter_first_name": "Test",
+            "submitter_last_name": "User",
+            "submitter_affiliation": "FZ Jülich",
+            "register_as_elixir": "False",
+            "service_name": "Test Service URL Contact",
+            "service_description": "A sufficiently long description of the test service for validation purposes.",
+            "year_established": 2022,
+            "service_categories": [cat.pk],
+            "is_toolbox": "False",
+            "toolbox_name": "",
+            "user_knowledge_required": "",
+            "publications_pmids": "12345678",
+            "responsible_pis": [pi.pk],
+            "associated_partner_note": "",
+            "host_institute": "Test Institute",
+            "service_center": center.pk,
+            "public_contact_email": "https://support.example.com/helpdesk",
+            "internal_contact_name": "Internal Name",
+            "internal_contact_email": "internal@test.com",
+            "internal_contact_email_confirm": "internal@test.com",
+            "website_url": "https://example.com",
+            "terms_of_use_url": "https://example.com/tos",
+            "license_note": "MIT",
+            "github_url": "",
+            "biotools_url": "",
+            "fairsharing_url": "",
+            "other_registry_url": "",
+            "kpi_monitoring": "yes",
+            "kpi_start_year": "2022",
+            "keywords_uncited": "",
+            "keywords_seo": "",
+            "survey_participation": "True",
+            "comments": "",
+            "data_protection_consent": "True",
+        }
+        resp = client.post(reverse("submissions:register"), data=data)
+        assert resp.status_code == 302
+        assert resp["Location"] == reverse("submissions:success")
+        from apps.submissions.models import ServiceSubmission
+
+        sub = ServiceSubmission.objects.get(service_name="Test Service URL Contact")
+        assert sub.public_contact_email == "https://support.example.com/helpdesk"
+        assert sub.public_contact_is_url is True
+
     def test_post_with_invalid_logo_returns_422(self, client):
         """Registration with an invalid logo file must fail form validation."""
         from tests.factories import (

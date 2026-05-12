@@ -72,7 +72,7 @@ def site_context(request):
         # Top-level shortcuts for the most-used values
         "LOGO_URL": logo_url,
         "FAVICON_URL": favicon_url,
-        "SITE_NAME": site.get("name", "de.NBI Service Registry"),
+        "SITE_NAME": site.get("name", "de.NBI Service Registration Platform"),
         "SITE_URL": site.get("url", ""),
         "CONTACT_EMAIL": cont.get("email", "servicecoordination@denbi.de"),
         "CONTACT_OFFICE": cont.get("office", ""),

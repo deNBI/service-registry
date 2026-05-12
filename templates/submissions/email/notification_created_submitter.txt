@@ -1,4 +1,4 @@
-de.NBI Service Registry — Submission Received
+de.NBI Service Registration Platform — Submission Received
 ===============================================
 
 Dear {{ submission.submitter_first_name }} {{ submission.submitter_last_name }},

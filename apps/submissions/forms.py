@@ -238,7 +238,12 @@ class SubmissionForm(forms.ModelForm):
                 placeholder="e.g. Forschungszentrum Jülich"
             ),
             "service_center": CompactSelectSingleWidget(label="de.NBI Service Center"),
-            "public_contact_email": forms.EmailInput(attrs={"class": "form-control"}),
+            "public_contact_email": forms.TextInput(
+                attrs={
+                    "class": "form-control",
+                    "placeholder": "email@example.com or https://support.example.org",
+                }
+            ),
             "internal_contact_name": forms.TextInput(attrs={"class": "form-control"}),
             "internal_contact_email": forms.EmailInput(attrs={"class": "form-control"}),
             # Section D
@@ -312,7 +317,7 @@ class SubmissionForm(forms.ModelForm):
             "associated_partner_note": _("Associated partner details"),
             "host_institute": _("Host institute of the Service"),
             "service_center": _("Associated de.NBI Service Center"),
-            "public_contact_email": _("Public contact email or support form"),
+            # label sourced from form_texts.yaml
             "internal_contact_name": _("Internal contact person (name & affiliation)"),
             "internal_contact_email": _("Internal contact email"),
             "website_url": _("Link to the service website"),
@@ -480,6 +485,9 @@ class SubmissionForm(forms.ModelForm):
             if email != confirm:
                 raise ValidationError(_("Email addresses do not match."))
         return confirm
+
+    def clean_public_contact_email(self) -> str:
+        return self.cleaned_data.get("public_contact_email", "").strip()
 
     def clean_logo(self):
         f = self.cleaned_data.get("logo")

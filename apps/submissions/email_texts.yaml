@@ -20,9 +20,9 @@
 # These appear in the email subject line for each event type.
 
 subjects:
-  created: "[de.NBI Service Registry] New service submitted: {service_name}"
-  status_changed: "[de.NBI Service Registry] Status changed to '{status}': {service_name}"
-  updated: "[de.NBI Service Registry] Update: {service_name}"
+  created: "[de.NBI Service Registration Platform] New service submitted: {service_name}"
+  status_changed: "[de.NBI Service Registration Platform] Status changed to '{status}': {service_name}"
+  updated: "[de.NBI Service Registration Platform] Update: {service_name}"
   submitter_created: "Your service registration has been received: {service_name}"
   submitter_status: "Your service registration status: {status} — {service_name}"
   submitter_updated: "Your service registration has been updated: {service_name}"
@@ -33,8 +33,8 @@ subjects:
 # The "default" entry is used for any status not explicitly listed.
 
 status_messages:
-  approved: "Your service has been approved and is now registered in the de.NBI Service Registry. Thank you for your submission."
+  approved: "Your service has been approved and is now registered in the de.NBI Service Registration Platform. Thank you for your submission."
   rejected: "Your service registration was not approved at this time. If you have questions, please contact us."
   under_review: "Your submission is currently under review. We will notify you once a decision has been made."
-  deprecated: "Your service has been marked as deprecated and is no longer listed as active in the de.NBI Service Registry. If you believe this is an error or wish to reactivate your service, please contact us."
+  deprecated: "Your service has been marked as deprecated and is no longer listed as active in the de.NBI Service Registration Platform. If you believe this is an error or wish to reactivate your service, please contact us."
   default: "If you have questions about your submission, please contact us."

@@ -1,5 +1,5 @@
 # =============================================================================
-# de.NBI Service Registry — Site Configuration
+# de.NBI Service Registration Platform — Site Configuration
 # =============================================================================
 #
 # This file is the ONE PLACE to edit all non-secret site settings:
@@ -27,10 +27,10 @@
 [site]
 
 # Human-readable name used in page titles, email subjects, and the navbar.
-name = "de.NBI Service Registry"
+name = "de.NBI Service Registration Platform"
 
 # Short tagline shown in the browser tab and meta description.
-tagline = "de.NBI & ELIXIR-DE Service Registration System"
+tagline = "de.NBI & ELIXIR-DE Service Registration Platform"
 
 # The canonical public URL of this deployment (no trailing slash).
 # Used in emails, API contact info, and the bio.tools client User-Agent.
@@ -78,7 +78,7 @@ organisation = "German Network for Bioinformatics Infrastructure"
 from_address = "no-reply@denbi.de"
 
 # Subject prefix prepended to all notification emails.
-subject_prefix = "[de.NBI Service Registry]"
+subject_prefix = "[de.NBI Service Registration Platform]"
 
 
 # -----------------------------------------------------------------------------
@@ -111,7 +111,7 @@ user_guide = "https://denbi.github.io/service-registry/user-guide/"
 [api]
 
 # Title shown in the Swagger UI and ReDoc pages.
-title = "de.NBI Service Registry API"
+title = "de.NBI Service Registration Platform API"
 
 # API version string.
 version = "1.0.0"
