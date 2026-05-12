@@ -60,11 +60,34 @@
           {% if cats %}
           <span class="catalogue-meta-dot" aria-hidden="true">·</span>
           {% for cat in cats %}
-          <span class="badge catalogue-cat-badge">{{ cat.name }}</span>
+          <span class="badge catalogue-cat-badge" title="Service category">{{ cat.name }}</span>
           {% endfor %}
           {% endif %}
         {% endwith %}
       </div>
+
+      {# ── EDAM topics (if configured) ── #}
+      {% if "edam_topics" in card_fields %}
+        {% with topics=service.edam_topics.all %}
+          {% if topics %}
+          <div class="d-flex flex-wrap gap-1 mb-1">
+            {% for t in topics|slice:":3" %}
+            <span class="badge bg-light text-dark border small" title="EDAM topic">{{ t.label }}</span>
+            {% endfor %}
+            {% if topics|length > 3 %}
+            <span class="text-muted small">+{{ topics|length|add:"-3" }}</span>
+            {% endif %}
+          </div>
+          {% endif %}
+        {% endwith %}
+      {% endif %}
+
+      {# ── Maturity tag (if configured) ── #}
+      {% if "maturity_tag" in card_fields and service.primary_maturity_tag %}
+      <div class="mb-1">
+        <span class="badge bg-success" title="Service maturity">{{ service.get_primary_maturity_tag_display }}</span>
+      </div>
+      {% endif %}
 
       {# Foldable description #}
       {% if service.service_description %}

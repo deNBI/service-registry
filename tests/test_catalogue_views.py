@@ -19,6 +19,19 @@ CATALOGUE_OFF = {
     **CATALOGUE_ON,
     "features": {"catalogue": False},
 }
+CATALOGUE_WITH_EDAM_MATURITY = {
+    **CATALOGUE_ON,
+    "catalogue": {
+        "per_page": 12,
+        "card_fields": [
+            "categories",
+            "service_center",
+            "updated_at",
+            "edam_topics",
+            "maturity_tag",
+        ],
+    },
+}
 
 
 @pytest.mark.django_db
@@ -168,3 +181,132 @@ class TestCatalogueListView:
         assert resp.status_code == 200
         assert b"catalogue-toolbar" in resp.content
         assert b"catalogue-filter-sidebar" in resp.content
+
+
+@pytest.mark.django_db
+class TestCatalogueCardTooltips:
+    """Verify that card view badges carry the correct title tooltip."""
+
+    def test_category_badge_has_tooltip(self, client, settings):
+        from tests.factories import ServiceCategoryFactory, ServiceSubmissionFactory
+
+        settings.SITE_CONFIG = CATALOGUE_ON
+        cat = ServiceCategoryFactory(name="Sequence Analysis")
+        sub = ServiceSubmissionFactory(status="approved", biotools_url="")
+        sub.service_categories.set([cat])
+        resp = client.get("/catalogue/grid/")
+        content = resp.content.decode()
+        assert 'title="Service category"' in content
+        assert "Sequence Analysis" in content
+
+    def test_edam_topic_badge_has_tooltip(self, client, settings):
+        from apps.edam.models import EdamTerm
+        from tests.factories import ServiceSubmissionFactory
+
+        settings.SITE_CONFIG = CATALOGUE_WITH_EDAM_MATURITY
+        sub = ServiceSubmissionFactory(status="approved", biotools_url="")
+        topic = EdamTerm.objects.create(
+            uri="http://edamontology.org/topic_0091",
+            label="Bioinformatics",
+            branch="topic",
+            accession="topic_0091",
+        )
+        sub.edam_topics.add(topic)
+        resp = client.get("/catalogue/grid/")
+        content = resp.content.decode()
+        assert 'title="EDAM topic"' in content
+        assert "Bioinformatics" in content
+
+    def test_maturity_badge_has_tooltip(self, client, settings):
+        from tests.factories import ServiceSubmissionFactory
+
+        settings.SITE_CONFIG = CATALOGUE_WITH_EDAM_MATURITY
+        ServiceSubmissionFactory(
+            status="approved", primary_maturity_tag="mature", biotools_url=""
+        )
+        resp = client.get("/catalogue/grid/")
+        content = resp.content.decode()
+        assert 'title="Service maturity"' in content
+        assert "Mature" in content
+
+
+@pytest.mark.django_db
+class TestCatalogueListParity:
+    """Verify list view shows the same pills as card view, with tooltips."""
+
+    def test_category_badge_has_tooltip_in_list_view(self, client, settings):
+        from tests.factories import ServiceCategoryFactory, ServiceSubmissionFactory
+
+        settings.SITE_CONFIG = CATALOGUE_ON
+        cat = ServiceCategoryFactory(name="Genomics")
+        sub = ServiceSubmissionFactory(status="approved", biotools_url="")
+        sub.service_categories.set([cat])
+        resp = client.get("/catalogue/grid/?view=list")
+        content = resp.content.decode()
+        assert 'title="Service category"' in content
+        assert "Genomics" in content
+
+    def test_list_view_shows_edam_topic_with_tooltip(self, client, settings):
+        from apps.edam.models import EdamTerm
+        from tests.factories import ServiceSubmissionFactory
+
+        settings.SITE_CONFIG = CATALOGUE_WITH_EDAM_MATURITY
+        sub = ServiceSubmissionFactory(status="approved", biotools_url="")
+        topic = EdamTerm.objects.create(
+            uri="http://edamontology.org/topic_0092",
+            label="Data visualisation",
+            branch="topic",
+            accession="topic_0092",
+        )
+        sub.edam_topics.add(topic)
+        resp = client.get("/catalogue/grid/?view=list")
+        content = resp.content.decode()
+        assert 'title="EDAM topic"' in content
+        assert "Data visualisation" in content
+
+    def test_list_view_shows_maturity_badge_with_tooltip(self, client, settings):
+        from tests.factories import ServiceSubmissionFactory
+
+        settings.SITE_CONFIG = CATALOGUE_WITH_EDAM_MATURITY
+        ServiceSubmissionFactory(
+            status="approved", primary_maturity_tag="emerging", biotools_url=""
+        )
+        resp = client.get("/catalogue/grid/?view=list")
+        content = resp.content.decode()
+        assert 'title="Service maturity"' in content
+        assert "Emerging" in content
+
+    def test_list_view_edam_overflow_count(self, client, settings):
+        """When a service has more than 3 EDAM topics, list view shows +N overflow."""
+        from apps.edam.models import EdamTerm
+        from tests.factories import ServiceSubmissionFactory
+
+        settings.SITE_CONFIG = CATALOGUE_WITH_EDAM_MATURITY
+        sub = ServiceSubmissionFactory(status="approved", biotools_url="")
+        for i in range(4):
+            topic = EdamTerm.objects.create(
+                uri=f"http://edamontology.org/topic_100{i}",
+                label=f"Topic {i}",
+                branch="topic",
+                accession=f"topic_100{i}",
+            )
+            sub.edam_topics.add(topic)
+        resp = client.get("/catalogue/grid/?view=list")
+        assert b"+1" in resp.content
+
+    def test_list_view_no_edam_when_not_in_card_fields(self, client, settings):
+        """EDAM section is absent when edam_topics not in card_fields."""
+        from apps.edam.models import EdamTerm
+        from tests.factories import ServiceSubmissionFactory
+
+        settings.SITE_CONFIG = CATALOGUE_ON  # card_fields has no edam_topics
+        sub = ServiceSubmissionFactory(status="approved", biotools_url="")
+        topic = EdamTerm.objects.create(
+            uri="http://edamontology.org/topic_0093",
+            label="Should Not Appear",
+            branch="topic",
+            accession="topic_0093",
+        )
+        sub.edam_topics.add(topic)
+        resp = client.get("/catalogue/grid/?view=list")
+        assert b"Should Not Appear" not in resp.content
