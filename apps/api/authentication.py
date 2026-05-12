@@ -1,7 +1,7 @@
 """
 API Authentication
 ==================
-Custom DRF authentication backends for the de.NBI Service Registry.
+Custom DRF authentication backends for the de.NBI Service Registration Platform.
 
 SubmissionAPIKeyAuthentication
   - Header: ``Authorization: ApiKey <key>``

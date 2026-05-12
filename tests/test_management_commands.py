@@ -463,5 +463,5 @@ class TestSiteContextProcessor:
 
     def test_defaults_when_empty_config(self):
         ctx = self._call({})
-        assert ctx["SITE_NAME"] == "de.NBI Service Registry"
+        assert ctx["SITE_NAME"] == "de.NBI Service Registration Platform"
         assert "denbi.de/privacy-policy" in ctx["PRIVACY_POLICY_URL"]

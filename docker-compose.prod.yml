@@ -1,5 +1,5 @@
 # =============================================================================
-# de.NBI Service Registry — Production Docker Compose Overrides
+# de.NBI Service Registration Platform — Production Docker Compose Overrides
 # =============================================================================
 # Merge with base compose for local staging / CI image validation:
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d

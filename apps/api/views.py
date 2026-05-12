@@ -1,7 +1,7 @@
 """
 API Views
 =========
-DRF ViewSets for the de.NBI Service Registry REST API.
+DRF ViewSets for the de.NBI Service Registration Platform REST API.
 
 Authentication strategy
 -----------------------

@@ -1,5 +1,5 @@
 # =============================================================================
-# de.NBI Service Registry — CI Docker Compose
+# de.NBI Service Registration Platform — CI Docker Compose
 # =============================================================================
 # Runs tests, linting, and security audit inside Docker.
 # Tests use SQLite in-memory (config/settings_test.py) — no external services.

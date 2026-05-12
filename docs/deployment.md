@@ -4,7 +4,7 @@ icon: material/rocket-launch
 
 # Deployment Guide
 
-> **Configuration:** see [Configuration Reference](configuration.md) for all settings including branding, contact email, and feature flags. — de.NBI Service Registry
+> **Configuration:** see [Configuration Reference](configuration.md) for all settings including branding, contact email, and feature flags. — de.NBI Service Registration Platform
 
 ## Prerequisites
 
@@ -49,22 +49,22 @@ make superuser
 ## Production Deployment
 
 !!! note "Ansible-managed production"
-    The de.NBI production environment is deployed via Ansible. The Ansible role
-    (`roles/registry/templates/docker-compose.yml.j2`) generates the authoritative
-    production compose file and manages `.env` via vault. The steps below describe
-    the infrastructure assumptions — consult the Ansible role for the actual
-    deployment procedure.
+The de.NBI production environment is deployed via Ansible. The Ansible role
+(`roles/registry/templates/docker-compose.yml.j2`) generates the authoritative
+production compose file and manages `.env` via vault. The steps below describe
+the infrastructure assumptions — consult the Ansible role for the actual
+deployment procedure.
 
 ### Architecture
 
-| Component | How deployed |
-|---|---|
-| Django (Gunicorn) | Docker container — image from `crate.bi.denbi.de/denbi/denbi-service-registry:stable` |
-| Celery worker + beat | Docker containers — same image |
-| Redis | Docker container — broker + rate-limit cache |
-| PostgreSQL | External managed instance — not a Docker container |
-| Nginx + TLS | Host-managed — terminates HTTPS, proxies to Gunicorn on port 8000 |
-| `config/site.toml` | Bind-mounted from `/data/denbi-service-registry/config/site.toml` — rebranding requires no image rebuild |
+| Component                      | How deployed                                                                                                              |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| Django (Gunicorn)              | Docker container — image from `crate.bi.denbi.de/denbi/denbi-service-registry:stable`                                     |
+| Celery worker + beat           | Docker containers — same image                                                                                            |
+| Redis                          | Docker container — broker + rate-limit cache                                                                              |
+| PostgreSQL                     | External managed instance — not a Docker container                                                                        |
+| Nginx + TLS                    | Host-managed — terminates HTTPS, proxies to Gunicorn on port 8000                                                         |
+| `config/site.toml`             | Bind-mounted from `/data/denbi-service-registry/config/site.toml` — rebranding requires no image rebuild                  |
 | `mediafiles/` (uploaded logos) | Named Docker volume `media_data` mounted at `/app/mediafiles` — must persist across container restarts and image upgrades |
 
 ### Step 1 — Configure environment
@@ -117,20 +117,20 @@ docker compose exec web python manage.py createsuperuser
 ```
 
 !!! info "Migrations, group sync, and EDAM seeding are automatic"
-    The `web` container entrypoint runs `manage.py migrate --noinput` before starting,
-    then immediately runs `manage.py setup_groups` to keep the three admin role groups
-    (`Registry Viewer`, `Registry Editor`, `Registry Manager`) in sync with the codebase.
-    On a fresh database, migrations also seed the EDAM ontology (~3,400 terms, ~30 s).
-    Worker and beat containers set `SKIP_MIGRATE=true` so they do not race web on startup.
+The `web` container entrypoint runs `manage.py migrate --noinput` before starting,
+then immediately runs `manage.py setup_groups` to keep the three admin role groups
+(`Registry Viewer`, `Registry Editor`, `Registry Manager`) in sync with the codebase.
+On a fresh database, migrations also seed the EDAM ontology (~3,400 terms, ~30 s).
+Worker and beat containers set `SKIP_MIGRATE=true` so they do not race web on startup.
 
 !!! info "Static files are baked into the image"
-    `collectstatic` runs at Docker build time — no separate `collectstatic` step needed.
+`collectstatic` runs at Docker build time — no separate `collectstatic` step needed.
 
 !!! warning "SKIP_MIGRATE on worker and beat"
-    The Ansible-generated compose must set `SKIP_MIGRATE: "true"` in the environment
-    of `worker` and `beat` services. Without this, all three containers race to run
-    migrations simultaneously on a fresh database, causing a PostgreSQL `UniqueViolation`
-    error. The `web` service is the sole migration runner.
+The Ansible-generated compose must set `SKIP_MIGRATE: "true"` in the environment
+of `worker` and `beat` services. Without this, all three containers race to run
+migrations simultaneously on a fresh database, causing a PostgreSQL `UniqueViolation`
+error. The `web` service is the sole migration runner.
 
 ---
 

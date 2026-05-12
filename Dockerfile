@@ -1,5 +1,5 @@
 # =============================================================================
-# de.NBI Service Registry — Dockerfile
+# de.NBI Service Registration Platform — Dockerfile
 # =============================================================================
 # Multi-stage build:
 #   builder  : installs Python dependencies into a virtual env

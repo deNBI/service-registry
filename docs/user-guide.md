@@ -6,7 +6,7 @@ icon: material/account
 
 ## What is this?
 
-This is the de.NBI & ELIXIR-DE Service Registration system. Use it to register your
+This is the de.NBI & ELIXIR-DE Service Registration Platform. Use it to register your
 bioinformatics service for inclusion in the [de.NBI services catalogue](https://www.denbi.de/services).
 
 ---
@@ -28,8 +28,8 @@ bioinformatics service for inclusion in the [de.NBI services catalogue](https://
    | B — Service Data     | Service name, description, year, category, EDAM annotations, publications      |
    | C — Responsibilities | Responsible PI(s), host institute, contact emails                              |
    | D — Links            | Service website, terms of use, license, optional repository and registry links |
-   | E — KPIs             | Whether KPI monitoring is in place, start year (if applicable)                |
-   | F — Discoverability  | Keywords for search, citation tracking, and survey participation                    |
+   | E — KPIs             | Whether KPI monitoring is in place, start year (if applicable)                 |
+   | F — Discoverability  | Keywords for search, citation tracking, and survey participation               |
    | G — Consent          | Data protection consent (required to submit)                                   |
 
 3. Click **Submit Registration**.
@@ -234,6 +234,7 @@ While filling out the form, your progress is automatically saved to your browser
 Select the license that governs how users may use your service. You can select one or more standard licenses from the list (e.g. MIT, Apache-2.0).
 
 If none of the standard licenses apply, use the **License note** field below to enter:
+
 - "Not applicable"
 - "None of the above"
 - "Proprietary"
@@ -247,13 +248,13 @@ If none of the standard licenses apply, use the **License note** field below to 
 
 Your submission moves through these states:
 
-| Status           | Meaning                                                                                                                                              |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Draft**        | Saved locally but not yet submitted. Draft submissions older than 30 days are automatically deleted.                                                 |
-| **Submitted**    | Form submitted. The de.NBI administration office has been notified.                                                                                  |
-| **Under Review** | Actively being reviewed by the service coordination team.                                                                                            |
-| **Approved**     | Your service has been accepted and will appear in the de.NBI services catalogue.                                                                     |
-| **Rejected**     | The submission was not accepted. You will receive an email explaining why. You may edit and resubmit.                                                |
+| Status           | Meaning                                                                                                                                                                                                                            |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Draft**        | Saved locally but not yet submitted. Draft submissions older than 30 days are automatically deleted.                                                                                                                               |
+| **Submitted**    | Form submitted. The de.NBI administration office has been notified.                                                                                                                                                                |
+| **Under Review** | Actively being reviewed by the service coordination team.                                                                                                                                                                          |
+| **Approved**     | Your service has been accepted and will appear in the de.NBI services catalogue.                                                                                                                                                   |
+| **Rejected**     | The submission was not accepted. You will receive an email explaining why. You may edit and resubmit.                                                                                                                              |
 | **Deprecated**   | The service is no longer active. You can mark your own service as deprecated via the edit form (see below). Only the registry team can reverse this. Deprecated services are hidden from public listings but retain their history. |
 
 If you edit a submission that was already **Approved**, the status resets to **Submitted** and the administration office is notified to re-review your changes.
@@ -277,7 +278,6 @@ If your service is no longer active, you can mark it as deprecated directly from
 The status will be set to **Deprecated** and the registry team will be notified. Only registry admins can reverse a deprecation — contact [servicecoordination@denbi.de](mailto:servicecoordination@denbi.de) if you need to reactivate a deprecated service.
 
 ---
-
 
 ---
 

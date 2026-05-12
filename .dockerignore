@@ -1,5 +1,5 @@
 # =============================================================================
-# .dockerignore — de.NBI Service Registry
+# .dockerignore — de.NBI Service Registration Platform
 # =============================================================================
 # Controls what the Docker build daemon sends to the builder as the build
 # context. Keeping this tight:

@@ -1,5 +1,5 @@
 # =============================================================================
-# de.NBI Service Registry — Base Python Dependencies
+# de.NBI Service Registration Platform — Base Python Dependencies
 # =============================================================================
 # Install with: pip install -r requirements/base.txt
 

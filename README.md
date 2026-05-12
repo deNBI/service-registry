@@ -1,6 +1,6 @@
-# de.NBI Service Registry
+# de.NBI Service Registration Platform
 
-Registration system for de.NBI & ELIXIR-DE services — structured form, REST API, EDAM annotations, bio.tools integration, and admin review portal.
+Registration Platform for de.NBI & ELIXIR-DE services — structured form, REST API, EDAM annotations, bio.tools integration, and admin review portal.
 
 ## Quick start
 

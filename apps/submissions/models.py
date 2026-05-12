@@ -1,7 +1,7 @@
 """
 Submission Models
 =================
-Core models for the de.NBI service registration system.
+Core models for the de.NBI service registration platform.
 
 Models:
   - ServiceSubmission  : The full registration record for one service.

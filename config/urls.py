@@ -1,5 +1,5 @@
 """
-de.NBI Service Registry — Root URL Configuration
+de.NBI Service Registration Platform — Root URL Configuration
 =================================================
 """
 
@@ -18,7 +18,7 @@ from drf_spectacular.views import (
 _site_name = (
     getattr(settings, "SITE_CONFIG", {})
     .get("site", {})
-    .get("name", "de.NBI Service Registry")
+    .get("name", "de.NBI Service Registration Platform")
 )
 admin.site.site_header = f"{_site_name} Administration"
 admin.site.site_title = f"{_site_name} Admin"

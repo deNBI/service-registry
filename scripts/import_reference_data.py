@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-import_reference_data.py — Sync reference data to the de.NBI Service Registry admin API
+import_reference_data.py — Sync reference data to the de.NBI Service Registration Platform admin API
 ========================================================================================
 
 Reads an Excel workbook with three sheets and upserts each row via the admin REST API.
@@ -497,7 +497,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="import_reference_data.py",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent("""\
-            Sync reference data from an Excel workbook to the de.NBI Service Registry
+            Sync reference data from an Excel workbook to the de.NBI Service Registration Platform
             admin API.  Records are created or updated — nothing is ever deleted.
 
             The workbook must contain three sheets named exactly:

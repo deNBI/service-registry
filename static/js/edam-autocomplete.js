@@ -1,5 +1,5 @@
 /**
- * de.NBI Service Registry — EDAM Tag Picker, Compact Select & bio.tools Prefill
+ * de.NBI Service Registration Platform — EDAM Tag Picker, Compact Select & bio.tools Prefill
  *
  * buildEdamPicker      — pill-zone picker for EDAM ontology fields (select.edam-autocomplete)
  * buildCompactSelect   — searchable checkbox list for multi-select (select[data-compact-select="label"])

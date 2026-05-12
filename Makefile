@@ -1,5 +1,5 @@
 # =============================================================================
-# de.NBI Service Registry — Developer Makefile
+# de.NBI Service Registration Platform — Developer Makefile
 # =============================================================================
 # Run `make` or `make help` to see available targets.
 # =============================================================================
@@ -13,7 +13,7 @@
 
 help:
 	@echo ""
-	@echo "de.NBI Service Registry — make targets"
+	@echo "de.NBI Service Registration Platform — make targets"
 	@echo ""
 	@echo "  Development"
 	@echo "    make build            Rebuild images from scratch (no cache)"

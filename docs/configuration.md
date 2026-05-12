@@ -20,6 +20,7 @@ Environment variables always take precedence over settings in `config/site.toml`
 - Override site.toml values without editing the file
 
 For example:
+
 - `EDAM_OWL_URL` in `.env` overrides `[edam] owl_url` in site.toml
 - `ADMIN_URL_PREFIX` in `.env` overrides `[admin] url_prefix` in site.toml
 - `LOGO_URL` in `.env` overrides `[site] logo_url` in site.toml
@@ -36,8 +37,8 @@ the registry for a different organisation.
 
 ```toml
 [site]
-name         = "de.NBI Service Registry"
-tagline      = "de.NBI & ELIXIR-DE Service Registration System"
+name         = "de.NBI Service Registration Platform"
+tagline      = "de.NBI & ELIXIR-DE Service Registration Platform"
 url          = "https://service-registry.bi.denbi.de"
 logo_url     = ""
 favicon_url  = ""
@@ -86,20 +87,20 @@ user_guide      = "https://denbi.github.io/service-registry/user-guide/"
 
 All links are rendered dynamically — changing a URL here updates it everywhere in the UI without touching template files.
 
-| Key | Description | Default |
-|-----|-------------|---------|
-| `website` | Main organisation website | `https://www.denbi.de` |
-| `privacy_policy` | Privacy policy page | `https://www.denbi.de/privacy-policy` |
-| `imprint` | Legal imprint page | `https://www.denbi.de/imprint` |
-| `data_protection` | Data protection information | `https://www.denbi.de/privacy-policy` |
-| `kpi_cheatsheet` | KPI cheat-sheet PDF | PDF URL |
-| `user_guide` | User documentation page (appears in navbar) | `https://denbi.github.io/service-registry/user-guide/` |
+| Key               | Description                                 | Default                                                |
+| ----------------- | ------------------------------------------- | ------------------------------------------------------ |
+| `website`         | Main organisation website                   | `https://www.denbi.de`                                 |
+| `privacy_policy`  | Privacy policy page                         | `https://www.denbi.de/privacy-policy`                  |
+| `imprint`         | Legal imprint page                          | `https://www.denbi.de/imprint`                         |
+| `data_protection` | Data protection information                 | `https://www.denbi.de/privacy-policy`                  |
+| `kpi_cheatsheet`  | KPI cheat-sheet PDF                         | PDF URL                                                |
+| `user_guide`      | User documentation page (appears in navbar) | `https://denbi.github.io/service-registry/user-guide/` |
 
 ### OpenAPI metadata
 
 ```toml
 [api]
-title        = "de.NBI Service Registry API"
+title        = "de.NBI Service Registration Platform API"
 version      = "1.0.0"
 license_name = "MIT"
 ```
@@ -124,11 +125,11 @@ meta_description = "Browse all approved de.NBI & ELIXIR-DE bioinformatics servic
 
 The catalogue is a public, read-only page at `/catalogue/` that lets anonymous users browse, search, filter, sort, and group all approved services. It is disabled by default — set `[features] catalogue = true` to enable it.
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `card_fields` | `["categories", "service_center", "edam_topics", "updated_at", "maturity_tag"]` | Fields shown on each service card. Remove a key to hide that field. Available: `"categories"`, `"service_center"`, `"edam_topics"`, `"maturity_tag"`, `"updated_at"` |
-| `per_page` | `12` | Number of service cards per page (server-side pagination). |
-| `meta_description` | `"Browse all approved…"` | Content of the catalogue page `<meta name="description">` and OpenGraph description tags. |
+| Key                | Default                                                                         | Description                                                                                                                                                          |
+| ------------------ | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `card_fields`      | `["categories", "service_center", "edam_topics", "updated_at", "maturity_tag"]` | Fields shown on each service card. Remove a key to hide that field. Available: `"categories"`, `"service_center"`, `"edam_topics"`, `"maturity_tag"`, `"updated_at"` |
+| `per_page`         | `12`                                                                            | Number of service cards per page (server-side pagination).                                                                                                           |
+| `meta_description` | `"Browse all approved…"`                                                        | Content of the catalogue page `<meta name="description">` and OpenGraph description tags.                                                                            |
 
 After enabling, the "Registry Catalogue" link appears automatically in the navbar. Disabling the flag hides the link and makes the route return 404.
 
