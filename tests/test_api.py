@@ -1053,6 +1053,46 @@ class TestEdamEndpoint:
         for term in resp.json():
             assert term["branch"] == "topic"
 
+    @pytest.mark.django_db
+    def test_search_by_synonym_returns_matching_term(self, api_client):
+        from apps.edam.models import EdamTerm
+
+        EdamTerm.objects.create(
+            uri="http://edamontology.org/topic_9903",
+            accession="topic_9903",
+            branch="topic",
+            label="Unique API Topic ZZZ",
+            definition="For API synonym search test.",
+            synonyms=["api_unique_synonym_xyz"],
+            sort_order=9903,
+            edam_version="test",
+        )
+        resp = api_client.get("/api/v1/edam/?q=api_unique_synonym_xyz")
+        assert resp.status_code == 200
+        data = resp.json()
+        accessions = [t["accession"] for t in data]
+        assert "topic_9903" in accessions
+
+    @pytest.mark.django_db
+    def test_search_by_synonym_does_not_return_non_matching_terms(self, api_client):
+        from apps.edam.models import EdamTerm
+
+        EdamTerm.objects.create(
+            uri="http://edamontology.org/topic_9904",
+            accession="topic_9904",
+            branch="topic",
+            label="Non-matching Topic",
+            definition="Should not appear in synonym search.",
+            synonyms=["other_synonym"],
+            sort_order=9904,
+            edam_version="test",
+        )
+        resp = api_client.get("/api/v1/edam/?q=api_unique_synonym_xyz_nomatch")
+        assert resp.status_code == 200
+        data = resp.json()
+        accessions = [t["accession"] for t in data]
+        assert "topic_9904" not in accessions
+
 
 # ===========================================================================
 # OpenAPI / docs endpoints

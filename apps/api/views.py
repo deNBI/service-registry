@@ -600,7 +600,7 @@ class EdamTermViewSet(
 
     **Filters:**
     - `?branch=topic|operation|data|format`
-    - `?q=<search term>` — searches label and definition
+    - `?q=<search term>` — searches label, definition, and synonyms
     """
 
     from apps.edam.models import EdamTerm
@@ -628,7 +628,11 @@ class EdamTermViewSet(
             qs = qs.filter(branch=branch)
         q = self.request.query_params.get("q")
         if q:
-            qs = qs.filter(Q(label__icontains=q) | Q(definition__icontains=q))
+            qs = qs.filter(
+                Q(label__icontains=q)
+                | Q(definition__icontains=q)
+                | Q(synonyms__icontains=q)
+            )
         return qs.order_by("branch", "sort_order")
 
     def get_object(self):

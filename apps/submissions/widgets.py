@@ -34,6 +34,8 @@ CompactSelectSingleWidget: Single-select variant of compact select.
   - Used for fields like service_center
 """
 
+import json
+
 from django import forms
 
 
@@ -67,6 +69,33 @@ class EdamAutocompleteWidget(forms.SelectMultiple):
         if attrs:
             default_attrs.update(attrs)
         super().__init__(attrs=default_attrs)
+
+    def optgroups(self, name, value, attrs=None):
+        groups = super().optgroups(name, value, attrs)
+
+        # Build pk→synonyms map from the bound queryset (one query, only needed cols)
+        choices_qs = getattr(self.choices, "queryset", None)
+        if choices_qs is None:
+            return groups
+        synonyms_map = {
+            str(entry["pk"]): entry["synonyms"] or []
+            for entry in choices_qs.values("pk", "synonyms")
+        }
+        if not synonyms_map:
+            return groups
+
+        # Post-process: inject data-synonyms onto each option dict (local vars only)
+        for _group_name, subgroup, _index in groups:
+            for option in subgroup:
+                raw_val = option.get("value", "")
+                pk = str(raw_val.value) if hasattr(raw_val, "value") else str(raw_val)
+                synonyms = synonyms_map.get(pk, [])
+                if synonyms:
+                    # Cap at 10; JS further caps display at SYN_CAP=5 with +N overflow
+                    option["attrs"]["data-synonyms"] = json.dumps(
+                        synonyms[:10], ensure_ascii=False
+                    )
+        return groups
 
     class Media:
         # Tom Select 2.3.1 — vendored locally in static/ (no CDN dependency)
