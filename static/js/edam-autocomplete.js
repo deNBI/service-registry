@@ -20,6 +20,26 @@ function _hi(text, q) {
   return _esc(text).replace(new RegExp("(" + q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&") + ")", "gi"), "<mark>$1</mark>");
 }
 
+const SYN_CAP = 5;  // max synonyms shown inline before +N overflow
+
+/* Returns an HTML string for the synonym row, or "" if no synonyms.
+   Visible synonyms are highlighted against query q; overflow shown as plain "+N". */
+function _synRow(syns, q) {
+  if (!syns || !syns.length) return "";
+  const valid = syns.filter(s => typeof s === "string" && s.length > 0);
+  if (!valid.length) return "";
+  const visible = valid.slice(0, SYN_CAP);
+  const overflow = valid.length - visible.length;
+  const parts = visible.map(s => _hi(s, q));
+  if (overflow > 0) parts.push("+" + overflow);
+  return (
+    '<div style="font-size:.68rem;color:#9ca3af;font-style:italic;' +
+    'margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' +
+    parts.join(" \xB7 ") +   // · middle-dot separator
+    "</div>"
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    EDAM TAG PICKER
    Immediately hides the native <select class="edam-autocomplete"> and builds
@@ -35,7 +55,11 @@ function buildEdamPicker(sel) {
 
   /* 2. Read all options once */
   const ALL = Array.from(sel.options)
-    .map(o => ({ val: o.value, txt: o.text.trim(), sel: o.selected }))
+    .map(o => {
+      let syns = [];
+      try { syns = JSON.parse(o.dataset.synonyms || "[]"); } catch (_) {}
+      return { val: o.value, txt: o.text.trim(), sel: o.selected, syns };
+    })
     .filter(o => o.val && o.txt);
 
   /* 3. Selected state */
@@ -147,13 +171,31 @@ function buildEdamPicker(sel) {
         item.dataset.val = opt.val; item.dataset.i = i;
         item.setAttribute("role","option"); item.setAttribute("aria-selected", isSel ? "true" : "false");
         item.style.cssText = "display:flex;align-items:center;gap:.5rem;padding:.48rem .9rem;cursor:" + (isSel?"default":"pointer") + ";border-bottom:1px solid #f3f4f6;" + (isSel?"background:#f0fdf4;color:#4a7e1c;pointer-events:none;":"");
-        // Strip accession from display label
-        const label = opt.txt.replace(/ \(.*?\)$/, "");
-        const accs  = (opt.txt.match(/\(([^)]+)\)$/) || [])[1] || "";
+
+        const label   = opt.txt.replace(/ \(.*?\)$/, "");
+        const accs    = (opt.txt.match(/\(([^)]+)\)$/) || [])[1] || "";
+        const synRow  = _synRow(opt.syns || [], q);
+
+        // When synonyms exist: wrap label+synonyms in a column div so the
+        // accession and checkmark align to the top of the block via align-self.
+        const labelCol = synRow
+          ? '<div style="flex:1;min-width:0;overflow:hidden">' +
+              '<div style="font-size:.875rem;font-weight:500;white-space:nowrap;' +
+              'overflow:hidden;text-overflow:ellipsis">' + _hi(label, q) + "</div>" +
+              synRow +
+            "</div>"
+          : '<span style="flex:1;font-size:.875rem;font-weight:500;overflow:hidden;' +
+            'text-overflow:ellipsis;white-space:nowrap">' + _hi(label, q) + "</span>";
+
         item.innerHTML =
-          `<span style="flex:1;font-size:.875rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_hi(label,q)}</span>` +
-          `<span style="font-size:.7rem;font-family:monospace;color:#9ca3af;white-space:nowrap">${_esc(accs)}</span>` +
-          (isSel ? `<span style="color:#5c9d25;font-weight:700;font-size:.8rem">✓</span>` : "");
+          labelCol +
+          '<span style="font-size:.7rem;font-family:monospace;color:#9ca3af;white-space:nowrap' +
+          (synRow ? ";align-self:flex-start;padding-top:.15rem" : "") + '">' + _esc(accs) + "</span>" +
+          (isSel
+            ? '<span style="color:#5c9d25;font-weight:700;font-size:.8rem' +
+              (synRow ? ";align-self:flex-start;padding-top:.1rem" : "") + '">✓</span>'
+            : "");
+
         if (!isSel) {
           item.addEventListener("mousedown", e => { e.preventDefault(); chosen.add(opt.val); render(); closeDD(); inp.value=""; inp.focus(); });
           item.addEventListener("mouseenter", () => setHi(i));
@@ -180,7 +222,12 @@ function buildEdamPicker(sel) {
     timer = setTimeout(() => {
       const q = inp.value.trim().toLowerCase();
       if (!q) { closeDD(); return; }
-      openDD(ALL.filter(o => o.txt.toLowerCase().includes(q)).slice(0,50));
+      openDD(
+        ALL.filter(o =>
+          o.txt.toLowerCase().includes(q) ||
+          o.syns.some(s => typeof s === "string" && s.toLowerCase().includes(q))
+        ).slice(0, 50)
+      );
     }, 100);
   });
 

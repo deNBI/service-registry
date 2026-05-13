@@ -1440,3 +1440,49 @@ class TestDeletionAuditAdmin:
         )
         resp = admin_client.post(url, {"post": "yes"})
         assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# EDAM term admin synonym search
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestEdamAdminSynonymSearch:
+    """Admin EDAM term list can be searched by synonym text."""
+
+    def test_search_by_synonym_finds_term(self, admin_client):
+        from apps.edam.models import EdamTerm
+
+        EdamTerm.objects.create(
+            uri="http://edamontology.org/topic_9901",
+            accession="topic_9901",
+            branch="topic",
+            label="Unique Test Topic XYZ",
+            definition="For testing synonym search only.",
+            synonyms=["rare_synonym_abc123"],
+            sort_order=9901,
+            edam_version="test",
+        )
+        url = reverse("admin:edam_edamterm_changelist") + "?q=rare_synonym_abc123"
+        resp = admin_client.get(url)
+        assert resp.status_code == 200
+        assert b"Unique Test Topic XYZ" in resp.content
+
+    def test_search_by_synonym_excludes_non_matching_terms(self, admin_client):
+        from apps.edam.models import EdamTerm
+
+        EdamTerm.objects.create(
+            uri="http://edamontology.org/topic_9902",
+            accession="topic_9902",
+            branch="topic",
+            label="Another Topic",
+            definition="No synonym match.",
+            synonyms=["different_synonym"],
+            sort_order=9902,
+            edam_version="test",
+        )
+        url = reverse("admin:edam_edamterm_changelist") + "?q=rare_synonym_xyz_nomatch"
+        resp = admin_client.get(url)
+        assert resp.status_code == 200
+        assert b"Another Topic" not in resp.content

@@ -9,7 +9,7 @@ from .models import EdamTerm
 class EdamTermAdmin(admin.ModelAdmin):
     list_display = ("accession", "label", "branch", "is_obsolete", "edam_version")
     list_filter = ("branch", "is_obsolete")
-    search_fields = ("accession", "label", "definition")
+    search_fields = ("accession", "label", "definition", "synonyms")
     readonly_fields = (
         "uri",
         "accession",
