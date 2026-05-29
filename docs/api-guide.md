@@ -200,7 +200,9 @@ Returns 403 if the key does not belong to this submission.
 
 `PATCH /api/v1/submissions/{id}/` — requires `ApiKey` with `write` scope. Partial update — include only changed fields.
 
-Updating an approved submission resets its status to `submitted` for re-review.
+Updating an approved submission resets its status to `submitted` for re-review **unless every submitted field is listed in `no_reset_fields`** (configured in `site.toml [submission]`). By default, `logo`, `github_url`, `biotools_url`, `fairsharing_url`, `edam_topics`, and `edam_operations` are exempt — patching only these fields on an approved submission preserves its status and maturity tags.
+
+When a reset does occur, `primary_maturity_tag` and `secondary_maturity_tags` are also cleared (they are only valid on approved services). The submitter update email includes a lifecycle notice.
 
 ```bash
 curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
@@ -212,7 +214,7 @@ curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
 Full `PUT` is not supported — use `PATCH`.
 
 !!! info "Email notifications on PATCH"
-Every successful `PATCH` triggers the same notification flow as a submitter web-form edit: an admin email with the full submission report, a field-level **what changed** diff table, and a direct link to the admin change view. If any fields actually changed, the submitter also receives a separate confirmation email with the same diff table. No notification is sent when the request body contains no actual changes.
+Every successful `PATCH` triggers the same notification flow as a submitter web-form edit: an admin email with the full submission report, a field-level **what changed** diff table, and a direct link to the admin change view. If any fields actually changed, the submitter also receives a separate confirmation email with the same diff table. If the edit resets the status (non-exempt field change on an approved service), the submitter email includes a lifecycle notice explaining the reset. No notification is sent when the request body contains no actual changes.
 
 ---
 

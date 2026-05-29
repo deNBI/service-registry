@@ -218,7 +218,16 @@ To replace a logo, simply upload a new one when editing your submission. Previou
 
 ### Form Auto-Save / Draft
 
-While filling out the form, your progress is automatically saved to your browser's session storage. If you navigate away or close the tab, you can return later and your partially completed form will still be there. This is a **draft** submission — it won't be visible to the registry team until you click Submit.
+While filling out the form, your progress is automatically saved to your browser's **local storage**. If you navigate away or close the tab, you can return later and your partially completed form will still be there — a "Draft restored" banner appears at the top of the form when this happens. Click **Clear draft** in that banner to discard the saved values and start fresh.
+
+This draft is a **browser-side convenience only** — it is not visible to the registry team and does not count as a submission until you click Submit.
+
+A few things to know:
+
+- **Submitting the form always clears the draft** — you will not see a restored draft after a successful submission.
+- **Drafts expire after 7 days of inactivity.** If you return after more than 7 days without having submitted, the draft will be gone and the form will start blank.
+- **Some fields are not saved** to the draft: the consent checkbox (you must tick it deliberately every time), the CAPTCHA, and any uploaded logo file.
+- **If a service has been modified** by an administrator since you last visited the edit form, the old draft is automatically discarded. The form always shows the current registered values in that case.
 
 ---
 
@@ -250,14 +259,23 @@ Your submission moves through these states:
 
 | Status           | Meaning                                                                                                                                                                                                                            |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Draft**        | Saved locally but not yet submitted. Draft submissions older than 30 days are automatically deleted.                                                                                                                               |
+| **Draft**        | Saved locally in your browser but not yet submitted. The browser draft expires after 7 days of inactivity and is always cleared when you submit.                                                                                  |
 | **Submitted**    | Form submitted. The de.NBI administration office has been notified.                                                                                                                                                                |
 | **Under Review** | Actively being reviewed by the service coordination team.                                                                                                                                                                          |
 | **Approved**     | Your service has been accepted and will appear in the de.NBI services catalogue.                                                                                                                                                   |
 | **Rejected**     | The submission was not accepted. You will receive an email explaining why. You may edit and resubmit.                                                                                                                              |
 | **Deprecated**   | The service is no longer active. You can mark your own service as deprecated via the edit form (see below). Only the registry team can reverse this. Deprecated services are hidden from public listings but retain their history. |
 
-If you edit a submission that was already **Approved**, the status resets to **Submitted** and the administration office is notified to re-review your changes.
+If you edit an **Approved** submission, what happens depends on which fields you changed:
+
+**Fields that reset status to Submitted** (any core service content — name, description, categories, responsible PIs, contact details, licenses, etc.):
+The status is reset to **Submitted** and the administration office is notified to re-review your changes. Your maturity tags are cleared and will be re-assigned after approval. You will receive a confirmation email with a summary of what changed and a note that re-review has been triggered.
+
+**Fields that preserve Approved status** (supplementary/reference fields — logo, GitHub URL, bio.tools URL, FAIRsharing URL, EDAM topic, operation annotations, etc.):
+The status stays **Approved** and your maturity tags are preserved. You receive a confirmation email listing what changed, with no lifecycle notice.
+
+!!! tip "When in doubt, check your confirmation email"
+    Every edit sends you an email listing exactly what changed. If the email includes the notice *"your service registration has been reset to Submitted"*, the re-review cycle has been triggered. If it does not, your service remains approved.
 
 ### What happens after submission?
 

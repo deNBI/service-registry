@@ -36,7 +36,8 @@
           action="{% url 'submissions:edit' %}"
           novalidate
           id="registration-form"
-          data-draft-key="denbi_draft_edit_{{ submission.id }}"
+          data-draft-key="denbi_draft_edit_{{ submission.id }}_{{ submission.updated_at|date:'U' }}"
+          data-draft-ttl-days="{{ FORM_DRAFT_TTL_DAYS }}"
           hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
       {% csrf_token %}
 

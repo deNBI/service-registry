@@ -134,6 +134,35 @@ class TestSizeLimits:
 # ---------------------------------------------------------------------------
 
 
+def _make_jpeg_bytes_from_mode(mode: str, size=(4, 4), fill=None) -> bytes:
+    """Create a minimal JPEG from an image in the given Pillow mode."""
+    from PIL import Image
+
+    if fill is None:
+        fill = (128,) * len(mode) if mode != "P" else 128
+    if mode == "P":
+        img = Image.new("RGB", size, (128, 128, 128)).convert("P")
+    else:
+        img = Image.new(mode, size, fill)
+    buf = io.BytesIO()
+    if mode in ("RGBA", "LA"):
+        # Pillow cannot save RGBA/LA as JPEG; save as PNG then re-read to
+        # produce a file that has JPEG magic bytes via patching.
+        # Instead, we produce the bytes via the PNG path and then feed it
+        # through as PNG in the JPEG test helper is not applicable here;
+        # what matters is the _strip_exif_jpeg function handles the mode
+        # correctly when it encounters it internally (e.g. from JPEG extensions).
+        # We test via the internal helper directly.
+        img.save(buf, format="PNG")
+    else:
+        try:
+            img.save(buf, format="JPEG")
+        except OSError:
+            img = img.convert("RGB")
+            img.save(buf, format="JPEG")
+    return buf.getvalue()
+
+
 class TestJpegProcessing:
     def test_output_is_valid_jpeg(self):
         from PIL import Image
@@ -165,6 +194,69 @@ class TestJpegProcessing:
         f = _make_upload(data, "logo.jpg", "image/jpeg")
         with pytest.raises(ValidationError):
             validate_and_process_logo(f)
+
+    def test_output_is_always_rgb(self):
+        """JPEG output must always be RGB regardless of input colour space."""
+        from PIL import Image
+
+        f = _make_upload(_make_jpeg_bytes(), "logo.jpg", "image/jpeg")
+        result = validate_and_process_logo(f)
+        result.file.seek(0)
+        img = Image.open(result.file)
+        assert img.mode == "RGB"
+
+    def test_grayscale_jpeg_converted_to_rgb(self):
+        """L-mode (grayscale) JPEG is converted to RGB on output."""
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("L", (4, 4), 200).save(buf, format="JPEG")
+        f = _make_upload(buf.getvalue(), "logo.jpg", "image/jpeg")
+        result = validate_and_process_logo(f)
+        result.file.seek(0)
+        img = Image.open(result.file)
+        assert img.mode == "RGB"
+
+    def test_rgba_composited_on_white_not_black(self):
+        """
+        RGBA images (alpha channel) must be composited on white, not black.
+
+        Pillow can open some edge-case JPEGs in RGBA mode; the re-encode
+        path must produce white (not black) pixels for fully-transparent areas.
+        We test _strip_exif_jpeg directly by patching PIL.Image.open to
+        return a fully-transparent RGBA image on the second call (the
+        processing pass that follows verify()).
+        """
+        import unittest.mock as mock
+        from PIL import Image
+        from apps.submissions.logo_utils import _strip_exif_jpeg
+
+        call_count = {"n": 0}
+        original_open = Image.open
+
+        def _patched_open(fp, *args, **kwargs):
+            call_count["n"] += 1
+            img = original_open(fp, *args, **kwargs)
+            if call_count["n"] == 2:
+                # Second call is the processing pass — return RGBA with full transparency.
+                rgba = Image.new("RGBA", img.size, (255, 0, 0, 0))
+                return rgba
+            return img
+
+        jpeg_buf = io.BytesIO(_make_jpeg_bytes())
+        with mock.patch("PIL.Image.open", side_effect=_patched_open):
+            result_bytes = _strip_exif_jpeg(jpeg_buf)
+
+        out = Image.open(io.BytesIO(result_bytes))
+        assert out.mode == "RGB"
+        # Verify compositing produced a light (near-white) result, not the black
+        # fill that Pillow used to apply when saving RGBA as JPEG.
+        # We use > 200 rather than == 255 because JPEG is lossy and may shift
+        # exact values slightly.  get_flattened_data() is the non-deprecated
+        # replacement for getdata() (Pillow 14+); it returns the same tuple sequence.
+        assert all(all(c > 200 for c in pixel) for pixel in out.get_flattened_data()), (
+            "Transparent pixels should be composited on white, not filled with black"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -113,7 +113,14 @@ def _sniff_type(file_obj) -> str:
 
 
 def _strip_exif_jpeg(file_obj) -> bytes:
-    """Re-encode a JPEG via Pillow, discarding all EXIF/metadata."""
+    """Re-encode a JPEG via Pillow, discarding all EXIF/metadata.
+
+    Always outputs an RGB JPEG regardless of the source colour space:
+    - CMYK/YCbCr/L are converted to RGB (some browsers cannot render non-RGB JPEGs).
+    - RGBA/LA (alpha channel) is composited on a white background so transparent
+      regions appear white rather than the black fill browsers would apply.
+    - Palette images with a transparency hint are treated as RGBA.
+    """
     from PIL import Image, UnidentifiedImageError
 
     try:
@@ -128,9 +135,22 @@ def _strip_exif_jpeg(file_obj) -> bytes:
     try:
         file_obj.seek(0)
         img = Image.open(file_obj)
-        img = img.convert(
-            img.mode
-        )  # Force full decode (triggers decompression-bomb check)
+        img.load()  # Force full decode (triggers decompression-bomb check)
+        # Composite alpha on white; normalise everything else to RGB.
+        if img.mode in ("RGBA", "LA"):
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[-1])
+            img = background
+        elif img.mode == "P":
+            if "transparency" in img.info:
+                rgba = img.convert("RGBA")
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                background.paste(rgba, mask=rgba.split()[-1])
+                img = background
+            else:
+                img = img.convert("RGB")
+        else:
+            img = img.convert("RGB")
         out = io.BytesIO()
         img.save(out, format="JPEG", optimize=True)
         return out.getvalue()

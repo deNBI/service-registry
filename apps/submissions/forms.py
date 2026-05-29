@@ -171,6 +171,10 @@ class SubmissionForm(forms.ModelForm):
             "updated_at",
             "submission_ip",
             "user_agent_hash",
+            # Maturity tags are assigned by the admin only; excluding them
+            # here ensures the submitter edit form never clears them accidentally.
+            "primary_maturity_tag",
+            "secondary_maturity_tags",
         ]
         widgets = {
             # Section A

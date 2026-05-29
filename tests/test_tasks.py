@@ -131,6 +131,29 @@ class TestSubmissionNotificationTask:
         send_submission_notification(str(sub.id), event="status_changed")
         assert "MetaProFi" in mail.outbox[0].subject
 
+    def test_event_label_no_underscore_in_admin_email_body(self):
+        """Admin notification email body must not contain 'Status_Changed' (underscore)."""
+        sub = ServiceSubmissionFactory(service_name="MyTool", status="approved")
+        from apps.submissions.tasks import send_submission_notification
+
+        send_submission_notification(str(sub.id), event="status_changed")
+        admin_email = mail.outbox[0]
+        body_text = admin_email.body
+        # Check plain-text body
+        assert "Status_Changed" not in body_text
+        assert "STATUS_CHANGED" not in body_text
+        # Check HTML alternative body
+        html_body = next(
+            (
+                content
+                for content, mime in admin_email.alternatives
+                if mime == "text/html"
+            ),
+            "",
+        )
+        assert "Status_Changed" not in html_body
+        assert "Status Changed" in html_body  # human-readable label present
+
     def test_nonexistent_submission_does_not_raise(self):
         from apps.submissions.tasks import send_submission_notification
 
@@ -397,3 +420,105 @@ class TestSiteContextInEmails:
         send_submission_notification(str(sub.id), event="updated", changes=changes)
         submitter_email = next(m for m in mail.outbox if "pi@example.com" in m.to)
         assert "coord@example.org" in submitter_email.body
+
+
+# ---------------------------------------------------------------------------
+# Do-not-reply footer in submitter emails
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestDoNotReplyFooter:
+    """All submitter-facing emails must include the do-not-reply footer line."""
+
+    _changes = [
+        {"field": "comments", "label": "Comments", "old": "—", "new": "updated"}
+    ]
+
+    def _get_submitter_email(self, sub):
+        return next(m for m in mail.outbox if sub.internal_contact_email in m.to)
+
+    def test_created_email_has_do_not_reply(self):
+        sub = ServiceSubmissionFactory(internal_contact_email="pi@example.com")
+        from apps.submissions.tasks import send_submission_notification
+
+        send_submission_notification(str(sub.id), event="created")
+        email = self._get_submitter_email(sub)
+        assert "do not reply" in email.body.lower()
+
+    def test_status_update_email_has_do_not_reply(self):
+        sub = ServiceSubmissionFactory(
+            status="approved", internal_contact_email="pi@example.com"
+        )
+        from apps.submissions.tasks import send_submission_notification
+
+        send_submission_notification(str(sub.id), event="status_changed")
+        email = self._get_submitter_email(sub)
+        assert "do not reply" in email.body.lower()
+
+    def test_updated_email_has_do_not_reply(self):
+        sub = ServiceSubmissionFactory(internal_contact_email="pi@example.com")
+        from apps.submissions.tasks import send_submission_notification
+
+        send_submission_notification(
+            str(sub.id), event="updated", changes=self._changes
+        )
+        email = self._get_submitter_email(sub)
+        assert "do not reply" in email.body.lower()
+
+
+# ---------------------------------------------------------------------------
+# Status-reset lifecycle notice in submitter update email
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestStatusResetNoticeInEmail:
+    """
+    When status_reset=True is passed to send_submission_notification the
+    submitter update email must include the lifecycle-reset notice.
+    When status_reset=False (default) no such notice should appear.
+    """
+
+    _changes = [
+        {"field": "service_name", "label": "Service Name", "old": "Old", "new": "New"}
+    ]
+
+    def _submitter_email(self, sub):
+        return next(m for m in mail.outbox if sub.internal_contact_email in m.to)
+
+    def test_status_reset_notice_shown_when_true(self):
+        sub = ServiceSubmissionFactory(
+            status="submitted", internal_contact_email="pi@example.com"
+        )
+        from apps.submissions.tasks import send_submission_notification
+
+        send_submission_notification(
+            str(sub.id), event="updated", changes=self._changes, status_reset=True
+        )
+        email = self._submitter_email(sub)
+        body_lower = email.body.lower()
+        assert "reset" in body_lower or "lifecycle" in body_lower
+
+    def test_status_reset_notice_absent_when_false(self):
+        sub = ServiceSubmissionFactory(
+            status="submitted", internal_contact_email="pi@example.com"
+        )
+        from apps.submissions.tasks import send_submission_notification
+
+        send_submission_notification(
+            str(sub.id), event="updated", changes=self._changes, status_reset=False
+        )
+        email = self._submitter_email(sub)
+        assert "lifecycle" not in email.body.lower()
+
+    def test_send_update_notification_forwards_status_reset(self):
+        sub = ServiceSubmissionFactory(
+            status="submitted", internal_contact_email="pi@example.com"
+        )
+        from apps.submissions.tasks import send_update_notification
+
+        send_update_notification(str(sub.id), changes=self._changes, status_reset=True)
+        email = self._submitter_email(sub)
+        body_lower = email.body.lower()
+        assert "reset" in body_lower or "lifecycle" in body_lower

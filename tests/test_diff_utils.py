@@ -13,6 +13,7 @@ from apps.submissions.diff_utils import (
     DIFFABLE_M2M,
     _display,
     build_diff,
+    filter_sanitization_artifacts,
     snapshot,
     snapshot_m2m,
 )
@@ -492,3 +493,127 @@ class TestSnapshotLicense:
         sub.refresh_from_db()
         snap = snapshot(sub)
         assert snap["license_note"] == "some_old_license"
+
+
+# ---------------------------------------------------------------------------
+# filter_sanitization_artifacts
+# ---------------------------------------------------------------------------
+
+
+class TestFilterSanitizationArtifacts:
+    """
+    filter_sanitization_artifacts() must remove diff entries that arise from
+    form sanitization (NFC normalisation, bleach escaping, whitespace
+    stripping) on fields the user never actually changed.
+    """
+
+    _form_fields = frozenset(
+        {"service_name", "service_description", "github_url", "logo", "comments"}
+    )
+
+    def _make_change(self, field, old="old", new="new"):
+        return {
+            "field": field,
+            "label": field.replace("_", " ").title(),
+            "old": old,
+            "new": new,
+        }
+
+    # ── fields the user changed ──────────────────────────────────────────────
+
+    def test_user_changed_field_is_kept(self):
+        changes = [self._make_change("service_name", "Old", "New")]
+        result = filter_sanitization_artifacts(
+            changes,
+            form_changed_data=["service_name"],
+            form_field_names=self._form_fields,
+        )
+        assert len(result) == 1
+        assert result[0]["field"] == "service_name"
+
+    def test_multiple_user_changed_fields_all_kept(self):
+        changes = [
+            self._make_change("service_name", "Old", "New"),
+            self._make_change("github_url", "—", "https://github.com/org/repo"),
+        ]
+        result = filter_sanitization_artifacts(
+            changes,
+            form_changed_data=["service_name", "github_url"],
+            form_field_names=self._form_fields,
+        )
+        assert len(result) == 2
+
+    # ── sanitization artifacts (form field, not in changed_data) ─────────────
+
+    def test_unchanged_form_field_is_removed(self):
+        """Description appearing in diff without user changing it is a false positive."""
+        changes = [self._make_change("service_description", "côté", "côté")]
+        result = filter_sanitization_artifacts(
+            changes,
+            form_changed_data=[],  # user changed nothing
+            form_field_names=self._form_fields,
+        )
+        assert result == []
+
+    def test_only_sanitization_artifact_removed_real_change_kept(self):
+        """Logo change kept; description artifact removed."""
+        changes = [
+            self._make_change("logo", "—", "logo_new.png"),
+            self._make_change("service_description", "AT&T", "AT&amp;T"),
+        ]
+        result = filter_sanitization_artifacts(
+            changes,
+            form_changed_data=["logo"],
+            form_field_names=self._form_fields,
+        )
+        assert len(result) == 1
+        assert result[0]["field"] == "logo"
+
+    # ── system-managed fields (not in form) ───────────────────────────────────
+
+    def test_status_change_kept_even_though_not_in_changed_data(self):
+        """status is not a form field — always included regardless of changed_data."""
+        changes = [self._make_change("status", "Approved", "Submitted")]
+        result = filter_sanitization_artifacts(
+            changes,
+            form_changed_data=[],
+            form_field_names=self._form_fields,  # status not in form_fields
+        )
+        assert len(result) == 1
+        assert result[0]["field"] == "status"
+
+    def test_maturity_tag_clear_kept_when_not_in_form(self):
+        """primary_maturity_tag excluded from form → change always kept in diff."""
+        changes = [self._make_change("primary_maturity_tag", "Mature", "—")]
+        result = filter_sanitization_artifacts(
+            changes,
+            form_changed_data=[],
+            form_field_names=self._form_fields,
+        )
+        assert len(result) == 1
+
+    # ── M2M fields ────────────────────────────────────────────────────────────
+
+    def test_m2m_change_kept_even_if_not_in_changed_data(self):
+        """edam_topics is an M2M field — snapshot comparison is reliable."""
+        changes = [self._make_change("edam_topics", "—", "Topic A")]
+        result = filter_sanitization_artifacts(
+            changes,
+            form_changed_data=[],
+            form_field_names=self._form_fields,
+        )
+        assert len(result) == 1
+        assert result[0]["field"] == "edam_topics"
+
+    # ── empty inputs ─────────────────────────────────────────────────────────
+
+    def test_empty_changes_returns_empty(self):
+        assert filter_sanitization_artifacts([], [], frozenset()) == []
+
+    def test_empty_form_fields_keeps_all_changes(self):
+        """If the form has no fields, all changes are system-managed → all kept."""
+        changes = [self._make_change("service_name")]
+        result = filter_sanitization_artifacts(
+            changes, form_changed_data=[], form_field_names=frozenset()
+        )
+        assert len(result) == 1

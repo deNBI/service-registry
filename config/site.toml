@@ -192,6 +192,73 @@ logo_max_bytes = 10_485_760
 
 
 # -----------------------------------------------------------------------------
+# [submission] — Submission lifecycle settings
+# -----------------------------------------------------------------------------
+[submission]
+
+# Fields listed here will NOT trigger a status reset to "submitted" when a
+# submitter edits an already-approved service.  Use this for supplementary /
+# reference fields (e.g. logo, external URLs, ontology annotations) that do
+# not change the core service description and therefore should not force a
+# full re-review cycle.
+#
+# Rules:
+#   - Empty list ([])  → original behaviour: any edit of an approved service
+#                        always resets status to "submitted".
+#   - Non-empty list   → status is reset ONLY if at least one NON-exempt field
+#                        changes.  If only exempt fields change, status is kept.
+#   - Notifications are always sent regardless of this setting.
+#   - When status IS reset, the update email includes a lifecycle notice.
+#
+# Sanity-checked at startup: unknown field names are logged as a warning and
+# ignored.  System-controlled fields (status, date_of_entry, primary_maturity_tag,
+# secondary_maturity_tags, register_as_elixir) cannot be made exempt.
+#
+# Available field names (model-level):
+#   Scalar fields:
+#     submitter_first_name    submitter_last_name     submitter_affiliation
+#     service_name            service_description     year_established
+#     is_toolbox              toolbox_name            user_knowledge_required
+#     publications_pmids      logo                    associated_partner_note
+#     host_institute          public_contact_email    internal_contact_name
+#     internal_contact_email  website_url             terms_of_use_url
+#     license_note            github_url              biotools_url
+#     fairsharing_url         other_registry_url      kpi_monitoring
+#     kpi_start_year          keywords_uncited        keywords_seo
+#     survey_participation    comments
+#   Many-to-many fields:
+#     service_categories      responsible_pis         edam_topics
+#     edam_operations         licenses
+no_reset_fields = [
+  "logo",
+  "github_url",
+  "biotools_url",
+  "fairsharing_url",
+  "other_registry_url",
+  "edam_topics",
+  "edam_operations",
+  "keywords_uncited",
+  "keywords_seo",
+  "publications_pmids",
+  "public_contact_email",
+  "internal_contact_name",
+  "internal_contact_email",
+  "website_url",
+  "terms_of_use_url",
+  "kpi_monitoring",
+  "kpi_start_year",
+  "comments",
+]
+
+# Number of days before an abandoned browser-side form draft is automatically
+# discarded.  The draft is removed from localStorage on the next form load once
+# the TTL has elapsed.  Drafts are always cleared immediately when the form is
+# successfully submitted.
+# Default: 7 days.
+draft_ttl_days = 7
+
+
+# -----------------------------------------------------------------------------
 # [catalogue] — Public Registry Catalogue settings
 # -----------------------------------------------------------------------------
 [catalogue]

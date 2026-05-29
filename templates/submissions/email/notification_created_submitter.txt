@@ -13,6 +13,8 @@ team will be in touch.
 If you have any questions, please contact us at {{ CONTACT_EMAIL }}.
 
 ---
+This is an automated email — please do not reply directly.
+
 {{ CONTACT_ORG }}
 {{ CONTACT_EMAIL }}
 {{ WEBSITE_URL }}

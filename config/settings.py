@@ -52,6 +52,7 @@ _sc_licenses = _sc.get("licenses", {})
 _sc_admin = _sc.get("admin", {})
 _sc_uploads = _sc.get("uploads", {})
 _sc_catalogue = _sc.get("catalogue", {})
+_sc_submission = _sc.get("submission", {})
 
 
 def env(key, default=None, required=False):
@@ -206,6 +207,15 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ---------------------------------------------------------------------------
 # Maximum logo file size in bytes. Configurable in config/site.toml [uploads].
 LOGO_MAX_BYTES: int = _sc_uploads.get("logo_max_bytes", 10 * 1024 * 1024)
+
+# Fields that do not trigger a status reset when edited on an approved service.
+# Configurable in config/site.toml [submission] no_reset_fields.
+# Empty list → original behaviour (every edit resets status).
+SUBMISSION_NO_RESET_FIELDS: list[str] = _sc_submission.get("no_reset_fields", [])
+
+# Client-side localStorage draft expiry in days.
+# Configurable in config/site.toml [submission] draft_ttl_days.
+FORM_DRAFT_TTL_DAYS: int = int(_sc_submission.get("draft_ttl_days", 7))
 
 # ---------------------------------------------------------------------------
 # Security headers

@@ -23,7 +23,7 @@ th      { background: #e8f0f8; font-weight: bold; text-align: left; }
                  text-transform: uppercase; color: #6b7280; margin: 1.2rem 0 .35rem; }
 </style></head>
 <body>
-<h2>de.NBI Service Registration Platform — {{ event|title }} Notification</h2>
+<h2>de.NBI Service Registration Platform — {{ event_label }} Notification</h2>
 <p>
   <strong>Service:</strong> {{ submission.service_name }}<br>
   <strong>Status:</strong> <span class="badge badge-{{ submission.status }}">{{ submission.get_status_display }}</span><br>

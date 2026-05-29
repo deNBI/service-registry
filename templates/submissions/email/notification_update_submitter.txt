@@ -21,6 +21,14 @@ Updated:      {{ submission.updated_at|date:"Y-m-d H:i" }} UTC
 
 If you did not make this change, or if something looks incorrect,
 please contact us immediately at {{ CONTACT_EMAIL }}.
+{% if status_reset %}
+NOTICE: Because one or more core service fields were modified, your service
+registration has been reset to "Submitted" as part of the service registry
+lifecycle. The de.NBI Administration Office will review your changes and be
+in touch.
+{% endif %}
+---
+This is an automated email — please do not reply directly.
 
 {{ CONTACT_ORG }}
 {{ CONTACT_EMAIL }}

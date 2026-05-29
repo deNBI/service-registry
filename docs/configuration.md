@@ -171,6 +171,65 @@ logo_max_bytes = 10_485_760
 | ---------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `logo_max_bytes` | `10485760` (10 MB) | Maximum allowed size in bytes for service logo uploads. Reduce to tighten limits. Requires a web container restart after changing. |
 
+### `[submission]` — Submission lifecycle
+
+Controls how the platform handles status resets when a submitter edits an already-approved service, and how long the browser-side form draft is retained.
+
+```toml
+[submission]
+no_reset_fields = ["logo", "github_url", "biotools_url", "fairsharing_url",
+                   "edam_topics", "edam_operations"]
+draft_ttl_days = 7
+```
+
+#### `no_reset_fields`
+
+Fields listed here do **not** trigger a status reset to `submitted` when a submitter edits an already-approved service. Use this for supplementary or reference fields (logos, external URLs, ontology annotations) that do not change the core service description and should not force a full re-review cycle.
+
+| Configuration | Behaviour |
+|---|---|
+| Empty list `[]` | Any edit of an approved service resets status to `submitted` (legacy default). |
+| Non-empty list | Status resets only when at least one **non-exempt** field changes. Editing only exempt fields preserves `approved`. |
+
+Rules and constraints:
+
+- Email notifications are always sent, regardless of this setting.
+- When status **is** reset, the submitter update email includes a lifecycle notice.
+- System-controlled fields (`status`, `date_of_entry`, `primary_maturity_tag`, `secondary_maturity_tags`, `register_as_elixir`) cannot be made exempt and are silently rejected with a startup warning if included.
+- Unknown field names are also logged at startup and ignored.
+- The same exemption is applied consistently to both the submitter web form (`/update/edit/`) and the REST API (`PATCH /api/v1/submissions/{id}/`).
+- Validation runs at startup via `SubmissionsConfig.ready()`. Misconfigured entries appear in the server log immediately, not silently at request time.
+
+Available field names (use the model-level name, not the form or serializer alias):
+
+```
+Scalar:  submitter_first_name  submitter_last_name  submitter_affiliation
+         service_name          service_description  year_established
+         is_toolbox            toolbox_name         user_knowledge_required
+         publications_pmids    logo                 associated_partner_note
+         host_institute        public_contact_email internal_contact_name
+         internal_contact_email  website_url        terms_of_use_url
+         license_note          github_url           biotools_url
+         fairsharing_url       other_registry_url   kpi_monitoring
+         kpi_start_year        keywords_uncited     keywords_seo
+         survey_participation  comments
+
+M2M:     service_categories    responsible_pis      edam_topics
+         edam_operations       licenses
+```
+
+#### `draft_ttl_days`
+
+Number of days after which an **abandoned** browser-side form draft is automatically discarded. The draft is removed from `localStorage` on the next form load once the TTL has elapsed. Successfully submitting the form always clears the draft immediately, regardless of this setting.
+
+Default: `7`. Minimum meaningful value: `1`.
+
+After changing either setting, restart the containers:
+
+```bash
+docker compose restart web worker
+```
+
 ---
 
 ## Secrets and connection strings

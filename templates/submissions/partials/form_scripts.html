@@ -197,6 +197,10 @@ document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
   const DRAFT_KEY = form.dataset.draftKey;
   if (!DRAFT_KEY) return;  // Draft system disabled for this form
 
+  // TTL from server-side config (data attribute set from FORM_DRAFT_TTL_DAYS setting).
+  // Falls back to 7 days if the attribute is absent or non-numeric.
+  const TTL_MS = (parseInt(form.dataset.draftTtlDays, 10) || 7) * 24 * 60 * 60 * 1000;
+
   const SKIP_NAMES = new Set(['csrfmiddlewaretoken', 'data_protection_consent', 'altcha', 'logo']);
   let isRestoringDraft = false;
 
@@ -204,6 +208,46 @@ document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
   const hasServerErrors =
     document.querySelector('[id^="field-errors-"] .text-danger') !== null ||
     document.querySelector('.alert-danger') !== null;
+
+  function purgeStaleDrafts() {
+    // Collect keys first — removing items while iterating by index shifts indices.
+    var allKeys = [];
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (k && k.startsWith('denbi_draft_')) allKeys.push(k);
+    }
+
+    // Remove expired entries (missing _savedAt treated as unknown age → discard).
+    allKeys.forEach(function(k) {
+      try {
+        var stored = JSON.parse(localStorage.getItem(k) || 'null');
+        if (!stored || !stored._savedAt || (Date.now() - stored._savedAt) > TTL_MS) {
+          localStorage.removeItem(k);
+        }
+      } catch (e) {
+        localStorage.removeItem(k);  // unparseable → discard
+      }
+    });
+
+    // Edit form only: remove old-version keys for the same submission.
+    // Draft key format: denbi_draft_edit_<uuid>_<unix_timestamp>
+    // Strip prefix + trailing _<digits> to extract the submission UUID.
+    if (DRAFT_KEY && DRAFT_KEY.startsWith('denbi_draft_edit_')) {
+      var withoutPrefix = DRAFT_KEY.slice('denbi_draft_edit_'.length);
+      var submissionId = withoutPrefix.replace(/_\d+$/, '');
+      var versionPrefix = 'denbi_draft_edit_' + submissionId + '_';
+      var staleVersions = [];
+      for (var j = 0; j < localStorage.length; j++) {
+        var vk = localStorage.key(j);
+        if (vk && vk.startsWith(versionPrefix) && vk !== DRAFT_KEY) {
+          staleVersions.push(vk);
+        }
+      }
+      staleVersions.forEach(function(vk) {
+        try { localStorage.removeItem(vk); } catch (e) {}
+      });
+    }
+  }
 
   function resetAltchaWidget() {
     const widget = form.querySelector('altcha-widget');
@@ -218,6 +262,12 @@ document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
     let draft;
     try { draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch(e) { return false; }
     if (!draft) return false;
+
+    // Discard draft if expired or missing timestamp.
+    if (!draft._savedAt || (Date.now() - draft._savedAt) > TTL_MS) {
+      try { localStorage.removeItem(DRAFT_KEY); } catch(e) {}
+      return false;
+    }
 
     let restoredCount = 0;
 
@@ -290,7 +340,7 @@ document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
       }
     });
 
-    const draft = {};
+    const draft = { _savedAt: Date.now() };
     const data = new FormData(form);
     for (const [name, value] of data.entries()) {
       if (SKIP_NAMES.has(name)) continue;
@@ -318,6 +368,7 @@ document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
   // a burst of server requests on page load for every restored field.
   if (!hasServerErrors) {
     onReady(function() {
+      purgeStaleDrafts();
       isRestoringDraft = true;
       form.setAttribute('hx-disable', 'true');
       const restored = restoreDraft();

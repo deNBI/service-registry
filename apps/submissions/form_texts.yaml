@@ -232,11 +232,3 @@ data_protection_consent:
 last_change_summary:
   help: ""
   tooltip: ""
-
-primary_maturity_tag:
-  help: ""
-  tooltip: ""
-
-secondary_maturity_tags:
-  help: ""
-  tooltip: ""
