@@ -418,7 +418,11 @@ class TestSubmissionUpdate:
         resp = api_client.put(f"/api/v1/submissions/{sub.pk}/", {}, format="json")
         assert resp.status_code == 405
 
-    def test_patch_approved_submission_resets_status(self, api_client):
+    def test_patch_approved_submission_resets_status(self, api_client, settings):
+        settings.SUBMISSION_NO_RESET_FIELDS = []
+        from apps.submissions.lifecycle import get_no_reset_fields
+
+        get_no_reset_fields.cache_clear()
         sub = ServiceSubmissionFactory(status="approved")
         _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
         api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
@@ -430,6 +434,7 @@ class TestSubmissionUpdate:
         assert resp.status_code == 200
         sub.refresh_from_db()
         assert sub.status == "submitted"
+        get_no_reset_fields.cache_clear()
 
     # ── diff capture ─────────────────────────────────────────────────────────
 
@@ -554,8 +559,66 @@ class TestSubmissionUpdate:
         assert sub.primary_maturity_tag is None or sub.primary_maturity_tag == ""
         assert sub.secondary_maturity_tags == []
 
-    def test_patch_approved_submission_maturity_tags_preserved(self, api_client):
-        """PATCH on approved submission with admin-set tags must not clear those tags."""
+    def test_patch_approved_non_exempt_field_clears_maturity_tags(
+        self, api_client, settings
+    ):
+        """PATCH on approved submission with a non-exempt field must reset status and clear tags."""
+        settings.SUBMISSION_NO_RESET_FIELDS = ["github_url"]
+        from apps.submissions.lifecycle import get_no_reset_fields
+
+        get_no_reset_fields.cache_clear()
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=["unstable"],
+        )
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"comments": "Updated — non-exempt field"},
+            format="json",
+        )
+        assert resp.status_code == 200
+        sub.refresh_from_db()
+        assert sub.status == "submitted"
+        assert not sub.primary_maturity_tag
+        assert sub.secondary_maturity_tags == []
+        get_no_reset_fields.cache_clear()
+
+    def test_patch_approved_exempt_field_preserves_status_and_tags(
+        self, api_client, settings
+    ):
+        """PATCH on approved submission with only exempt fields must preserve status and tags."""
+        settings.SUBMISSION_NO_RESET_FIELDS = ["github_url", "comments"]
+        from apps.submissions.lifecycle import get_no_reset_fields
+
+        get_no_reset_fields.cache_clear()
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=["unstable"],
+        )
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"comments": "Exempt field update"},
+            format="json",
+        )
+        assert resp.status_code == 200
+        sub.refresh_from_db()
+        assert sub.status == "approved"
+        assert sub.primary_maturity_tag == "mature"
+        assert sub.secondary_maturity_tags == ["unstable"]
+        get_no_reset_fields.cache_clear()
+
+    def test_patch_approved_mixed_fields_resets_status(self, api_client, settings):
+        """PATCH with both exempt and non-exempt fields must still reset status."""
+        settings.SUBMISSION_NO_RESET_FIELDS = ["github_url"]
+        from apps.submissions.lifecycle import get_no_reset_fields
+
+        get_no_reset_fields.cache_clear()
         sub = ServiceSubmissionFactory(
             status="approved",
             primary_maturity_tag="mature",
@@ -565,13 +628,14 @@ class TestSubmissionUpdate:
         api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
         resp = api_client.patch(
             f"/api/v1/submissions/{sub.pk}/",
-            {"comments": "Minor correction"},
+            {"github_url": "https://github.com/new", "comments": "Also non-exempt"},
             format="json",
         )
         assert resp.status_code == 200
         sub.refresh_from_db()
-        # Tags should survive a PATCH that doesn't touch them
-        assert sub.primary_maturity_tag == "mature"
+        assert sub.status == "submitted"
+        assert not sub.primary_maturity_tag
+        get_no_reset_fields.cache_clear()
 
 
 # ===========================================================================

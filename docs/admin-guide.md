@@ -273,6 +273,16 @@ Service owners can mark their own service as deprecated via the edit form. Only 
 or any automated workflow. It can only be assigned via direct admin edit
 and is reserved for a future "save as draft" feature.
 
+#### Submitter edits on approved services
+
+When a submitter edits an approved service (via the update form or REST API), the platform determines whether to reset the status to `submitted`:
+
+- **Exempt fields** (configured in `site.toml [submission] no_reset_fields`) do not trigger a reset. By default these are: `logo`, `github_url`, `biotools_url`, `fairsharing_url`, `edam_topics`, `edam_operations`, etc.
+- **Any non-exempt field change** resets status to `submitted` and clears maturity tags. The submitter's update email includes a lifecycle notice: *"Because one or more core service fields were modified, your service registration has been reset to Submitted…"*
+- **Exempt-only edits** (e.g. uploading a logo, updating EDAM annotations) preserve the `approved` status and maturity tags. The submitter receives the normal diff email with no lifecycle notice.
+
+Sanitization artifacts (trailing whitespace stripped by form cleaning, Unicode normalization) are excluded from the reset decision — only genuine value changes count.
+
 ## Audit Logging
 
 The system maintains three complementary audit trails for tracking changes to submissions.
@@ -688,7 +698,7 @@ service_name:
 - Set `help: ""` to hide the help text for a field.
 - Set `tooltip: ""` to hide the info icon for a field.
 
-### Deploying changes
+### Deploying form text changes
 
 After editing `form_texts.yaml`, rebuild and redeploy:
 
@@ -737,7 +747,7 @@ status_messages:
   default: 'If you have questions about your submission, please contact us.'
 ```
 
-### Deploying changes
+### Deploying email text changes
 
 After editing `email_texts.yaml`, rebuild and redeploy — same as form text
 changes:
@@ -758,7 +768,7 @@ No code changes, no migrations, no template edits required.
 EDAM terms are imported from the official EDAM ontology release and are read-only in the admin.
 Terms cannot be added or deleted manually — all changes come through a sync.
 
-### How seeding works
+### How EDAM seeding works
 
 | Trigger                        | When                      | Notes                                                                                                            |
 | ------------------------------ | ------------------------- | ---------------------------------------------------------------------------------------------------------------- |
@@ -779,7 +789,7 @@ Search by label or definition text.
 The **EDAM version** column shows which release each term was last loaded from (e.g. `1.25`).
 All terms should show the same version after a successful sync.
 
-### Triggering a manual sync
+### Triggering a manual EDAM sync
 
 **From the admin UI** (recommended — no shell access needed):
 
@@ -827,7 +837,7 @@ docker compose exec web python manage.py shell -c \
 
 SPDX licenses are imported from the canonical [SPDX License List](https://spdx.org/licenses/) and are read-only in the admin. Entries cannot be added or deleted manually — all changes come through a sync.
 
-### How seeding works
+### How SPDX seeding works
 
 | Trigger                          | When                      | Notes                                                                                                                         |
 | -------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -844,7 +854,7 @@ The list shows: SPDX id (e.g. `MIT`, `Apache-2.0`), name, OSI approval, FSF libr
 
 Licenses that are either deprecated upstream in SPDX, or that disappear from upstream in a subsequent sync, are marked `is_deprecated=True`. Deprecated entries are hidden from new submission pickers but **retained in the database** so existing submissions referencing them are not broken.
 
-### Triggering a manual sync
+### Triggering a manual SPDX sync
 
 **From the admin UI**:
 
@@ -940,22 +950,43 @@ docker compose exec web python manage.py sync_biotools \
 
 ### Stale Draft Cleanup {#stale-drafts}
 
+There are two independent draft systems — one server-side, one client-side.
+
+#### Server-side draft sessions
+
 The `cleanup_stale_drafts` Celery beat task runs daily and removes Django session
-records that expired more than **24 hours** ago. This keeps the session table from
-accumulating rows left behind by users who opened the form but never submitted.
+rows that are older than 24 hours. These sessions are written by the browser
+draft auto-save feature. The task does not touch any `ServiceSubmission` rows.
 
-The task does not delete `ServiceSubmission` records — only the underlying Django
-`Session` rows that the browser draft auto-save feature writes to.
+To run manually:
 
-To trigger cleanup manually:
-
-```bash
-docker compose exec web python manage.py shell -c "
+```python
 from apps.submissions.tasks import cleanup_stale_drafts
 result = cleanup_stale_drafts()
-print(result)
-"
+print(f"Removed {result} stale session(s)")
 ```
+
+The beat schedule is defined in `settings.py` under `CELERY_BEAT_SCHEDULE`. See [Celery beat tasks](#celery-beat-tasks) for monitoring.
+
+#### Client-side localStorage drafts
+
+The registration and edit forms auto-save field values to the submitter's
+**browser localStorage** (not to the server). These are managed entirely
+client-side:
+
+- **Submit clears the draft immediately** — no admin action needed.
+- **`updated_at` key invalidation** — the edit form draft key embeds the submission's
+  `updated_at` Unix timestamp. Any server-side save (admin edit, status change, API
+  update) advances `updated_at`, making the old draft key unreachable. The submitter
+  always sees current values on their next visit.
+- **TTL** — drafts older than `draft_ttl_days` (default 7, configurable in
+  `site.toml [submission]`) are removed on the submitter's next form load.
+- **Global purge** — on every form load the browser also sweeps all `denbi_draft_*`
+  localStorage entries and removes expired ones, covering drafts from multiple
+  service registrations.
+
+No admin action is required for client-side drafts. They are entirely transparent
+to the server.
 
 ---
 

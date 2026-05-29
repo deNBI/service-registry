@@ -87,4 +87,5 @@ def site_context(request):
         "USER_GUIDE_URL": links.get(
             "user_guide", "https://denbi.github.io/service-registry/user-guide/"
         ),
+        "FORM_DRAFT_TTL_DAYS": getattr(dj_settings, "FORM_DRAFT_TTL_DAYS", 7),
     }

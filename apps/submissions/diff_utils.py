@@ -214,6 +214,49 @@ def build_diff(
     return changes
 
 
+# Set of M2M field names for quick membership tests.
+_M2M_FIELDS: frozenset[str] = frozenset(f for f, _ in DIFFABLE_M2M)
+
+
+def filter_sanitization_artifacts(
+    changes: list[dict],
+    form_changed_data: list[str],
+    form_field_names: "set[str] | frozenset[str]",
+) -> list[dict]:
+    """
+    Remove false-positive diff entries caused by form sanitization.
+
+    When a submitter saves without touching a field, the form's ``clean_*``
+    methods (bleach, NFC normalisation, whitespace stripping) may produce a
+    slightly different string than what is stored in the database.  The raw
+    snapshot comparison then reports a change that the user never made.
+
+    This function keeps a change only when one of the following is true:
+
+    1. The field is an M2M field — snapshot comparison is reliable (no
+       sanitization is involved).
+    2. The field is **not** managed by the form (e.g. ``status``,
+       ``primary_maturity_tag``) — changes to these fields are made
+       programmatically in the view, not by the user, and must always be
+       recorded.
+    3. The field appears in ``form_changed_data`` — Django confirmed the
+       user actually submitted a different value.
+
+    Args:
+        changes:           Output of ``build_diff()``.
+        form_changed_data: ``form.changed_data`` from a validated ModelForm.
+        form_field_names:  ``set(form.fields.keys())`` for the same form.
+    """
+    user_changed = frozenset(form_changed_data)
+    return [
+        c
+        for c in changes
+        if c["field"] in _M2M_FIELDS  # reliable M2M snapshot
+        or c["field"] not in form_field_names  # system-managed (status, tags…)
+        or c["field"] in user_changed  # user explicitly changed this
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

@@ -333,6 +333,13 @@ class TestRegisterView:
         resp = client.post(reverse("submissions:register"), data=data)
         assert resp.status_code == 422
 
+    def test_register_form_has_draft_ttl_days_attribute(self, client, settings):
+        """Registration form must render data-draft-ttl-days from settings."""
+        settings.FORM_DRAFT_TTL_DAYS = 5
+        resp = client.get(reverse("submissions:register"))
+        assert resp.status_code == 200
+        assert b'data-draft-ttl-days="5"' in resp.content
+
 
 # ===========================================================================
 # UpdateView
@@ -605,6 +612,34 @@ class TestEditView:
         sub.refresh_from_db()
         assert sub.last_change_summary is None
 
+    def test_edit_post_logo_only_change_does_not_leak_description_into_diff(
+        self, client, settings
+    ):
+        """
+        Uploading a new logo must not cause unrelated fields (e.g. description)
+        to appear in the diff due to form sanitization side-effects (NFC
+        normalisation, bleach, whitespace stripping).
+        """
+        settings.ALTCHA_HMAC_KEY = ""
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+
+        sub = ServiceSubmissionFactory(service_description="A" * 50)
+        self._setup_edit_session(client, sub)
+
+        logo = SimpleUploadedFile(
+            "logo.png", _make_png_bytes(), content_type="image/png"
+        )
+        data = self._edit_form_data(sub, logo=logo)
+        client.post(reverse("submissions:edit"), data=data)
+        sub.refresh_from_db()
+
+        # The summary must exist (logo changed) but must only mention the logo.
+        assert sub.last_change_summary is not None
+        changed_fields = {c["field"] for c in sub.last_change_summary["changes"]}
+        assert "logo" in changed_fields
+        assert "service_description" not in changed_fields
+        assert "service_name" not in changed_fields
+
     def test_edit_post_sends_submitter_updated_email_when_changed(
         self, client, settings
     ):
@@ -625,6 +660,267 @@ class TestEditView:
 
         recipients = [addr for m in mail.outbox for addr in m.to]
         assert "pi@example.com" in recipients
+
+    # ── exempt fields / no-reset logic ───────────────────────────────────────
+
+    def _edit_approved(self, client, settings, **overrides):
+        """Helper: create an approved submission, set up edit session, POST form."""
+        settings.ALTCHA_HMAC_KEY = ""
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        from apps.submissions.lifecycle import get_no_reset_fields
+
+        get_no_reset_fields.cache_clear()
+        sub = ServiceSubmissionFactory(
+            status="approved", internal_contact_email="pi@example.com"
+        )
+        self._setup_edit_session(client, sub)
+        data = self._edit_form_data(sub, **overrides)
+        client.post(reverse("submissions:edit"), data=data)
+        sub.refresh_from_db()
+        return sub
+
+    def test_edit_approved_non_exempt_resets_status(self, client, settings):
+        """Editing a non-exempt field resets an approved submission to submitted."""
+        settings.SUBMISSION_NO_RESET_FIELDS = ["logo", "github_url"]
+        sub = self._edit_approved(client, settings, service_name="Changed Name")
+        assert sub.status == "submitted"
+
+    def test_edit_approved_non_exempt_clears_maturity_tags(self, client, settings):
+        """When status is reset, maturity tags are cleared to maintain model invariant."""
+        settings.SUBMISSION_NO_RESET_FIELDS = ["github_url"]
+        settings.ALTCHA_HMAC_KEY = ""
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        from apps.submissions.lifecycle import get_no_reset_fields
+
+        get_no_reset_fields.cache_clear()
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=["unstable"],
+        )
+        self._setup_edit_session(client, sub)
+        # Changing service_name (non-exempt) → status reset + tag clear
+        data = self._edit_form_data(sub, service_name="New Name")
+        client.post(reverse("submissions:edit"), data=data)
+        sub.refresh_from_db()
+        assert sub.status == "submitted"
+        assert not sub.primary_maturity_tag
+        assert sub.secondary_maturity_tags == []
+
+    def test_edit_approved_exempt_preserves_status(self, client, settings):
+        """Editing only exempt fields keeps an approved submission's status."""
+        settings.SUBMISSION_NO_RESET_FIELDS = ["github_url"]
+        sub = self._edit_approved(
+            client, settings, github_url="https://github.com/org/new-repo"
+        )
+        assert sub.status == "approved"
+
+    def test_edit_approved_mixed_fields_resets_status(self, client, settings):
+        """Changing both an exempt and a non-exempt field still resets status."""
+        settings.SUBMISSION_NO_RESET_FIELDS = ["github_url"]
+        sub = self._edit_approved(
+            client,
+            settings,
+            github_url="https://github.com/org/new-repo",
+            service_name="Also Changed",
+        )
+        assert sub.status == "submitted"
+
+    def test_edit_approved_empty_exempt_list_resets_status(self, client, settings):
+        """Empty exempt list restores legacy behaviour: any edit resets status."""
+        settings.SUBMISSION_NO_RESET_FIELDS = []
+        sub = self._edit_approved(
+            client, settings, github_url="https://github.com/org/repo"
+        )
+        assert sub.status == "submitted"
+
+    def test_edit_approved_preserves_maturity_tags_on_exempt_only_change(
+        self, client, settings
+    ):
+        """Maturity tags must survive when only exempt fields change."""
+        settings.SUBMISSION_NO_RESET_FIELDS = ["github_url"]
+        settings.ALTCHA_HMAC_KEY = ""
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        from apps.submissions.lifecycle import get_no_reset_fields
+
+        get_no_reset_fields.cache_clear()
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=["unstable"],
+        )
+        self._setup_edit_session(client, sub)
+        data = self._edit_form_data(sub, github_url="https://github.com/org/new-repo")
+        client.post(reverse("submissions:edit"), data=data)
+        sub.refresh_from_db()
+        assert sub.status == "approved"
+        assert sub.primary_maturity_tag == "mature"
+        assert sub.secondary_maturity_tags == ["unstable"]
+
+    def test_edit_approved_sanitization_artifact_does_not_reset_status(
+        self, client, settings
+    ):
+        """
+        A raw form field difference that resolves to the same value after
+        form.clean() (e.g. trailing whitespace stripped by _sanitise()) must
+        NOT trigger a status reset.  This covers the stale-localStorage-draft
+        scenario: the browser submits a slightly different raw string, but the
+        actual content is unchanged.
+        """
+        settings.SUBMISSION_NO_RESET_FIELDS = ["logo"]
+        settings.ALTCHA_HMAC_KEY = ""
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        from apps.submissions.lifecycle import get_no_reset_fields
+
+        get_no_reset_fields.cache_clear()
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=["unstable"],
+            # DB has a clean description (no trailing space)
+            service_description="A" * 200,
+        )
+        self._setup_edit_session(client, sub)
+        # Submit with trailing whitespace on the description — raw form.changed_data
+        # will include service_description, but after clean() the value is identical
+        # to the DB value.  The status must NOT be reset.
+        data = self._edit_form_data(sub, service_description="A" * 200 + "  ")
+        resp = client.post(reverse("submissions:edit"), data=data)
+        assert resp.status_code == 302
+        sub.refresh_from_db()
+        assert sub.status == "approved", (
+            "Status was incorrectly reset due to a sanitization artifact "
+            "(trailing whitespace in description that clean() strips)"
+        )
+        assert sub.primary_maturity_tag == "mature"
+        assert sub.secondary_maturity_tags == ["unstable"]
+        get_no_reset_fields.cache_clear()
+
+    def test_edit_approved_logo_file_upload_preserves_status(self, client, settings):
+        """Uploading a logo file (exempt field) on an approved submission must not reset status."""
+        settings.SUBMISSION_NO_RESET_FIELDS = ["logo"]
+        settings.ALTCHA_HMAC_KEY = ""
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        from apps.submissions.lifecycle import get_no_reset_fields
+
+        get_no_reset_fields.cache_clear()
+        sub = ServiceSubmissionFactory(status="approved")
+        self._setup_edit_session(client, sub)
+        data = self._edit_form_data(
+            sub,
+            logo=SimpleUploadedFile(
+                "logo.png", _make_png_bytes(), content_type="image/png"
+            ),
+        )
+        resp = client.post(reverse("submissions:edit"), data=data)
+        assert resp.status_code == 302
+        sub.refresh_from_db()
+        assert sub.status == "approved"
+        assert sub.logo  # logo was saved
+
+    def test_edit_approved_logo_file_upload_preserves_maturity_tags(
+        self, client, settings
+    ):
+        """Uploading a logo (first time, exempt) on an approved service must preserve maturity tags."""
+        settings.SUBMISSION_NO_RESET_FIELDS = ["logo"]
+        settings.ALTCHA_HMAC_KEY = ""
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        from apps.submissions.lifecycle import get_no_reset_fields
+
+        get_no_reset_fields.cache_clear()
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=["unstable"],
+        )
+        self._setup_edit_session(client, sub)
+        data = self._edit_form_data(
+            sub,
+            logo=SimpleUploadedFile(
+                "logo.png", _make_png_bytes(), content_type="image/png"
+            ),
+        )
+        resp = client.post(reverse("submissions:edit"), data=data)
+        assert resp.status_code == 302
+        sub.refresh_from_db()
+        assert sub.status == "approved"
+        assert sub.primary_maturity_tag == "mature"
+        assert sub.secondary_maturity_tags == ["unstable"]
+        assert sub.logo  # logo was saved
+
+    def test_edit_approved_logo_upload_plus_non_exempt_resets_status(
+        self, client, settings
+    ):
+        """Logo upload (exempt) combined with a non-exempt field change must still reset status."""
+        settings.SUBMISSION_NO_RESET_FIELDS = ["logo"]
+        settings.ALTCHA_HMAC_KEY = ""
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        from apps.submissions.lifecycle import get_no_reset_fields
+
+        get_no_reset_fields.cache_clear()
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=["unstable"],
+        )
+        self._setup_edit_session(client, sub)
+        data = self._edit_form_data(
+            sub,
+            logo=SimpleUploadedFile(
+                "logo.png", _make_png_bytes(), content_type="image/png"
+            ),
+            service_name="Changed Name",
+        )
+        resp = client.post(reverse("submissions:edit"), data=data)
+        assert resp.status_code == 302
+        sub.refresh_from_db()
+        assert sub.status == "submitted"
+        assert not sub.primary_maturity_tag
+        assert sub.secondary_maturity_tags == []
+
+    def test_edit_form_has_draft_ttl_days_attribute(self, client, settings):
+        """Edit form must render data-draft-ttl-days from settings."""
+        settings.FORM_DRAFT_TTL_DAYS = 3
+        sub = ServiceSubmissionFactory()
+        self._setup_edit_session(client, sub)
+        resp = client.get(reverse("submissions:edit"))
+        assert resp.status_code == 200
+        assert b'data-draft-ttl-days="3"' in resp.content
+
+    @pytest.mark.parametrize(
+        "exempt_field,new_value",
+        [
+            ("github_url", "https://github.com/org/new-repo"),
+            ("biotools_url", "https://bio.tools/newtool"),
+            ("fairsharing_url", "https://fairsharing.org/newtool"),
+        ],
+    )
+    def test_edit_approved_exempt_url_fields_preserve_status(
+        self, client, settings, exempt_field, new_value
+    ):
+        """Each URL field in no_reset_fields must preserve approved status when changed alone."""
+        settings.SUBMISSION_NO_RESET_FIELDS = [exempt_field]
+        settings.ALTCHA_HMAC_KEY = ""
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        from apps.submissions.lifecycle import get_no_reset_fields
+
+        get_no_reset_fields.cache_clear()
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=["unstable"],
+        )
+        self._setup_edit_session(client, sub)
+        data = self._edit_form_data(sub, **{exempt_field: new_value})
+        resp = client.post(reverse("submissions:edit"), data=data)
+        assert resp.status_code == 302
+        sub.refresh_from_db()
+        assert sub.status == "approved", (
+            f"Status reset when only exempt '{exempt_field}' changed"
+        )
+        assert sub.primary_maturity_tag == "mature"
+        assert sub.secondary_maturity_tags == ["unstable"]
+        get_no_reset_fields.cache_clear()
 
 
 # ===========================================================================

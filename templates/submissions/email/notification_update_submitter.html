@@ -60,8 +60,18 @@ td.after  { color: #166534; }
   If you did not make this change, or if something looks incorrect, please contact us immediately.
 </div>
 
+{% if status_reset %}
+<div class="notice" style="background:#fef3c7;border-color:#f59e0b;margin-top:.75rem;">
+  <strong>Notice:</strong> Because one or more core service fields were modified,
+  your service registration has been reset to <em>Submitted</em> as part of the
+  service registry lifecycle. The de.NBI Administration Office will review your
+  changes and be in touch.
+</div>
+{% endif %}
+
 <div class="footer">
-  {{ CONTACT_ORG }} &bull; <a href="mailto:{{ CONTACT_EMAIL }}">{{ CONTACT_EMAIL }}</a>
+  {{ CONTACT_ORG }} &bull; <a href="mailto:{{ CONTACT_EMAIL }}">{{ CONTACT_EMAIL }}</a><br>
+  <em>This is an automated email — please do not reply directly. Contact the address above for questions.</em>
 </div>
 </body>
 </html>

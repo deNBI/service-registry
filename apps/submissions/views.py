@@ -25,7 +25,12 @@ from django.utils.timezone import now
 from django.views import View
 from django_ratelimit.decorators import ratelimit
 
-from .diff_utils import build_diff, snapshot, snapshot_m2m
+from .diff_utils import (
+    build_diff,
+    filter_sanitization_artifacts,
+    snapshot,
+    snapshot_m2m,
+)
 from .forms import SubmissionForm, UpdateKeyForm
 from .http_utils import get_client_ip, hash_user_agent
 from .models import (
@@ -443,9 +448,58 @@ class EditView(View):
 
         updated = form.save(commit=False)
 
-        # Reset status to submitted if previously approved (configurable)
+        # Determine whether this edit should reset status back to "submitted".
+        #
+        # If SUBMISSION_NO_RESET_FIELDS is configured (see site.toml [submission])
+        # and every changed field is in that exempt set, the approved status is
+        # preserved — no re-review cycle is triggered.
+        #
+        # We determine "changed" using two complementary signals:
+        #
+        #   Scalar fields — prospective diff (before_scalar vs snapshot of the
+        #   in-memory instance after form.save(commit=False)).  Using the
+        #   in-memory snapshot rather than form.changed_data avoids false
+        #   positives from form sanitization (bleach, NFC normalization,
+        #   whitespace stripping): a field whose raw POST value differed slightly
+        #   from the stored value but resolves to the same string after clean()
+        #   would appear in form.changed_data but produces an identical
+        #   prospective snapshot — and should NOT trigger a status reset.
+        #
+        #   M2M fields — form.changed_data filtered to M2M field names.  M2M
+        #   comparison is PK-based (no sanitization involved), so form.changed_data
+        #   is reliable here.  The M2M rows are not committed until save_m2m()
+        #   so a prospective snapshot cannot be used.
+        status_reset = False
         if updated.status == "approved":
-            updated.status = "submitted"
+            from apps.submissions.lifecycle import get_no_reset_fields
+            from apps.submissions.diff_utils import DIFFABLE_M2M
+
+            exempt = get_no_reset_fields()
+
+            # Prospective scalar diff — compares before snapshot with the
+            # in-memory instance (post-clean, pre-save).
+            prospective_scalar = snapshot(updated)
+            scalar_changed = {
+                c["field"] for c in build_diff(before_scalar, prospective_scalar)
+            }
+
+            # M2M: use form.changed_data restricted to tracked M2M field names.
+            m2m_field_names = frozenset(f for f, _ in DIFFABLE_M2M)
+            m2m_changed = set(form.changed_data) & m2m_field_names
+
+            actually_changed = scalar_changed | m2m_changed
+            non_exempt_changed = actually_changed - exempt
+
+            if non_exempt_changed or (not exempt and actually_changed):
+                updated.status = "submitted"
+                status_reset = True
+
+        # When status is reset to "submitted", clear maturity tags to maintain
+        # the model invariant (tags are only valid on approved services).
+        # When status is preserved (exempt-only edit), tags are untouched.
+        if status_reset:
+            updated.primary_maturity_tag = None
+            updated.secondary_maturity_tags = []
 
         updated.save()
         form.save_m2m()
@@ -457,6 +511,15 @@ class EditView(View):
 
         changes = build_diff(
             {**before_scalar, **before_m2m}, {**after_scalar, **after_m2m}
+        )
+        # Strip false positives caused by form sanitization (bleach, NFC
+        # normalisation, whitespace stripping) running on fields the user
+        # never actually changed.  form.changed_data is Django's authoritative
+        # signal for what the submitter explicitly modified.
+        changes = filter_sanitization_artifacts(
+            changes,
+            form_changed_data=form.changed_data,
+            form_field_names=set(form.fields.keys()),
         )
 
         # Persist the diff on the submission so it's always visible in the admin.
@@ -481,8 +544,11 @@ class EditView(View):
             extra={"submission_id": str(submission.id)},
         )
 
-        # Send async notification (passes diff so both admin and submitter emails show it).
-        send_update_notification.delay(str(submission.id), changes=changes)
+        # Send async notification (passes diff and status_reset flag so both
+        # admin and submitter emails show it).
+        send_update_notification.delay(
+            str(submission.id), changes=changes, status_reset=status_reset
+        )
 
         # Clear edit session keys
         request.session.pop("edit_key_id", None)

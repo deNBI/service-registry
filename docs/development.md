@@ -372,6 +372,7 @@ element.
 | `snapshot(instance)`        | Returns a `dict` of current scalar field values; **must be called before** `form.is_valid()` or admin `save_model()` |
 | `snapshot_m2m(instance)`    | Returns a `dict` of current M2M field values as sorted lists of strings                                              |
 | `build_diff(before, after)` | Compares two snapshots; returns `[{field, label, old, new}]` for changed fields only                                 |
+| `filter_sanitization_artifacts(changes, form_changed_data, form_field_names)` | Removes false-positive diff entries where form sanitization (bleach, NFC normalisation, whitespace stripping) produced a raw difference that resolved to the same stored value. Always applied after `build_diff()` in the web-form edit path. |
 
 ### Snapshot timing
 
@@ -403,6 +404,14 @@ DRF serializers do **not** modify `self.instance` during `is_valid()`, so the sn
 2. If the field uses `choices`, add it to `_CHOICE_FIELDS` so `get_FOO_display()` is used
 3. Add a test to `tests/test_diff_utils.py`
 
+### Sanitization artifacts
+
+Form `clean_*` methods (bleach, `unicodedata.normalize`, `.strip()`) may produce a cleaned value identical to the stored value even when the raw POST string differed slightly (trailing spaces, NFC variants). `build_diff()` compares snapshots of the **stored model value** before and after save, so such non-changes do not appear in the diff.
+
+`filter_sanitization_artifacts()` provides a second layer: it removes any diff entry where the field is managed by the form **and** is absent from `form.changed_data`. It is called after `build_diff()` in the web-form path before persisting `last_change_summary`.
+
+**Status reset and sanitization:** `EditView` determines whether to reset status using a *prospective diff* — it compares `before_scalar` against `snapshot(updated)` taken from the in-memory instance after `form.save(commit=False)`. Because `_post_clean()` has already applied `clean_*` normalization at that point, sanitization artifacts never appear in the prospective diff and cannot trigger a false status reset.
+
 ---
 
 ## Logo upload security pipeline
@@ -424,7 +433,7 @@ result = validate_and_process_logo(file_obj)  # → InMemoryUploadedFile
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Size check           | Raises `ValidationError` if file exceeds `settings.LOGO_MAX_BYTES` (configurable in `site.toml`)                                                                                                                                 |
 | Magic-byte detection | Reads first bytes to determine type — never trusts file extension or MIME header                                                                                                                                                 |
-| JPEG / PNG           | Re-encoded via Pillow: strips EXIF metadata, verifies image integrity                                                                                                                                                            |
+| JPEG / PNG           | Re-encoded via Pillow: strips EXIF metadata, verifies image integrity. JPEG output is always RGB — RGBA/LA images are composited on a white background; CMYK/YCbCr/L are converted to RGB; palette images with transparency are treated as RGBA. This ensures all major browsers can render the stored file. |
 | SVG                  | Parsed by stdlib `xml.etree.ElementTree` (safe on Python 3.12+/Expat 2.7.1, which blocks XXE and entity-expansion attacks), then scrubbed of `<script>` elements, `on*` event-handler attributes, non-fragment `href`/`src` URLs |
 | UUID filename        | Original filename is discarded; `_logo_upload_to()` in `models.py` assigns `logos/<uuid4>.<ext>`                                                                                                                                 |
 
@@ -466,6 +475,100 @@ the `settings` + `tmp_path` fixtures to set a deterministic `MEDIA_ROOT`
 | `{% site_logo_url %}`            | Returns logo URL from `site.toml`, or empty string                    |
 | `{% site_favicon_url %}`         | Returns favicon URL (auto-detects `static/img/favicon.*` as fallback) |
 | `{% site_setting section key %}` | Generic accessor for any `site.toml` value                            |
+
+---
+
+## Form draft (localStorage)
+
+The registration form (`/register/`) and the edit form (`/update/edit/`) auto-save field values to the browser's `localStorage` so that a partially completed form survives a tab close or accidental navigation.
+
+### Draft key scheme
+
+| Form | Key pattern | Invalidated when |
+|---|---|---|
+| Register | `denbi_draft_register` | Form is submitted (cleared in `submit` event handler) |
+| Edit | `denbi_draft_edit_{submission_uuid}_{updated_at_unix}` | Submission `updated_at` changes (any server-side save) **or** form is submitted |
+
+The edit form embeds `updated_at` as a Unix timestamp in the key. Any server-side modification (admin edit, status change, API PATCH) advances `updated_at`, making the old draft key unreachable on the next page load — the user always sees the current DB values.
+
+### Draft payload structure
+
+```json
+{
+  "_savedAt": 1748000000000,
+  "service_name": "MyTool",
+  "service_description": "..."
+}
+```
+
+`_savedAt` is a `Date.now()` millisecond timestamp written by `saveDraft()`. It is used exclusively for TTL enforcement and is not a form field name.
+
+### Fields excluded from drafts (`SKIP_NAMES`)
+
+| Field | Reason |
+|---|---|
+| `csrfmiddlewaretoken` | Security — must come from the server |
+| `data_protection_consent` | Must be re-checked deliberately on every submission |
+| `altcha` | Proof-of-work challenges expire; stale values are rejected server-side |
+| `logo` | File inputs cannot be restored from localStorage |
+
+### TTL and global purge
+
+Every form load calls `purgeStaleDrafts()` before `restoreDraft()`. It:
+
+1. Iterates all `localStorage` keys starting with `denbi_draft_`.
+2. Removes any entry whose `_savedAt` is older than the configured TTL, or whose `_savedAt` is absent.
+3. For the edit form specifically: also removes any `denbi_draft_edit_{uuid}_*` key that does not match the current draft key (old-version cleanup).
+
+The TTL is configured in `site.toml` under `[submission] draft_ttl_days` (default 7). It is exposed to JavaScript as `data-draft-ttl-days` on the `<form>` element.
+
+### Restoring a draft
+
+`restoreDraft()` is called after `purgeStaleDrafts()`. It reads `DRAFT_KEY` from `localStorage`, verifies the TTL, then restores each field. A "Draft restored" banner with a **Clear draft** button is shown if any fields were actually restored. Server-side validation errors suppress draft restoration so the user sees the real error rather than a stale draft overwriting the submitted values.
+
+### Testing
+
+JavaScript logic is not covered by the Python test suite. Python tests cover:
+
+- `FORM_DRAFT_TTL_DAYS` is present in the template context (`tests/test_context_processors.py`)
+- `data-draft-ttl-days` attribute is rendered in both form pages (`tests/test_views.py`)
+
+Manual browser verification: use DevTools → Application → Local Storage to inspect and manipulate `_savedAt` values.
+
+---
+
+## Submission lifecycle (status reset)
+
+When a submitter edits an **approved** service via the web form or REST API, the platform determines whether to reset the status to `submitted` (triggering a re-review) based on which fields actually changed.
+
+### How "changed" is determined
+
+**Scalar fields** — a *prospective diff* compares the `before_scalar` snapshot (taken before form processing) with a snapshot of the in-memory instance after `form.save(commit=False)`. This uses the already-cleaned values, so sanitization artifacts (whitespace, NFC normalization) do not produce false positives.
+
+**M2M fields** — `form.changed_data` filtered to the set of tracked M2M field names (`DIFFABLE_M2M`). M2M comparison is PK-based with no sanitization, so `form.changed_data` is reliable here.
+
+### `no_reset_fields` exemption
+
+Fields listed in `settings.SUBMISSION_NO_RESET_FIELDS` (configured via `site.toml [submission] no_reset_fields`) are exempt. If all actually-changed fields are exempt, the `approved` status is preserved. If any non-exempt field changed, status is reset and maturity tags are cleared (they are only valid on approved services).
+
+The exemption is enforced identically in:
+
+- `apps/submissions/views.py` `EditView.post()` — web form path
+- `apps/api/views.py` `partial_update()` — REST API path
+
+### `lifecycle.py`
+
+`apps/submissions/lifecycle.py` provides `get_no_reset_fields()` — an `@lru_cache`-decorated function that reads `settings.SUBMISSION_NO_RESET_FIELDS`, validates each entry against `DIFFABLE_FIELDS`/`DIFFABLE_M2M`, rejects system-controlled fields, and returns a `frozenset` of valid exempt names. The cache is populated at startup via `SubmissionsConfig.ready()` so misconfigured entries are logged immediately.
+
+Call `get_no_reset_fields.cache_clear()` in tests that override `settings.SUBMISSION_NO_RESET_FIELDS`.
+
+### When status resets
+
+On reset, both the web form and API:
+
+1. Set `status = "submitted"`
+2. Clear `primary_maturity_tag = None` and `secondary_maturity_tags = []`
+3. Pass `status_reset=True` to `send_update_notification` so the submitter email includes a lifecycle notice
 
 ---
 

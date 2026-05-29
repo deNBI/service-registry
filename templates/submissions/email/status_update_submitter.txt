@@ -14,6 +14,8 @@ The status of your service registration has been updated.
 Submission ID: {{ submission.id }}
 
 ---
+This is an automated email — please do not reply directly.
+
 {{ CONTACT_ORG }}
 {{ CONTACT_EMAIL }}
 {{ WEBSITE_URL }}

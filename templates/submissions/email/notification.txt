@@ -1,7 +1,7 @@
 de.NBI Service Registration Platform — Notification
 ========================================
 
-Event: {{ event|upper }}
+Event: {{ event_label|upper }}
 Service: {{ submission.service_name }}
 Status: {{ submission.get_status_display }}
 Submission ID: {{ submission.id }}

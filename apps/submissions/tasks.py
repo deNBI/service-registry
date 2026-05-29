@@ -61,6 +61,16 @@ def _email_subject(key: str, **kwargs) -> str:
     return template.format(**kwargs)
 
 
+def _event_label(event: str) -> str:
+    """Return a human-readable label for an event key (e.g. 'status_changed' → 'Status Changed')."""
+    labels = {
+        "created": "Created",
+        "updated": "Updated",
+        "status_changed": "Status Changed",
+    }
+    return labels.get(event, event.replace("_", " ").title())
+
+
 def _status_message(status: str) -> str:
     """Return the submitter-facing message for a given status."""
     messages = _EMAIL_TEXTS.get("status_messages", {})
@@ -129,6 +139,7 @@ def send_submission_notification(
     submission_id: str,
     event: str = "created",
     changes: list | None = None,
+    status_reset: bool = False,
 ) -> None:
     """
     Send an admin notification email for a submission event.
@@ -138,6 +149,10 @@ def send_submission_notification(
         event:         "created" | "updated" | "status_changed"
         changes:       List of change dicts from diff_utils.build_diff()
                        (only meaningful for event="updated").
+        status_reset:  True when the submission status was reset to "submitted"
+                       as a result of this edit (passed through to the
+                       submitter update email so it can include a lifecycle
+                       notice).
 
     Email routing:
         - Admin email → registry coordination address + SUBMISSION_NOTIFY_CC
@@ -180,6 +195,7 @@ def send_submission_notification(
         **_site_email_context(),
         "submission": submission,
         "event": event,
+        "event_label": _event_label(event),
         "categories": list(
             submission.service_categories.values_list("name", flat=True)
         ),
@@ -223,7 +239,7 @@ def send_submission_notification(
     elif event == "status_changed":
         _send_submitter_status_email(submission)
     elif event == "updated" and changes:
-        _send_submitter_updated_email(submission, changes)
+        _send_submitter_updated_email(submission, changes, status_reset=status_reset)
 
 
 # ---------------------------------------------------------------------------
@@ -316,14 +332,16 @@ def _send_submitter_status_email(submission) -> None:
     )
 
 
-def _send_submitter_updated_email(submission, changes: list) -> None:
+def _send_submitter_updated_email(
+    submission, changes: list, *, status_reset: bool = False
+) -> None:
     """Notify the submitter about which fields they just changed."""
     _send_submitter_email(
         submission,
         event_key="submitter_updated",
         txt_template="submissions/email/notification_update_submitter.txt",
         html_template="submissions/email/notification_update_submitter.html",
-        extra_context={"changes": changes},
+        extra_context={"changes": changes, "status_reset": status_reset},
     )
 
 
@@ -342,7 +360,10 @@ def _send_submitter_updated_email(submission, changes: list) -> None:
     soft_time_limit=540,
 )
 def send_update_notification(
-    self, submission_id: str, changes: list | None = None
+    self,
+    submission_id: str,
+    changes: list | None = None,
+    status_reset: bool = False,
 ) -> None:
     """
     Send notification when a submitter edits their submission via the update form.
@@ -350,9 +371,13 @@ def send_update_notification(
     Delegates to send_submission_notification with event="updated" and the
     field-level diff so both the admin email and the submitter email include
     a "what changed" summary.
+
+    Args:
+        status_reset: True when the edit caused a status reset to "submitted"
+                      (passed through to the submitter email template).
     """
     send_submission_notification.delay(
-        submission_id, event="updated", changes=changes or []
+        submission_id, event="updated", changes=changes or [], status_reset=status_reset
     )
 
 

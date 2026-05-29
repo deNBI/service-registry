@@ -340,7 +340,8 @@ class SubmissionViewSet(
             "Partial update — include only the fields you want to change.\n\n"
             "Requires `Authorization: ApiKey <your-key>` header.\n\n"
             "Note: updating an approved submission resets its status to `submitted` "
-            "for re-review."
+            "for re-review, unless every changed field is listed in "
+            "`SUBMISSION_NO_RESET_FIELDS` (configured in `site.toml`)."
         ),
     )
     def partial_update(self, request, *args, **kwargs):
@@ -355,10 +356,37 @@ class SubmissionViewSet(
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
 
-        # Reset status to "submitted" in the same save() to avoid a window
-        # where the submission is briefly saved as "approved" with new data.
+        # Apply the same no_reset_fields exemption as the web form (EditView).
+        # Only consider fields that the diff system tracks (DIFFABLE_FIELDS /
+        # DIFFABLE_M2M); metadata-only fields like data_protection_consent are
+        # excluded from the reset decision.
+        status_reset = False
         if instance.status == "approved":
-            serializer.save(status="submitted")
+            from apps.submissions.lifecycle import get_no_reset_fields
+            from apps.submissions.diff_utils import DIFFABLE_FIELDS, DIFFABLE_M2M
+
+            exempt = get_no_reset_fields()
+            all_diffable = frozenset(f for f, _ in DIFFABLE_FIELDS + DIFFABLE_M2M)
+            # validated_data uses source names (model field names), so the
+            # comparison against no_reset_fields (model field names) is direct.
+            content_fields_submitted = (
+                set(serializer.validated_data.keys()) & all_diffable
+            )
+            non_exempt = content_fields_submitted - exempt
+
+            if exempt and not non_exempt:
+                # All submitted content fields are exempt → preserve approved status.
+                serializer.save()
+            else:
+                # At least one non-exempt content field changed (or no exempt list
+                # configured) → reset to submitted and clear maturity tags to maintain
+                # the model invariant (tags are only valid on approved services).
+                serializer.save(
+                    status="submitted",
+                    primary_maturity_tag=None,
+                    secondary_maturity_tags=[],
+                )
+                status_reset = True
         else:
             serializer.save()
 
@@ -389,7 +417,9 @@ class SubmissionViewSet(
                 changes=changes,
             )
 
-        send_update_notification.delay(str(instance.id), changes=changes)
+        send_update_notification.delay(
+            str(instance.id), changes=changes, status_reset=status_reset
+        )
         logger.info(
             "API submission updated (%d field(s) changed)",
             len(changes),
