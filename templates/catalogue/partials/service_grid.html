@@ -22,6 +22,19 @@
   <a href="{% url 'catalogue:index' %}" class="badge bg-secondary text-white text-decoration-none">× Clear all</a>
 </div>
 {% endif %}
+
+{% comment %}
+Live result count — lives inside the swap target so it updates on every
+filter/search interaction, and announces the new total to screen readers.
+{% endcomment %}
+<div class="catalogue-result-count text-muted small mb-3" aria-live="polite" aria-atomic="true">
+  {% if params.search or params.categories or params.centers %}
+  <strong>{{ page_obj.paginator.count }}</strong> result{{ page_obj.paginator.count|pluralize }} found
+  {% else %}
+  <strong>{{ page_obj.paginator.count }}</strong> service{{ page_obj.paginator.count|pluralize }} registered
+  {% endif %}
+</div>
+
 {% if grouped %}
   {# ── Grouped view ── #}
   {% for group_label, services in grouped %}

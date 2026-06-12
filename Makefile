@@ -37,7 +37,7 @@ help:
 	@echo "    make typecheck        mypy type check"
 	@echo "    make dead-code        vulture dead-code scan (min confidence 80%)"
 	@echo "    make security         bandit SAST scan (low+ severity)"
-	@echo "    make pre-commit       ruff format-fix + full test suite + docs strict build"
+	@echo "    make pre-commit       ruff format-fix + pip-audit + full test suite + docs strict build"
 	@echo ""
 	@echo "  Documentation"
 	@echo "    make docs             Serve MkDocs at http://127.0.0.1:8001"
@@ -118,7 +118,7 @@ dead-code:
 security:
 	bandit -r apps/ config/ -ll -q
 
-pre-commit: lint-fix test docs-build
+pre-commit: lint-fix audit test docs-build
 	@echo ""
 	@echo "All pre-commit checks passed. Safe to commit."
 

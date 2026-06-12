@@ -20,11 +20,6 @@
       <h1 class="mb-1">Registry Catalogue</h1>
       <p class="text-muted mb-0">{{ CATALOGUE_META_DESCRIPTION }}</p>
     </div>
-    <div class="text-muted small catalogue-result-count">
-      {% if page_obj.paginator.count %}
-      <strong>{{ page_obj.paginator.count }}</strong> service{{ page_obj.paginator.count|pluralize }} registered
-      {% endif %}
-    </div>
   </div>
 
 </div>
@@ -59,10 +54,12 @@
             type="search"
             id="catalogue-search"
             class="form-control form-control-lg catalogue-search-input"
-            placeholder="Search services…"
+            placeholder="Search by service, category, centre or PI…"
             name="q"
             value="{{ params.search }}"
             autocomplete="off"
+            title="Search matches service name, category, service centre, and PI name."
+            aria-describedby="catalogue-search-hint"
             onkeydown="if(event.key==='Enter') event.preventDefault();"
             hx-get="{% url 'catalogue:grid' %}"
             hx-trigger="keyup delay:300ms, search"
@@ -71,6 +68,9 @@
             hx-include="#filter-form"
             hx-indicator="#catalogue-spinner"
           />
+          <span id="catalogue-search-hint" class="visually-hidden">
+            Search matches service name, category, service centre, and PI name.
+          </span>
         </div>
 
         {# Row 2: sort + group + view toggle #}
