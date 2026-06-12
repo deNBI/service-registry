@@ -110,6 +110,72 @@ class TestCatalogueGridView:
 
 
 @pytest.mark.django_db
+class TestCatalogueResultCount:
+    """The result count must live inside the HTMX swap target so it updates
+    when the user filters or searches (previously it sat in the page header
+    and went stale on every filter interaction)."""
+
+    def test_grid_count_reflects_filtered_results(self, client, settings):
+        from tests.factories import ServiceSubmissionFactory
+
+        settings.SITE_CONFIG = CATALOGUE_ON
+        ServiceSubmissionFactory(
+            status="approved", service_name="Galaxy Workflow", biotools_url=""
+        )
+        ServiceSubmissionFactory(
+            status="approved", service_name="Other Tool A", biotools_url=""
+        )
+        ServiceSubmissionFactory(
+            status="approved", service_name="Other Tool B", biotools_url=""
+        )
+
+        resp = client.get("/catalogue/grid/?q=Galaxy")
+        content = resp.content.decode()
+        # Filtered count (1) appears with "result" wording; total (3) does not leak in.
+        assert "1</strong> result" in content
+        assert "3</strong> service" not in content
+
+    def test_grid_count_unfiltered_wording(self, client, settings):
+        from tests.factories import ServiceSubmissionFactory
+
+        settings.SITE_CONFIG = CATALOGUE_ON
+        ServiceSubmissionFactory(status="approved", biotools_url="")
+        ServiceSubmissionFactory(status="approved", biotools_url="")
+
+        resp = client.get("/catalogue/grid/")
+        content = resp.content.decode()
+        assert "2</strong> service" in content
+
+    def test_grid_count_is_live_region(self, client, settings):
+        from tests.factories import ServiceSubmissionFactory
+
+        settings.SITE_CONFIG = CATALOGUE_ON
+        ServiceSubmissionFactory(status="approved", biotools_url="")
+
+        resp = client.get("/catalogue/grid/")
+        content = resp.content.decode()
+        assert "catalogue-result-count" in content
+        assert 'aria-live="polite"' in content
+
+    def test_full_page_filtered_url_count_is_accurate(self, client, settings):
+        """Landing directly on a filtered URL shows the filtered count, not the total."""
+        from tests.factories import ServiceSubmissionFactory
+
+        settings.SITE_CONFIG = CATALOGUE_ON
+        ServiceSubmissionFactory(
+            status="approved", service_name="Galaxy Workflow", biotools_url=""
+        )
+        ServiceSubmissionFactory(
+            status="approved", service_name="Other Tool", biotools_url=""
+        )
+
+        resp = client.get("/catalogue/?q=Galaxy")
+        content = resp.content.decode()
+        assert "1</strong> result" in content
+        assert "2</strong> service" not in content
+
+
+@pytest.mark.django_db
 class TestCatalogueFiltersView:
     def test_returns_partial_html(self, client, settings):
         settings.SITE_CONFIG = CATALOGUE_ON

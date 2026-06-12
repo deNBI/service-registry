@@ -360,6 +360,60 @@ class TestSvgSanitisation:
 
 
 # ---------------------------------------------------------------------------
+# Re-validation / idempotency regression
+#
+# Scenario: upload an SVG logo (validated + sanitised + stored), then save the
+# record again without changing the logo. The already-sanitised file is fed back
+# through validate_and_process_logo(). Before the fix, ElementTree re-serialised
+# the SVG root as "<ns0:svg ...>", which _sniff_type() no longer recognised as
+# SVG, raising "Unsupported file type" on the second save. PNG/JPEG were immune
+# because Pillow re-encodes to bytes with intact magic numbers.
+# ---------------------------------------------------------------------------
+
+
+class TestSvgRevalidationIdempotency:
+    def _process(self, data: bytes) -> bytes:
+        f = _make_upload(data, "logo.svg", "image/svg+xml")
+        result = validate_and_process_logo(f)
+        result.file.seek(0)
+        return result.file.read()
+
+    def test_sanitised_svg_root_keeps_unprefixed_svg_tag(self):
+        # The default namespace must be preserved so the root stays <svg>,
+        # not <ns0:svg>.
+        out = self._process(_make_svg_bytes())
+        assert out.lstrip().startswith(b"<svg")
+        assert b"<ns0:svg" not in out
+
+    def test_svg_survives_second_validation_pass(self):
+        # The crux: re-validating an already-processed SVG must not raise.
+        first = self._process(_make_svg_bytes())
+        second = self._process(first)  # would raise ValidationError before fix
+        assert second.lstrip().startswith(b"<svg")
+
+    def test_svg_round_trip_is_idempotent(self):
+        first = self._process(_make_svg_bytes())
+        second = self._process(first)
+        assert first == second
+
+    def test_legacy_ns0_prefixed_svg_still_validates(self):
+        # Records sanitised before the fix carry an "<ns0:svg ...>" root on disk;
+        # re-saving them must not be rejected as an unsupported file type.
+        legacy = (
+            b'<ns0:svg xmlns:ns0="http://www.w3.org/2000/svg" '
+            b'width="10" height="10"><ns0:rect width="10" height="10"/>'
+            b"</ns0:svg>"
+        )
+        out = self._process(legacy)
+        assert out.lstrip().startswith(b"<svg")
+
+    def test_legacy_ns0_svg_is_normalised_to_unprefixed_on_resave(self):
+        legacy = b'<ns0:svg xmlns:ns0="http://www.w3.org/2000/svg"></ns0:svg>'
+        out = self._process(legacy)
+        assert b"<ns0:svg" not in out
+
+
+# ---------------------------------------------------------------------------
 # XML attack prevention (stdlib ET safe on Python 3.12+ / Expat 2.7.1)
 # ---------------------------------------------------------------------------
 

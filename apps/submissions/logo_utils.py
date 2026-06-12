@@ -54,6 +54,10 @@ _HREF_ATTRS: frozenset[str] = frozenset({"href", "xlink:href"})
 # Regex for event-handler attributes (onclick, onload, onmouseover, …)
 _ON_ATTR_RE = re.compile(r"^on\w+$", re.IGNORECASE)
 
+# Matches an SVG root element with an optional namespace prefix, e.g.
+# "<svg ...>" or "<ns0:svg ...>" — used to recognise already-sanitised files.
+_SVG_ROOT_RE = re.compile(r"^<[A-Za-z_][\w.-]*:svg[\s>/]", re.IGNORECASE)
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -104,7 +108,13 @@ def _sniff_type(file_obj) -> str:
     else:
         sample_str = sample
     stripped = sample_str.lstrip()
-    if stripped.startswith("<?xml") or stripped.startswith("<svg"):
+    # Accept an optional namespace prefix on the root tag (e.g. <ns0:svg ...>),
+    # which legacy records sanitised before the default-namespace fix carry.
+    if (
+        stripped.startswith("<?xml")
+        or stripped.startswith("<svg")
+        or _SVG_ROOT_RE.match(stripped)
+    ):
         return "svg"
 
     raise ValidationError(
@@ -200,6 +210,13 @@ def _sanitise_svg(file_obj) -> bytes:
         ) from exc
 
     root = tree.getroot()
+
+    # ElementTree does not preserve the default (unprefixed) namespace on
+    # serialisation: a clean <svg xmlns="..."> would otherwise round-trip to
+    # <ns0:svg xmlns:ns0="...">, which _sniff_type() no longer recognises as
+    # SVG. Registering the SVG namespace with an empty prefix keeps the root
+    # element as <svg>, making sanitisation idempotent across re-saves.
+    _safe_et.register_namespace("", "http://www.w3.org/2000/svg")
 
     # Build parent map so we can remove child elements safely
     parent_map: dict = {}

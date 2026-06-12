@@ -1,3 +1,4 @@
+import uuid
 from dataclasses import dataclass, field
 
 VALID_SORT_OPTIONS = frozenset(
@@ -48,12 +49,22 @@ class CatalogueQueryParams:
             page = 1
 
         def _valid_ids(values):
+            # Reference models use mixed primary-key types: ServiceCategory has an
+            # integer PK while ServiceCenter (and PI) use UUIDs. Accept both so that
+            # UUID-keyed filters are not silently discarded.
             result = []
             for v in values:
+                s = str(v).strip()
                 try:
-                    int(v)
-                    result.append(v)
+                    int(s)
+                    result.append(s)
+                    continue
                 except (ValueError, TypeError):
+                    pass
+                try:
+                    uuid.UUID(s)
+                    result.append(s)
+                except (ValueError, TypeError, AttributeError):
                     pass
             return result
 
