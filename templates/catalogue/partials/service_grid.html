@@ -23,8 +23,10 @@
 </div>
 {% endif %}
 
-{# Live result count — lives inside the swap target so it updates on every
-   filter/search interaction, and announces the new total to screen readers. #}
+{% comment %}
+Live result count — lives inside the swap target so it updates on every
+filter/search interaction, and announces the new total to screen readers.
+{% endcomment %}
 <div class="catalogue-result-count text-muted small mb-3" aria-live="polite" aria-atomic="true">
   {% if params.search or params.categories or params.centers %}
   <strong>{{ page_obj.paginator.count }}</strong> result{{ page_obj.paginator.count|pluralize }} found

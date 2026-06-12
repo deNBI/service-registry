@@ -156,6 +156,9 @@ class TestCatalogueResultCount:
         content = resp.content.decode()
         assert "catalogue-result-count" in content
         assert 'aria-live="polite"' in content
+        # The template comment must not leak into rendered output.
+        assert "Live result count" not in content
+        assert "swap target" not in content
 
     def test_full_page_filtered_url_count_is_accurate(self, client, settings):
         """Landing directly on a filtered URL shows the filtered count, not the total."""
