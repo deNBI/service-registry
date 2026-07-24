@@ -1,8 +1,8 @@
 site_name: Service Registration Platform
 site_description: Documentation for the de.NBI & ELIXIR-DE Service Registration Platform
 site_url: https://service-registry.bi.denbi.de/docs
-repo_url: https://github.com/deNBI/denbi_service_registry
-repo_name: deNBI/denbi_service_registry
+repo_url: https://github.com/deNBI/service-registry
+repo_name: deNBI/service-registry
 edit_uri: ""
 
 theme:
