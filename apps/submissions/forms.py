@@ -435,6 +435,26 @@ class SubmissionForm(forms.ModelForm):
                 field_obj.label = texts["label"]
             field_obj.tooltip = texts.get("tooltip", "").strip()
 
+        # Lock the service name once the submission exists (edit form only).
+        # Django's ``disabled`` both renders the field non-editable and ignores
+        # any tampered value in the POST, keeping the instance's stored name.
+        # The registration form (no instance yet) leaves the field editable, and
+        # the Django admin uses a separate form, so admins can still rename.
+        # ``_state.adding`` (not ``pk``) distinguishes create from edit: the PK
+        # is a UUID with a default, so a brand-new instance already has a pk.
+        # Runs AFTER the YAML help-text loop above so the lock note is not
+        # overwritten, and appends to (rather than replaces) any existing help.
+        # The note text is sourced from form_texts.yaml (service_name.locked_note)
+        # like every other field's help text.
+        if not self.instance._state.adding:
+            field = self.fields["service_name"]
+            field.disabled = True
+            lock_note = _FORM_TEXTS.get("service_name", {}).get("locked_note", "")
+            if lock_note:
+                field.help_text = (
+                    f"{field.help_text} {lock_note}" if field.help_text else lock_note
+                )
+
         # Expose section descriptions for template rendering
         self.section_texts = _FORM_TEXTS.get("sections", {})
 

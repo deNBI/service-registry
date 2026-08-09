@@ -177,10 +177,16 @@ Controls how the platform handles status resets when a submitter edits an alread
 
 ```toml
 [submission]
+# Illustrative subset — the shipped config/site.toml enables a broader default
+# set (external links, EDAM annotations, keywords, publications, contact fields,
+# KPI fields, comments). See that file for the authoritative default list.
 no_reset_fields = ["logo", "github_url", "biotools_url", "fairsharing_url",
                    "edam_topics", "edam_operations"]
 draft_ttl_days = 7
 ```
+
+!!! note "The service name is never editable via a reset-exemption"
+    `service_name` is immutable after the initial submission on both the edit form and the REST API — independent of `no_reset_fields`. It cannot be made editable through this setting; only a Django admin can change a submitted name.
 
 #### `no_reset_fields`
 
@@ -304,8 +310,30 @@ HSTS_SECONDS=31536000           # HSTS max-age in seconds (default: 1 year)
 SECURE_SSL_REDIRECT=true        # Force HTTP → HTTPS at Django layer
 SESSION_COOKIE_SECURE=true      # Mark session cookie as HTTPS-only
 SESSION_COOKIE_AGE=3600         # Session lifetime in seconds (default: 1 hour)
+SESSION_ENGINE=django.contrib.sessions.backends.db  # Session store (default: DB)
 CSRF_COOKIE_SECURE=true         # Mark CSRF cookie as HTTPS-only
 ```
+
+`SESSION_ENGINE` chooses **where session data is stored**. It must be a
+**server-side** backend, because the one-time plaintext API key is kept in the
+session. The `signed_cookies` backend is rejected at startup — it would put the
+session (and therefore the key) into a client-readable cookie (signed, but
+**not** encrypted). Leave it at the default unless you have a specific reason to
+change it.
+
+| Value (`SESSION_ENGINE=…`)                          | What it does                                                        | When to use it                                                                                 |
+| --------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `django.contrib.sessions.backends.db` *(default)*   | Stores sessions in the database.                                   | The safe default. Use this unless you have a reason not to.                                     |
+| `django.contrib.sessions.backends.cached_db`        | Reads from cache, falls back to the DB; writes to both.            | High traffic: faster reads while the DB stays the durable source of truth.                      |
+| `django.contrib.sessions.backends.cache`            | Stores sessions **only** in the cache (e.g. Redis).               | Fastest, but sessions vanish if the cache is cleared/restarted — only with a persistent cache. |
+| `django.contrib.sessions.backends.file`             | Stores each session as a file on disk.                            | Single-server setups without a shared DB/cache; not suitable across multiple app servers.       |
+| `django.contrib.sessions.backends.signed_cookies`   | Stores the whole session in the browser cookie. **Rejected here.** | Never — the app refuses to start with it (would expose the plaintext API key).                  |
+
+Entering an API key on `/update/` unlocks the web edit form for the rest of the
+browsing session. That unlock is bounded by the session: `SESSION_COOKIE_AGE`
+caps it (1 hour by default), and `SESSION_EXPIRE_AT_BROWSER_CLOSE = True`
+(set in `settings.py`) ends it when the browser is closed. Lower
+`SESSION_COOKIE_AGE` if you want a tighter window on shared machines.
 
 ### Admin brute-force protection
 

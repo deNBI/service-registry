@@ -74,6 +74,9 @@ register_as_elixir:
 service_name:
   help: "Official name of the service."
   tooltip: "Official name as it should appear on the de.NBI website and in related communications."
+  # Appended to `help` on the edit form only (the field is locked after the
+  # initial submission). Shown below the greyed-out field.
+  locked_note: "The service name cannot be changed after submission. Contact the registry team if it must be corrected."
 
 service_description:
   help: "Describe your service."

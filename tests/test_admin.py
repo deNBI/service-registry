@@ -1486,3 +1486,97 @@ class TestEdamAdminSynonymSearch:
         resp = admin_client.get(url)
         assert resp.status_code == 200
         assert b"Another Topic" not in resp.content
+
+
+# ---------------------------------------------------------------------------
+# service_name lock — admin exemption
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestAdminServiceNameEditable:
+    """service_name is locked on the public edit form, but the admin backend
+    uses a separate form (ServiceSubmissionAdminForm) and must remain able to
+    correct the name."""
+
+    def test_admin_form_does_not_lock_service_name(self):
+        from apps.submissions.admin import ServiceSubmissionAdminForm
+
+        sub = ServiceSubmissionFactory(service_name="Before", biotools_url="")
+        form = ServiceSubmissionAdminForm(instance=sub)
+        assert form.fields["service_name"].disabled is False
+
+    def test_public_form_locks_but_admin_form_does_not(self):
+        """Paired contrast: same instance, public edit form locks the name,
+        admin form does not."""
+        from apps.submissions.admin import ServiceSubmissionAdminForm
+        from apps.submissions.forms import SubmissionForm
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        assert SubmissionForm(instance=sub).fields["service_name"].disabled is True
+        assert (
+            ServiceSubmissionAdminForm(instance=sub).fields["service_name"].disabled
+            is False
+        )
+
+    def test_admin_form_accepts_service_name_change(self):
+        """A bound admin form with a changed service_name keeps the new value
+        (proving admin edits are not ignored)."""
+        from apps.submissions.admin import ServiceSubmissionAdminForm
+
+        sub = ServiceSubmissionFactory(service_name="Old Admin Name", biotools_url="")
+        form = ServiceSubmissionAdminForm(instance=sub)
+        # The field is bound and editable; its rendered value is not frozen to
+        # the instance the way a disabled field would be.
+        bound = form["service_name"]
+        assert bound.field.disabled is False
+        assert bound.value() == "Old Admin Name"
+
+
+@pytest.mark.django_db
+class TestAdminServiceNameChangePersists:
+    """True end-to-end proof of the admin exemption: an admin renames a
+    submitted service through the real admin changeform HTTP POST and the new
+    name persists in the database."""
+
+    def test_admin_can_rename_via_changeform(self, admin_client):
+        import re
+        from django.forms.models import model_to_dict
+
+        # No API keys → the readonly inline has 0 initial forms.
+        sub = ServiceSubmissionFactory(
+            service_name="Admin Original Name", biotools_url="", license_note="MIT"
+        )
+        url = reverse("admin:submissions_servicesubmission_change", args=[sub.pk])
+
+        # Discover the inline management-form field names from the rendered page.
+        html = admin_client.get(url).content.decode()
+        mgmt = {
+            name: val
+            for name, val in re.findall(
+                r'name="([^"]*-(?:TOTAL|INITIAL|MIN_NUM|MAX_NUM)_FORMS)"'
+                r'[^>]*value="([^"]*)"',
+                html,
+            )
+        }
+        assert mgmt, "inline management form not found on admin change page"
+
+        # Build a valid changeform POST from the instance's current values.
+        data = {}
+        for field, value in model_to_dict(sub).items():
+            if value is None or value == "":
+                continue
+            if isinstance(value, (list, set, tuple)):
+                # M2M values come back as model instances — post their PKs.
+                data[field] = [getattr(item, "pk", item) for item in value]
+            else:
+                data[field] = value
+        data.pop("logo", None)  # don't re-post the file field
+        data.update(mgmt)
+        data["service_name"] = "Admin Renamed Service"
+
+        resp = admin_client.post(url, data)
+        assert resp.status_code == 302, getattr(resp, "content", b"")[:2000]
+
+        sub.refresh_from_db()
+        assert sub.service_name == "Admin Renamed Service"

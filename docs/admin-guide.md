@@ -219,8 +219,12 @@ When a submitter edits their submission via `/update/`, they see the same form s
 | **Completion progress** | Real-time percentage showing required field completion                       |
 | **Danger Zone card**    | Only shown for non-deprecated services; allows marking service as deprecated |
 | **Deprecated badge**    | Shows if service is deprecated; only admins can reverse                      |
+| **Locked service name** | The **Name of the Service** field is greyed out and cannot be changed after the initial submission; all other fields remain editable |
 
 The sidebar is shared between registration (`/register/`) and edit (`/update/`) forms.
+
+!!! note "Admins can change a locked service name"
+The service name lock applies only to the submitter-facing edit form and the REST API. In this admin change form the **Service name** field (fieldset **B**) stays fully editable, so an administrator can correct a name on a submitter's behalf.
 
 !!! note "Status is read-only"
 The `Status` field is displayed for information only — it cannot be edited directly. All status transitions are made via the **Status action buttons** panel in the same fieldset (see below).
@@ -693,10 +697,12 @@ Each field shows two types of guidance:
 service_name:
   help: 'Official name of the service.'
   tooltip: 'Use the canonical name as it appears on your website.'
+  locked_note: 'The service name cannot be changed after submission. Contact the registry team if it must be corrected.'
 ```
 
 - Set `help: ""` to hide the help text for a field.
 - Set `tooltip: ""` to hide the info icon for a field.
+- `locked_note` (currently used only for `service_name`) is appended to the field's help text on the **edit** form, where the field is locked. It is not shown on the registration form. Edit it to reword the lock explanation shown to submitters.
 
 ### Deploying form text changes
 

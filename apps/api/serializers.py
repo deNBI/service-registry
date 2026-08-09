@@ -187,6 +187,15 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
 
     links = serializers.SerializerMethodField()
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # service_name is immutable once a submission exists: writable on create
+        # (no instance yet), read-only on update. DRF drops read-only fields from
+        # input, so a PATCH that sends service_name silently keeps the original.
+        # (The view surfaces a warning so the client knows it was not applied.)
+        if self.instance is not None:
+            self.fields["service_name"].read_only = True
+
     class Meta:
         model = ServiceSubmission
         # Explicitly list fields — never use __all__ to prevent accidental leakage

@@ -23,6 +23,7 @@ from django.shortcuts import redirect, render
 from django.utils.decorators import method_decorator
 from django.utils.timezone import now
 from django.views import View
+from django.views.decorators.cache import never_cache
 from django_ratelimit.decorators import ratelimit
 
 from .diff_utils import (
@@ -180,12 +181,25 @@ class RegisterView(View):
         # Send async notification email
         send_submission_notification.delay(str(submission.id), event="created")
 
-        # Pass the plaintext key via session for one-time display.
-        # It is immediately cleared after the success page renders.
-        request.session["pending_api_key"] = plaintext_key
-        request.session["pending_submission_id"] = str(submission.id)
+        # Pass the plaintext key via session for one-time display, keyed by
+        # submission id so concurrent registrations in multiple tabs each keep
+        # their own one-time key (a single slot would let a later registration
+        # clobber an earlier tab's key, permanently losing it). The key is
+        # cleared after its success page renders. The submission id travels in
+        # the URL (it is not secret); the key never appears in the URL or logs.
+        # Bound the map so a run of registrations whose success pages are never
+        # opened cannot let plaintext keys pile up in the session: keep only the
+        # most recent few (dicts are insertion-ordered). Re-inserting an existing
+        # id refreshes its position.
+        pending_keys = request.session.get("pending_keys", {})
+        pending_keys.pop(str(submission.id), None)
+        pending_keys[str(submission.id)] = plaintext_key
+        while len(pending_keys) > 5:
+            pending_keys.pop(next(iter(pending_keys)))
+        request.session["pending_keys"] = pending_keys
+        request.session.modified = True
 
-        return redirect("submissions:success")
+        return redirect("submissions:success", submission_id=submission.id)
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +207,7 @@ class RegisterView(View):
 # ---------------------------------------------------------------------------
 
 
+@method_decorator(never_cache, name="dispatch")
 class SuccessView(View):
     """
     GET /register/success/
@@ -203,12 +218,17 @@ class SuccessView(View):
 
     template_name = "submissions/success.html"
 
-    def get(self, request: HttpRequest) -> HttpResponse:
-        api_key = request.session.pop("pending_api_key", None)
-        submission_id = request.session.pop("pending_submission_id", None)
+    def get(self, request: HttpRequest, submission_id) -> HttpResponse:
+        # Pop only this submission's key so other tabs' pending keys survive.
+        pending_keys = request.session.get("pending_keys", {})
+        api_key = pending_keys.pop(str(submission_id), None)
+        if api_key is not None:
+            request.session["pending_keys"] = pending_keys
+            request.session.modified = True
 
         if not api_key:
-            # User navigated here directly without submitting — redirect to form
+            # User navigated here directly, reloaded, or the key was already
+            # shown once — redirect to the form.
             return redirect("submissions:register")
 
         return render(
@@ -216,7 +236,7 @@ class SuccessView(View):
             self.template_name,
             {
                 "api_key": api_key,
-                "submission_id": submission_id,
+                "submission_id": str(submission_id),
             },
         )
 
@@ -233,7 +253,9 @@ class SuccessView(View):
 class UpdateView(View):
     """
     GET  /update/  — Show the API key entry form.
-    POST /update/  — Validate the key and redirect to EditView.
+    POST /update/  — Validate the key, record an edit grant in the session
+                     (keyed by submission id), and redirect to that
+                     submission's EditView URL.
     """
 
     template_name = "submissions/update.html"
@@ -256,11 +278,19 @@ class UpdateView(View):
             form.add_error("api_key", "Invalid API key. Please check and try again.")
             return render(request, self.template_name, {"form": form}, status=403)
 
-        # Store the verified key in session to authenticate the edit view
-        request.session["edit_key_id"] = str(key_obj.id)
-        request.session["edit_submission_id"] = str(key_obj.submission_id)
+        # Record an edit grant in the session, keyed by submission id. Using a
+        # map (rather than a single slot) lets a user unlock and edit several
+        # submissions concurrently in different tabs without a later key lookup
+        # silently redirecting an earlier tab's POST onto the wrong submission.
+        # The edit view resolves its target from the URL, then checks it against
+        # this map — so a POST always applies to the submission its form was
+        # rendered for.
+        grants = request.session.get("edit_grants", {})
+        grants[str(key_obj.submission_id)] = str(key_obj.id)
+        request.session["edit_grants"] = grants
+        request.session.modified = True
 
-        return redirect("submissions:edit")
+        return redirect("submissions:edit", submission_id=key_obj.submission_id)
 
 
 # ---------------------------------------------------------------------------
@@ -268,26 +298,34 @@ class UpdateView(View):
 # ---------------------------------------------------------------------------
 
 
+@method_decorator(never_cache, name="dispatch")
 @method_decorator(
     ratelimit(key="ip", rate=settings.RATE_LIMIT_UPDATE, method="POST", block=True),
     name="dispatch",
 )
 class EditView(View):
     """
-    GET  /update/edit/  — Show the pre-populated edit form.
-    POST /update/edit/  — Validate and save changes.
+    GET  /update/edit/<submission_id>/  — Show the pre-populated edit form.
+    POST /update/edit/<submission_id>/  — Validate and save changes.
 
-    Access requires a valid API key previously verified in UpdateView.
-    The session stores the verified key ID and submission ID.
+    The target submission is named in the URL, so each open edit tab is
+    self-identifying. Access requires that the session holds an edit grant for
+    that submission id (recorded by UpdateView after a successful key check).
+    Several submissions can be granted concurrently without cross-contamination.
     """
 
     template_name = "submissions/edit.html"
 
-    def _get_submission(self, request: HttpRequest) -> ServiceSubmission | None:
-        """Return the submission from session, or None if session is invalid."""
-        submission_id = request.session.get("edit_submission_id")
-        key_id = request.session.get("edit_key_id")
-        if not submission_id or not key_id:
+    def _get_submission(
+        self, request: HttpRequest, submission_id
+    ) -> ServiceSubmission | None:
+        """Return the submission named in the URL if the session grants edit
+        access to it, else None. The target is the URL's ``submission_id`` — not
+        a shared session slot — so a POST always applies to the submission its
+        form was rendered for, even with several edit tabs open at once."""
+        grants = request.session.get("edit_grants", {})
+        key_id = grants.get(str(submission_id))
+        if not key_id:
             return None
         try:
             # Single query: verify key is active and fetch its submission in one JOIN
@@ -295,6 +333,11 @@ class EditView(View):
                 id=key_id, is_active=True
             )
         except SubmissionAPIKey.DoesNotExist:
+            return None
+
+        # Defensive: the granted key must actually belong to the requested
+        # submission (guards against a tampered/stale session map).
+        if str(key.submission_id) != str(submission_id):
             return None
 
         # Enforce scope: read-only keys may view the form (GET) but may not
@@ -315,8 +358,8 @@ class EditView(View):
             "altcha_enabled": bool(settings.ALTCHA_HMAC_KEY),
         }
 
-    def get(self, request: HttpRequest) -> HttpResponse:
-        submission = self._get_submission(request)
+    def get(self, request: HttpRequest, submission_id) -> HttpResponse:
+        submission = self._get_submission(request, submission_id)
         if not submission:
             messages.error(
                 request, "Your session has expired. Please enter your API key again."
@@ -326,8 +369,8 @@ class EditView(View):
         form = SubmissionForm(instance=submission)
         return render(request, self.template_name, self._context(form, submission))
 
-    def post(self, request: HttpRequest) -> HttpResponse:
-        submission = self._get_submission(request)
+    def post(self, request: HttpRequest, submission_id) -> HttpResponse:
+        submission = self._get_submission(request, submission_id)
         if not submission:
             messages.error(
                 request, "Your session has expired. Please enter your API key again."
@@ -550,10 +593,12 @@ class EditView(View):
             str(submission.id), changes=changes, status_reset=status_reset
         )
 
-        # Clear edit session keys
-        request.session.pop("edit_key_id", None)
-        request.session.pop("edit_submission_id", None)
-
+        # The edit grant intentionally survives the save: entering the API key
+        # unlocks editing for the whole browsing session (the grant is re-checked
+        # against the active key on every request, and the session expires on
+        # browser close / after SESSION_COOKIE_AGE). This lets the submitter make
+        # further edits — including in a second tab on the same submission —
+        # without re-entering the key.
         messages.success(
             request, "Your service registration has been updated successfully."
         )

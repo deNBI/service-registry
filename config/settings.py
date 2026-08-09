@@ -17,6 +17,8 @@ import sys
 import tomllib as _tomllib
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
@@ -235,6 +237,25 @@ SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", not DEBUG)
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Strict"
 SESSION_COOKIE_AGE = env_int("SESSION_COOKIE_AGE", 3600)
+# Entering an API key unlocks editing for the browsing session (see EditView's
+# edit_grants). Expire that session when the browser closes so the unlock does
+# not linger on a shared/kiosk machine; SESSION_COOKIE_AGE still caps it at 1h.
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+
+# Sessions MUST stay server-side. RegisterView stashes the one-time plaintext
+# API key in the session (pending_keys) and EditView stores edit grants there;
+# both rely on the browser holding only an opaque session id. The default DB
+# backend (and cache/cached_db/file) satisfy this. The signed_cookies backend
+# would serialise that payload into a client-readable cookie — signed, but NOT
+# encrypted — leaking the plaintext key. Allow env override for ops (e.g. to a
+# cache backend) but hard-fail on the one backend that breaks the invariant.
+SESSION_ENGINE = env("SESSION_ENGINE", default="django.contrib.sessions.backends.db")
+if SESSION_ENGINE.endswith("signed_cookies"):
+    raise ImproperlyConfigured(
+        "SESSION_ENGINE must be a server-side backend: the one-time plaintext "
+        "API key is stored in the session and signed_cookies would ship it to "
+        "the browser in a readable (unencrypted) cookie."
+    )
 
 CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", not DEBUG)
 CSRF_COOKIE_HTTPONLY = False

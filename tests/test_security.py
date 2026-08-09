@@ -12,6 +12,7 @@ Django/DRF layer.
 import pytest
 from django.contrib.auth import get_user_model
 from django.test import Client
+from django.urls import reverse
 
 from tests.factories import APIKeyFactory, ServiceSubmissionFactory
 
@@ -170,6 +171,76 @@ class TestCSRFProtection:
         client = Client()
         resp = client.get("/register/")
         assert "csrftoken" in resp.cookies
+
+# ===========================================================================
+# Session unlock scoping (kiosk hardening)
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestSessionExpiry:
+    """Entering an API key unlocks the web edit form for the browsing session
+    (the grant is session-lived, re-verified every request). The exposure window
+    on a shared/kiosk machine is bounded by the session, so these properties
+    must hold: the session cookie dies on browser close, and SESSION_COOKIE_AGE
+    is the server-side cap. Removing SESSION_EXPIRE_AT_BROWSER_CLOSE would
+    silently widen that window — these tests guard against that regression."""
+
+    def test_session_expire_at_browser_close_is_enabled(self, settings):
+        assert settings.SESSION_EXPIRE_AT_BROWSER_CLOSE is True
+        # The session must still have a finite server-side cap.
+        assert settings.SESSION_COOKIE_AGE and settings.SESSION_COOKIE_AGE > 0
+
+    def test_unlock_session_cookie_is_browser_scoped(self, client):
+        """After a successful key entry (which records the edit grant), the
+        sessionid cookie must be a browser-session cookie — no Max-Age/Expires —
+        so the unlock cannot outlive the browser session on a shared machine."""
+        sub = ServiceSubmissionFactory(biotools_url="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+
+        resp = client.post(reverse("submissions:update"), {"api_key": plaintext})
+        assert resp.status_code == 302
+
+        cookie = resp.cookies.get("sessionid")
+        assert cookie is not None, "key entry must establish a session"
+        assert cookie["max-age"] in ("", None)
+        assert cookie["expires"] in ("", None)
+
+
+# ===========================================================================
+# Sensitive-page caching (no-store)
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestSensitivePageCaching:
+    """The success page renders the one-time API key, and the edit page is an
+    authenticated form; neither may be cached (disk cache / bfcache could
+    re-expose them on a shared machine after the session ends)."""
+
+    def test_success_page_is_not_cacheable(self, client):
+        import uuid
+
+        sub_id = str(uuid.uuid4())
+        session = client.session
+        session["pending_keys"] = {sub_id: "one-time-key"}
+        session.save()
+
+        resp = client.get(reverse("submissions:success", args=[sub_id]))
+        assert resp.status_code == 200
+        assert "no-store" in resp.headers.get("Cache-Control", "")
+
+    def test_edit_page_is_not_cacheable(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        key_obj, _ = APIKeyFactory.create_with_plaintext(submission=sub)
+        client = Client()
+        session = client.session
+        session["edit_grants"] = {str(sub.pk): str(key_obj.pk)}
+        session.save()
+
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
+        assert resp.status_code == 200
+        assert "no-store" in resp.headers.get("Cache-Control", "")
 
 
 # ===========================================================================

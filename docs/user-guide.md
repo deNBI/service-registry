@@ -59,6 +59,8 @@ Each submission gets a **write-scope** API key by default, which allows full edi
 
 > **Note:** If your submission was already approved and you edit it, the status will reset to "Submitted" for re-review.
 
+> **The service name is fixed after submission.** On the edit form the **Name of the Service** field is greyed out and cannot be changed — every other field remains editable. If the name genuinely needs correcting, contact the de.NBI administration office; only they can change it.
+
 !!! info "Security notice"
 If you receive a "your registration has been updated" email that you did not initiate, contact the de.NBI administration office immediately. The email will include instructions at the bottom.
 

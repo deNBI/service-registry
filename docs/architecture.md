@@ -76,8 +76,50 @@ Browser → POST /register/
   → post_save signal fires
   → sync_biotools_record.apply_async()  (if biotools_url set)
   → send_submission_notification.delay()
-  → redirect → /register/success/
+  → redirect → /register/success/<submission_id>/
 ```
+
+The one-time plaintext key is held in the server-side session under
+`pending_keys[submission_id]` and shown exactly once on the success page, then
+popped. Keying by submission id (rather than a single slot) lets concurrent
+registrations in separate tabs each keep their own key.
+
+### Web edit form — authenticated by API key
+
+```
+Browser → POST /update/  (API key)
+  → UpdateKeyForm + SubmissionAPIKey.verify()
+  → record edit grant: session["edit_grants"][submission_id] = key_id
+  → redirect → /update/edit/<submission_id>/
+
+Browser → GET/POST /update/edit/<submission_id>/
+  → look up the grant for the URL's submission_id
+  → re-verify the granted key is active and belongs to that submission
+  → enforce key scope (read keys may GET, not POST)
+  → save
+```
+
+The target submission is taken from the URL, not a shared session slot, so each
+open edit tab is self-identifying and a POST always applies to the submission
+its form was rendered for — even with several edit tabs open at once. Only the
+key **id** is stored in the session; the plaintext key never is.
+
+Entering the key unlocks editing for the whole browsing session (standard
+session-auth model): the grant is **not** single-use, so the submitter can make
+several edits — including in a second tab on the same submission — without
+re-entering the key. Every request still re-verifies the granted key is active
+and owns the submission, so a revoked key stops working immediately. The unlock
+is bounded by the session: `SESSION_EXPIRE_AT_BROWSER_CLOSE = True` ends it when
+the browser closes, and `SESSION_COOKIE_AGE` (1h) is the hard cap — this is the
+control that limits exposure on a shared/kiosk machine, not the grant itself.
+
+**Service name is immutable after submission.** On the edit form `service_name`
+is rendered `disabled` (greyed, with an inline note); Django ignores any tampered
+value and keeps the stored name. On the REST API `service_name` is read-only for
+updates (writable only on create) — a `PATCH` that sends a different name keeps
+the original, applies all other changes, and returns a `warnings` note so the
+client knows the rename was dropped. Only the Django admin (a separate
+`ServiceSubmissionAdminForm`) can correct a submitted name.
 
 ### REST API — create submission
 
@@ -186,13 +228,16 @@ terms_by_uri = {t.uri: t for t in EdamTerm.objects.filter(uri__in=uris)}
 
 | Control                   | Implementation                                                                                                                              |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| CSRF protection           | Django's built-in CSRF middleware — all POST form views protected                                                                           |
+| CSRF protection           | Django's built-in CSRF middleware — all POST form views protected. Native forms refresh their hidden token from the `csrftoken` cookie at submit time (`csrf-token-refresh.js`) to avoid stale-token 403s under `SameSite=Strict`; this reads the cookie only (relies on `CSRF_COOKIE_HTTPONLY=False`) and never weakens server-side validation |
 | API authentication        | HMAC-based API key: plaintext hashed with PBKDF2, stored as `key_hash`                                                                      |
 | Admin authentication      | Django auth + django-axes (brute-force lockout)                                                                                             |
 | Content Security Policy   | `django-csp` middleware — all third-party JS/CSS vendored locally; `script-src 'unsafe-inline'` retained for Django template inline scripts |
 | Rate limiting             | `django-ratelimit` on form submit and API create endpoints                                                                                  |
 | Input sanitisation        | `bleach` on all free-text fields in `ServiceSubmission.save()`                                                                              |
 | Sensitive field isolation | IP, user-agent hash, internal contact excluded from all API serializers                                                                     |
+| Immutable service name    | `service_name` is locked after submission on the edit form (`disabled`) and REST API (read-only on update); only the Django admin can change it |
+| Edit unlock scope         | API-key entry unlocks editing for the browsing session only; `SESSION_EXPIRE_AT_BROWSER_CLOSE=True` + `SESSION_COOKIE_AGE` bound the window |
+| Sensitive page caching    | Success (one-time key) and edit pages are `never_cache` (`no-store`) so they cannot be re-exposed from disk/bfcache on a shared machine     |
 | Logging scrubber          | `ScrubSensitiveFilter` redacts `Authorization` and `Cookie` headers from logs                                                               |
 | HSTS                      | Set in host nginx config (`max-age=31536000; includeSubDomains; preload`)                                                                   |
 | TLS                       | TLSv1.2+ only; OCSP stapling enabled in nginx                                                                                               |

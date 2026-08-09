@@ -300,12 +300,14 @@ class TestFormTextsYAML:
     def test_every_entry_has_required_keys(self):
         """Each field entry must have 'help' and 'tooltip' keys; 'label' is optional.
 
-        The 'license' field may also have a 'choices' block for YAML-driven options.
+        The 'license' field may also have a 'choices' block for YAML-driven options,
+        and 'service_name' may carry a 'locked_note' appended to its help text on
+        the (locked) edit form.
         """
         from apps.submissions.forms import _FORM_TEXTS
 
         required_keys = {"help", "tooltip"}
-        allowed_keys = {"help", "tooltip", "label", "choices"}
+        allowed_keys = {"help", "tooltip", "label", "choices", "locked_note"}
         for field_name, entry in _FORM_TEXTS.items():
             if field_name in self._NON_FIELD_KEYS:
                 continue
@@ -325,7 +327,7 @@ class TestFormTextsYAML:
             extra = set(entry.keys()) - allowed_keys
             assert not extra, (
                 f"'{field_name}' has unexpected key(s): {extra}.\n"
-                f"Only 'help', 'tooltip', and 'label' are allowed."
+                f"Only {sorted(allowed_keys)} are allowed."
             )
 
     def test_all_values_are_strings(self):
@@ -1348,3 +1350,52 @@ class TestPublicContactFormField:
         form = SubmissionForm(_base_form_data({"public_contact_email": ""}))
         assert not form.is_valid()
         assert "public_contact_email" in form.errors
+
+
+@pytest.mark.django_db
+class TestServiceNameLock:
+    """service_name is immutable once a submission exists: editable on the
+    registration form (create), locked on the edit form (bound to an instance).
+    Django's ``disabled`` flag both greys the field and ignores any tampered
+    value in favour of the instance's stored name."""
+
+    def test_service_name_editable_on_create(self):
+        from apps.submissions.forms import SubmissionForm
+
+        form = SubmissionForm()
+        assert form.fields["service_name"].disabled is False
+
+    def test_service_name_disabled_on_edit(self):
+        from apps.submissions.forms import SubmissionForm
+        from tests.factories import ServiceSubmissionFactory
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        form = SubmissionForm(instance=sub)
+        assert form.fields["service_name"].disabled is True
+
+    def test_lock_note_is_sourced_from_form_texts_yaml(self):
+        """The lock note text must live in form_texts.yaml like every other
+        field's help text — not be hardcoded in the form."""
+        import yaml
+        from apps.submissions.forms import _FORM_TEXTS_PATH, SubmissionForm
+        from tests.factories import ServiceSubmissionFactory
+
+        with open(_FORM_TEXTS_PATH, encoding="utf-8") as f:
+            texts = yaml.safe_load(f)
+        note = texts["service_name"]["locked_note"]
+        assert note, "service_name.locked_note must be configured in form_texts.yaml"
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        help_text = str(SubmissionForm(instance=sub).fields["service_name"].help_text)
+        assert note in help_text
+
+    def test_edit_ignores_tampered_service_name(self):
+        from apps.submissions.forms import SubmissionForm
+        from tests.factories import ServiceSubmissionFactory
+
+        sub = ServiceSubmissionFactory(service_name="Original Name", biotools_url="")
+        data = _base_form_data({"service_name": "Tampered Name"})
+        form = SubmissionForm(data, instance=sub)
+        assert form.is_valid(), form.errors
+        # Disabled field → the submitted value is ignored, original is kept.
+        assert form.cleaned_data["service_name"] == "Original Name"

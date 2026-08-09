@@ -353,6 +353,22 @@ class SubmissionViewSet(
         before_scalar = snapshot(instance)
         before_m2m = snapshot_m2m(instance)
 
+        # Detect an attempt to change the (immutable) service_name so we can tell
+        # the client it was ignored. The serializer marks service_name read-only
+        # on update, so the incoming value never reaches validated_data — compare
+        # the raw request value against the stored name here, before save.
+        # Normalise the incoming value exactly as the model does on save
+        # (_sanitise_text: strip null bytes → NFC → strip whitespace) so echoing
+        # the same name in a different byte form (whitespace, Unicode NFD, …) is
+        # correctly treated as unchanged and does not raise a spurious warning.
+        from apps.submissions.models import _sanitise_text
+
+        requested_name = request.data.get("service_name")
+        service_name_change_ignored = (
+            requested_name is not None
+            and _sanitise_text(str(requested_name)) != instance.service_name
+        )
+
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
 
@@ -425,7 +441,17 @@ class SubmissionViewSet(
             len(changes),
             extra={"submission_id": str(instance.id)},
         )
-        return Response(serializer.data)
+        data = serializer.data
+        if service_name_change_ignored:
+            data = {
+                **data,
+                "warnings": [
+                    "The service name cannot be changed after a service is "
+                    "submitted. Your requested name change was not applied; all "
+                    "other changes were accepted."
+                ],
+            }
+        return Response(data)
 
     def update(self, request, *args, **kwargs):
         """Full PUT is disabled — use PATCH."""
