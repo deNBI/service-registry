@@ -258,6 +258,11 @@ if SESSION_ENGINE.endswith("signed_cookies"):
     )
 
 CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", not DEBUG)
+# Must stay False: the HTMX X-CSRFToken header (base.html) and the native-form
+# submit-time token refresh (csrf-token-refresh.js) both read this cookie from
+# JavaScript. Setting it True (or enabling CSRF_USE_SESSIONS) silently turns
+# those into no-ops and reintroduces stale-token 403s on form POSTs. Not a
+# secret-exposure risk: the cookie holds a masked CSRF token, not the API key.
 CSRF_COOKIE_HTTPONLY = False
 CSRF_COOKIE_SAMESITE = "Strict"
 

@@ -172,6 +172,116 @@ class TestCSRFProtection:
         resp = client.get("/register/")
         assert "csrftoken" in resp.cookies
 
+    # -- csrftoken cookie guaranteed on every form GET (defense in depth) ----
+
+    def test_csrf_cookie_set_on_update_get(self):
+        resp = Client().get(reverse("submissions:update"))
+        assert "csrftoken" in resp.cookies
+
+    def test_csrf_cookie_set_on_edit_get(self):
+        client, sub = self._edit_client()
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
+        assert resp.status_code == 200
+        assert "csrftoken" in resp.cookies
+
+    # -- client-side token refresh script is delivered on all form pages -----
+    #
+    # The four native-POST forms (register, update, edit, deprecate) embed a
+    # render-time CSRF token that can drift out of sync with the browser's
+    # csrftoken cookie (concurrent first-visit / multi-tab race, amplified by
+    # SameSite=Strict on external-link entry). The shared refresh script
+    # rewrites the hidden csrfmiddlewaretoken from the live cookie at submit
+    # time, mirroring the admin AJAX path and base.html's HTMX header. These
+    # tests assert the script is actually delivered to each form page.
+
+    SCRIPT = b"csrf-token-refresh.js"
+
+    def test_register_page_includes_csrf_refresh_script(self):
+        resp = Client().get(reverse("submissions:register"))
+        assert self.SCRIPT in resp.content
+
+    def test_update_page_includes_csrf_refresh_script(self):
+        resp = Client().get(reverse("submissions:update"))
+        assert self.SCRIPT in resp.content
+
+    def test_edit_page_includes_csrf_refresh_script(self):
+        client, sub = self._edit_client()
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
+        assert resp.status_code == 200
+        assert self.SCRIPT in resp.content
+
+    # -- CSRF protection itself must remain intact (the fix must not weaken) --
+
+    def test_token_equal_to_cookie_secret_is_accepted(self):
+        """
+        The refresh script writes the raw csrftoken cookie value into the
+        hidden field. Django must accept that value as a valid token, i.e. the
+        request must NOT be rejected with 403 (it fails later validation with
+        400/422 instead). This locks in the mechanism the fix relies on.
+        """
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("submissions:register"))
+        cookie_secret = client.cookies["csrftoken"].value
+
+        resp = client.post(
+            reverse("submissions:register"),
+            {"csrfmiddlewaretoken": cookie_secret},
+        )
+        assert resp.status_code != 403
+
+    def test_forged_token_is_rejected_on_register(self):
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("submissions:register"))
+        resp = client.post(
+            reverse("submissions:register"),
+            {"csrfmiddlewaretoken": "forged" + "a" * 58},
+        )
+        assert resp.status_code == 403
+
+    def test_forged_token_is_rejected_on_update(self):
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("submissions:update"))
+        resp = client.post(
+            reverse("submissions:update"),
+            {"csrfmiddlewaretoken": "forged" + "a" * 58},
+        )
+        assert resp.status_code == 403
+
+    def test_forged_token_is_rejected_on_edit(self):
+        """CSRF is enforced at the middleware layer, before the view's session
+        check — a forged token is rejected even with a valid edit session."""
+        client, sub = self._edit_client(enforce_csrf_checks=True)
+        resp = client.post(
+            reverse("submissions:edit", args=[sub.pk]),
+            {"csrfmiddlewaretoken": "forged" + "a" * 58},
+        )
+        assert resp.status_code == 403
+
+    def test_base_hx_headers_uses_anchored_cookie_regex(self):
+        """
+        The inline body hx-headers setup in base.html reads the csrftoken
+        cookie for HTMX requests. It must use an anchored regex so a decoy
+        cookie whose name *ends with* ``csrftoken`` (e.g. ``xcsrftoken``)
+        cannot shadow the real token and feed a wrong X-CSRFToken header.
+        """
+        content = Client().get(reverse("submissions:register")).content
+        # Anchored form present ...
+        assert b"(?:^|;\\s*)csrftoken=" in content
+        # ... and the naive unanchored opener gone.
+        assert b"match(/csrftoken=" not in content
+
+    @staticmethod
+    def _edit_client(enforce_csrf_checks=False):
+        """A Client with a valid EditView session grant, plus its submission."""
+        sub = ServiceSubmissionFactory(biotools_url="")
+        key_obj, _ = APIKeyFactory.create_with_plaintext(submission=sub)
+        client = Client(enforce_csrf_checks=enforce_csrf_checks)
+        session = client.session
+        session["edit_grants"] = {str(sub.pk): str(key_obj.pk)}
+        session.save()
+        return client, sub
+
+
 # ===========================================================================
 # Session unlock scoping (kiosk hardening)
 # ===========================================================================

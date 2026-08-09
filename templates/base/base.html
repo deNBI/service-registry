@@ -207,8 +207,11 @@
 <script src="{% static 'js/htmx.min.js' %}"></script>
 
 <script>
-  document.body.setAttribute('hx-headers', '{"X-CSRFToken": "' + (document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '') + '"}');
+  document.body.setAttribute('hx-headers', '{"X-CSRFToken": "' + (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1] || '') + '"}');
 </script>
+
+<!-- Keep native form CSRF tokens in sync with the live cookie at submit time -->
+<script src="{% static 'js/csrf-token-refresh.js' %}"></script>
 
 <script src="{% static 'js/edam-autocomplete.js' %}"></script>
 
