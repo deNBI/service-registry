@@ -522,6 +522,15 @@ CONTENT_SECURITY_POLICY = {
 # ---------------------------------------------------------------------------
 RATELIMIT_USE_CACHE = "default"
 RATELIMIT_FAIL_OPEN = False
+# Key rate limits on the REAL client IP, not REMOTE_ADDR. Behind the reverse
+# proxy REMOTE_ADDR is nginx's own IP for every request, so django-ratelimit's
+# default (REMOTE_ADDR) would bucket all users into ONE global limit (e.g. only
+# RATE_LIMIT_SUBMIT registrations/hour site-wide) and let a single client exhaust
+# everyone's budget. get_client_ip reads X-Real-IP (set by nginx to the client's
+# $remote_addr) → X-Forwarded-For → REMOTE_ADDR — the same real-client-IP path
+# already used for django-axes and the submission_ip field. Falls back to
+# REMOTE_ADDR when unproxied (dev / direct access), so it is safe everywhere.
+RATELIMIT_IP_META_KEY = "apps.submissions.http_utils.get_client_ip"
 
 API_KEY_ENTROPY_BYTES = env_int("API_KEY_ENTROPY_BYTES", 48)
 API_KEY_HASH_ALGORITHM = env("API_KEY_HASH_ALGORITHM", "sha256")
