@@ -72,7 +72,7 @@ When the Service Catalogue is enabled by the site administrators, a **Service Ca
 
 The catalogue at **/catalogue/** lists all approved services and supports:
 
-- **Search** — type in the search box to find services by name, description, host institute, or keywords (debounced, no page reload)
+- **Search** — type in the search box to find services by service name, category, service centre, or responsible PI name — first name, last name, or the full "First Last" name (debounced, no page reload)
 - **Filter** — use the sidebar to filter by category or service centre (multi-select, combined with AND across dimensions)
 - **Sort** — choose A→Z, Z→A, recently updated, or recently added
 - **Group** — group results by category, service centre, or responsible PI (accordion sections)

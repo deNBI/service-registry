@@ -58,12 +58,47 @@ class TestGetApprovedServices:
         assert len(results) == 1
 
     def test_search_matches_pi_name(self):
-        pi = PIFactory(last_name="Müller", first_name="Anna")
+        # "Zoë" keeps a non-ASCII character in the query for unicode coverage.
+        pi = PIFactory(last_name="Doe", first_name="Zoë")
         s = ServiceSubmissionFactory(status="approved", responsible_pis=[pi])
         ServiceSubmissionFactory(status="approved")
-        results = list(get_approved_services(search="Müller"))
+        results = list(get_approved_services(search="Zoë"))
         assert len(results) == 1
         assert results[0].pk == s.pk
+
+    def test_search_matches_pi_full_name(self):
+        """A combined 'First Last' query must match the PI."""
+        pi = PIFactory(last_name="Doe", first_name="Zoë")
+        s = ServiceSubmissionFactory(status="approved", responsible_pis=[pi])
+        ServiceSubmissionFactory(status="approved")
+        results = list(get_approved_services(search="Zoë Doe"))
+        assert len(results) == 1
+        assert results[0].pk == s.pk
+
+    def test_search_matches_pi_full_name_reversed(self):
+        """'Last First' order must also match."""
+        pi = PIFactory(last_name="Doe", first_name="Zoë")
+        s = ServiceSubmissionFactory(status="approved", responsible_pis=[pi])
+        results = list(get_approved_services(search="Doe Zoë"))
+        assert len(results) == 1
+        assert results[0].pk == s.pk
+
+    def test_search_matches_pi_full_name_partial(self):
+        """Partial tokens across first/last name still match."""
+        pi = PIFactory(last_name="Doe", first_name="Zoë")
+        s = ServiceSubmissionFactory(status="approved", responsible_pis=[pi])
+        results = list(get_approved_services(search="Zo Do"))
+        assert len(results) == 1
+        assert results[0].pk == s.pk
+
+    def test_full_name_query_requires_a_single_matching_pi(self):
+        """A full-name query must be satisfied by one PI, not two different PIs
+        each matching one token."""
+        pi_a = PIFactory(first_name="Zoë", last_name="Smith")
+        pi_b = PIFactory(first_name="Bob", last_name="Doe")
+        ServiceSubmissionFactory(status="approved", responsible_pis=[pi_a, pi_b])
+        results = list(get_approved_services(search="Zoë Doe"))
+        assert results == []
 
     def test_category_filter_narrows_results(self):
         cat_db = ServiceCategoryFactory(name="Database")
@@ -154,6 +189,36 @@ class TestGroupServices:
         assert len(groups) == 1
         assert groups[0][0] == "All Services"
         assert len(groups[0][1]) == 2
+
+    def test_group_by_pi_service_appears_under_every_pi(self):
+        pi_a = PIFactory(last_name="Doe", first_name="John")
+        pi_b = PIFactory(last_name="Doe", first_name="Jane")
+        ServiceSubmissionFactory(
+            status="approved",
+            service_name="MultiPI Service",
+            responsible_pis=[pi_a, pi_b],
+        )
+
+        services = list(get_approved_services())
+        groups = dict(group_services(services, "pi"))
+
+        assert "MultiPI Service" in [s.service_name for s in groups[str(pi_a)]]
+        assert "MultiPI Service" in [s.service_name for s in groups[str(pi_b)]]
+
+    def test_group_by_category_service_appears_under_every_category(self):
+        cat_a = ServiceCategoryFactory(name="Aardvark")
+        cat_b = ServiceCategoryFactory(name="Zebra")
+        ServiceSubmissionFactory(
+            status="approved",
+            service_name="MultiCat Service",
+            service_categories=[cat_a, cat_b],
+        )
+
+        services = list(get_approved_services())
+        groups = dict(group_services(services, "category"))
+
+        assert "MultiCat Service" in [s.service_name for s in groups["Aardvark"]]
+        assert "MultiCat Service" in [s.service_name for s in groups["Zebra"]]
 
     def test_group_returns_list_of_label_services_tuples(self):
         cat = ServiceCategoryFactory(name="Database")

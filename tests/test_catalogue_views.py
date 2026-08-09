@@ -108,6 +108,29 @@ class TestCatalogueGridView:
         assert b"Galaxy Workflow" in response.content
         assert b"Unrelated Tool" not in response.content
 
+    def test_group_by_pi_renders_service_under_every_pi(self, client, settings):
+        from tests.factories import PIFactory, ServiceSubmissionFactory
+
+        settings.SITE_CONFIG = CATALOGUE_ON
+        pi_a = PIFactory(last_name="Doe", first_name="John")
+        pi_b = PIFactory(last_name="Doe", first_name="Jane")
+        ServiceSubmissionFactory(
+            status="approved",
+            service_name="MULTIPISVC",
+            responsible_pis=[pi_a, pi_b],
+        )
+
+        response = client.get("/catalogue/grid/?group_by=pi")
+        content = response.content.decode()
+
+        # Each <details> block is one PI group; the service must render inside
+        # both PIs' groups (co-owned by John Doe and Jane Doe).
+        sections = content.split("<details")
+        pi_a_section = next(s for s in sections if str(pi_a) in s)
+        pi_b_section = next(s for s in sections if str(pi_b) in s)
+        assert "MULTIPISVC" in pi_a_section
+        assert "MULTIPISVC" in pi_b_section
+
 
 @pytest.mark.django_db
 class TestCatalogueResultCount:

@@ -1,5 +1,3 @@
-import itertools
-
 from django.db import models
 
 from apps.submissions.models import ServiceSubmission, SubmissionStatus
@@ -48,14 +46,31 @@ def get_approved_services(
 
 
 def _apply_search(qs, search_term: str):
-    return qs.filter(
+    q = (
         models.Q(service_name__icontains=search_term)
         | models.Q(service_categories__name__icontains=search_term)
         | models.Q(service_center__short_name__icontains=search_term)
         | models.Q(service_center__full_name__icontains=search_term)
         | models.Q(responsible_pis__last_name__icontains=search_term)
         | models.Q(responsible_pis__first_name__icontains=search_term)
-    ).distinct()
+    )
+
+    # Full PI name: a multi-word query like "Zoë Doe" (or "Doe Zoë")
+    # never matches the per-field clauses above, since neither first_name nor
+    # last_name contains the whole string. Require every whitespace-separated
+    # token to appear in the first or last name of a *single* PI — the tokens
+    # share one join within this filter(), so they must be satisfied by the same
+    # PI, not two different PIs each matching one token.
+    tokens = search_term.split()
+    if len(tokens) > 1:
+        pi_full = models.Q()
+        for token in tokens:
+            pi_full &= models.Q(
+                responsible_pis__first_name__icontains=token
+            ) | models.Q(responsible_pis__last_name__icontains=token)
+        q |= pi_full
+
+    return qs.filter(q).distinct()
 
 
 def _apply_sort(qs, sort: str):
@@ -79,24 +94,26 @@ def get_filter_options() -> dict:
 
 
 def group_services(services, group_by: str) -> list:
+    # Category and PI are many-to-many: a service belongs under *every* one of
+    # its categories/PIs, so keys_fn returns a list and a service is emitted
+    # into each of its groups (not just the first stored value).
     if group_by == "category":
 
-        def key_fn(s):
-            cats = list(s.service_categories.all())
-            return cats[0].name if cats else "Uncategorised"
+        def keys_fn(s):
+            return [c.name for c in s.service_categories.all()] or ["Uncategorised"]
     elif group_by == "service_center":
 
-        def key_fn(s):
-            return s.service_center.short_name if s.service_center else "Unknown"
+        def keys_fn(s):
+            return [s.service_center.short_name if s.service_center else "Unknown"]
     elif group_by == "pi":
 
-        def key_fn(s):
-            pis = list(s.responsible_pis.all())
-            return str(pis[0]) if pis else "Unknown"
+        def keys_fn(s):
+            return [str(p) for p in s.responsible_pis.all()] or ["Unknown"]
     else:
         return [("All Services", list(services))]
 
-    items = sorted(list(services), key=key_fn)
-    return [
-        (label, list(group)) for label, group in itertools.groupby(items, key=key_fn)
-    ]
+    groups: dict[str, list] = {}
+    for s in services:
+        for label in keys_fn(s):
+            groups.setdefault(label, []).append(s)
+    return sorted(groups.items())

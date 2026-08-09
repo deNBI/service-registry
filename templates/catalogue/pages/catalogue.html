@@ -58,7 +58,7 @@
             name="q"
             value="{{ params.search }}"
             autocomplete="off"
-            title="Search matches service name, category, service centre, and PI name."
+            title="Search matches service name, category, service centre, and PI name (first, last, or full name)."
             aria-describedby="catalogue-search-hint"
             onkeydown="if(event.key==='Enter') event.preventDefault();"
             hx-get="{% url 'catalogue:grid' %}"
@@ -69,7 +69,7 @@
             hx-indicator="#catalogue-spinner"
           />
           <span id="catalogue-search-hint" class="visually-hidden">
-            Search matches service name, category, service centre, and PI name.
+            Search matches service name, category, service centre, and PI name (first, last, or full name).
           </span>
         </div>
 
