@@ -19,7 +19,7 @@ Everything you need to go from a fresh clone to a running local stack.
 ### 2. Clone and configure
 
 ```bash
-git clone https://github.com/denbi/service-registry
+git clone https://github.com/deNBI/service-registry
 cd service-registry
 cp .env.example .env
 ```

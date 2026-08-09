@@ -205,7 +205,7 @@ Rules and constraints:
 - When status **is** reset, the submitter update email includes a lifecycle notice.
 - System-controlled fields (`status`, `date_of_entry`, `primary_maturity_tag`, `secondary_maturity_tags`, `register_as_elixir`) cannot be made exempt and are silently rejected with a startup warning if included.
 - Unknown field names are also logged at startup and ignored.
-- The same exemption is applied consistently to both the submitter web form (`/update/edit/`) and the REST API (`PATCH /api/v1/submissions/{id}/`).
+- The same exemption is applied consistently to both the submitter web form (`/update/edit/<submission_id>/`) and the REST API (`PATCH /api/v1/submissions/{id}/`).
 - Validation runs at startup via `SubmissionsConfig.ready()`. Misconfigured entries appear in the server log immediately, not silently at request time.
 
 Available field names (use the model-level name, not the form or serializer alias):
@@ -294,16 +294,23 @@ FORWARDED_ALLOW_IPS=127.0.0.1
 **`FORWARDED_ALLOW_IPS`** only affects Gunicorn's own access log (stdout).
 It has no effect on the IP that Django views or django-axes record.
 
-    **Application-level IP** (axes lockout log, `submission_ip` field) is resolved
-    by `django-ipware` reading the `X-Real-IP` header, which the upstream proxy sets
-    to `$remote_addr` — the real client IP.  This path is independent of
-    `FORWARDED_ALLOW_IPS`.
+    **Application-level IP** (axes lockout log, `submission_ip` field, **and
+    per-client rate limiting**) is resolved from the `X-Real-IP` header, which the
+    upstream proxy sets to `$remote_addr` — the real client IP. django-axes reads
+    it via `django-ipware`; `submission_ip` and django-ratelimit read it via
+    `get_client_ip` (`apps/submissions/http_utils.py`, wired up as
+    `RATELIMIT_IP_META_KEY`), which tries `X-Real-IP` → `X-Forwarded-For` →
+    `REMOTE_ADDR`. This path is independent of `FORWARDED_ALLOW_IPS`.
 
     For the application IP to be correct, two things must be true:
 
     1. The upstream proxy sets `proxy_set_header X-Real-IP $remote_addr` (already
        in `nginx/host/service-registry.bi.denbi.de.conf`).
     2. `django-ipware` is installed (listed in `requirements/base.txt`).
+
+    If `X-Real-IP` is missing, every request resolves to the proxy's own IP, so
+    django-axes and django-ratelimit collapse to a single shared bucket and one
+    client can exhaust everyone's budget. See [Rate limiting](#rate-limiting).
 
 ### Security
 
@@ -355,12 +362,20 @@ Format: `<count>/<period>` where period is `s` / `m` / `h` / `d`.
 
 ```bash
 RATE_LIMIT_SUBMIT=10/h          # Registration form submissions (POST /register/)
-RATE_LIMIT_UPDATE=20/h          # Key-entry and edit form submissions (POST /update/ and /update/edit/)
+RATE_LIMIT_UPDATE=20/h          # Key-entry and edit form submissions (POST /update/ and /update/edit/<submission_id>/)
 RATE_LIMIT_API=60/m             # REST API (authenticated users)
 RATE_LIMIT_CHALLENGE=60/h       # ALTCHA challenge generation (GET /captcha/)
 RATE_LIMIT_BIOTOOLS=60/h        # bio.tools prefill/search proxy (GET /biotools/*)
 RATE_LIMIT_VALIDATE=120/h       # Inline field validation (POST /register/validate/)
 ```
+
+!!! warning "Limits are bucketed per real client IP"
+    Every limit is keyed on the real client IP, not `REMOTE_ADDR`
+    (`RATELIMIT_IP_META_KEY = apps.submissions.http_utils.get_client_ip`, which
+    reads `X-Real-IP` → `X-Forwarded-For` → `REMOTE_ADDR`). Behind a reverse
+    proxy the proxy **must** set `X-Real-IP` to the client address (see the
+    `X-Real-IP` note above); otherwise all users share one global bucket and the
+    limits become effectively site-wide.
 
 ### ALTCHA CAPTCHA
 

@@ -77,7 +77,7 @@ Scoped to a single submission. The plaintext key is shown **once** — store it 
 
 Two scopes are available (set by admins via the API Key admin):
 
-| Scope   | REST API    | Web edit form (`/update/edit/`) |
+| Scope   | REST API    | Web edit form (`/update/edit/<submission_id>/`) |
 | ------- | ----------- | ------------------------------- |
 | `read`  | GET only    | View form (GET), cannot submit  |
 | `write` | GET + PATCH | View and submit changes         |

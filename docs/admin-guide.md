@@ -281,7 +281,7 @@ and is reserved for a future "save as draft" feature.
 
 When a submitter edits an approved service (via the update form or REST API), the platform determines whether to reset the status to `submitted`:
 
-- **Exempt fields** (configured in `site.toml [submission] no_reset_fields`) do not trigger a reset. By default these are: `logo`, `github_url`, `biotools_url`, `fairsharing_url`, `edam_topics`, `edam_operations`, etc.
+- **Exempt fields** (configured in `site.toml [submission] no_reset_fields`) do not trigger a reset. The shipped default set covers supplementary fields: the external links, EDAM annotations, keywords, publications, contact fields, KPI fields, and `comments`. See `no_reset_fields` in `config/site.toml` for the authoritative list.
 - **Any non-exempt field change** resets status to `submitted` and clears maturity tags. The submitter's update email includes a lifecycle notice: *"Because one or more core service fields were modified, your service registration has been reset to Submitted…"*
 - **Exempt-only edits** (e.g. uploading a logo, updating EDAM annotations) preserve the `approved` status and maturity tags. The submitter receives the normal diff email with no lifecycle notice.
 

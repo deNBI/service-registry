@@ -232,7 +232,7 @@ terms_by_uri = {t.uri: t for t in EdamTerm.objects.filter(uri__in=uris)}
 | API authentication        | HMAC-based API key: plaintext hashed with PBKDF2, stored as `key_hash`                                                                      |
 | Admin authentication      | Django auth + django-axes (brute-force lockout)                                                                                             |
 | Content Security Policy   | `django-csp` middleware — all third-party JS/CSS vendored locally; `script-src 'unsafe-inline'` retained for Django template inline scripts |
-| Rate limiting             | `django-ratelimit` on form submit and API create endpoints                                                                                  |
+| Rate limiting             | `django-ratelimit` on form-submit, key-entry/edit, and REST API endpoints; bucketed per real client IP (`X-Real-IP` via `RATELIMIT_IP_META_KEY`), not `REMOTE_ADDR`                       |
 | Input sanitisation        | `bleach` on all free-text fields in `ServiceSubmission.save()`                                                                              |
 | Sensitive field isolation | IP, user-agent hash, internal contact excluded from all API serializers                                                                     |
 | Immutable service name    | `service_name` is locked after submission on the edit form (`disabled`) and REST API (read-only on update); only the Django admin can change it |
