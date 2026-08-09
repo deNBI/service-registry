@@ -972,7 +972,7 @@ result = cleanup_stale_drafts()
 print(f"Removed {result} stale session(s)")
 ```
 
-The beat schedule is defined in `settings.py` under `CELERY_BEAT_SCHEDULE`. See [Celery beat tasks](#celery-beat-tasks) for monitoring.
+The beat schedule is defined in `settings.py` under `CELERY_BEAT_SCHEDULE`. See [Monitoring → Celery / Task Queue](#celery-task-queue) for monitoring.
 
 #### Client-side localStorage drafts
 
