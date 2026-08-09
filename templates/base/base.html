@@ -195,6 +195,12 @@
       <a href="{{ PRIVACY_POLICY_URL }}" target="_blank">Privacy Policy</a> &middot;
       <a href="{{ IMPRINT_URL }}" target="_blank">Imprint</a> &middot;
       <a href="mailto:{{ CONTACT_EMAIL }}">Contact</a>
+      {% if REPOSITORY_URL %} &middot;
+      <a href="{{ REPOSITORY_URL }}" target="_blank" rel="noopener"
+         class="text-decoration-none" aria-label="Source code on GitHub">
+        <img src="{% static 'img/icons/github.svg' %}" alt="" width="14" height="14"
+             class="align-text-bottom me-1" aria-hidden="true">GitHub</a>
+      {% endif %}
     </div>
   </div>
 </footer>

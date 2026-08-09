@@ -83,6 +83,7 @@ imprint         = "https://www.denbi.de/imprint"
 data_protection = "https://www.denbi.de/privacy-policy"
 kpi_cheatsheet  = "https://www.denbi.de/images/Service/20210624_KPI_Cheat_Sheet_doi.pdf"
 user_guide      = "https://denbi.github.io/service-registry/user-guide/"
+repository      = "https://github.com/deNBI/service-registry"
 ```
 
 All links are rendered dynamically — changing a URL here updates it everywhere in the UI without touching template files.
@@ -95,6 +96,7 @@ All links are rendered dynamically — changing a URL here updates it everywhere
 | `data_protection` | Data protection information                 | `https://www.denbi.de/privacy-policy`                  |
 | `kpi_cheatsheet`  | KPI cheat-sheet PDF                         | PDF URL                                                |
 | `user_guide`      | User documentation page (appears in navbar) | `https://denbi.github.io/service-registry/user-guide/` |
+| `repository`      | Public source-code repo — shown as a "GitHub" link in the footer; set `""` to hide it | `https://github.com/deNBI/service-registry` |
 
 ### OpenAPI metadata
 

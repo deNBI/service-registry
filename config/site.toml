@@ -104,6 +104,10 @@ kpi_cheatsheet = "https://www.denbi.de/images/Service/20210624_KPI_Cheat_Sheet_d
 # User guide documentation page.
 user_guide = "https://denbi.github.io/service-registry/user-guide/"
 
+# Public source-code repository. Shown as a "GitHub" link in the site footer.
+# Leave empty ("") to hide the footer link (e.g. private forks).
+repository = "https://github.com/deNBI/service-registry"
+
 
 # -----------------------------------------------------------------------------
 # [api] — OpenAPI / Swagger metadata

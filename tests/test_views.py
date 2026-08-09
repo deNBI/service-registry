@@ -1686,3 +1686,25 @@ class TestServiceNameLockE2E:
         sub.refresh_from_db()
         assert sub.service_name == original_name
         assert sub.comments == "an allowed edit"
+
+
+@pytest.mark.django_db
+class TestFooterRepositoryLink:
+    """The footer shows a GitHub source-code link when [links] repository is
+    configured, and omits it entirely when unset."""
+
+    def test_footer_shows_github_link_when_repository_set(self, client, settings):
+        settings.SITE_CONFIG = {
+            "links": {"repository": "https://github.com/test-org/test-repo"}
+        }
+        resp = client.get(reverse("submissions:register"))
+        assert resp.status_code == 200
+        html = resp.content.decode()
+        assert "https://github.com/test-org/test-repo" in html
+        assert "GitHub" in html
+
+    def test_footer_omits_github_link_when_repository_unset(self, client, settings):
+        settings.SITE_CONFIG = {"links": {}}
+        resp = client.get(reverse("submissions:register"))
+        assert resp.status_code == 200
+        assert "test-org/test-repo" not in resp.content.decode()

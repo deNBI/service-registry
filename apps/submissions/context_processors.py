@@ -84,6 +84,9 @@ def site_context(request):
         ),
         "IMPRINT_URL": links.get("imprint", "https://www.denbi.de/imprint"),
         "WEBSITE_URL": links.get("website", "https://www.denbi.de"),
+        # Source repository — empty by default so the footer link is omitted
+        # when unset (avoids a dead link on forks with no public repo).
+        "REPOSITORY_URL": links.get("repository", ""),
         "USER_GUIDE_URL": links.get(
             "user_guide", "https://denbi.github.io/service-registry/user-guide/"
         ),
