@@ -28,7 +28,7 @@
 
   {# Render the widget — HTMX validates on change #}
   <div hx-post="{% url 'submissions:validate_field' %}"
-       hx-trigger="change from:find input,select,textarea"
+       hx-trigger="change"
        hx-include="[name='{{ field.html_name }}']"
        hx-vals='{"field": "{{ field.html_name }}"}'
        hx-target="#field-errors-{{ field.html_name }}"
@@ -92,7 +92,7 @@
 
   {# Render the widget — HTMX validates on change #}
   <div hx-post="{% url 'submissions:validate_field' %}"
-       hx-trigger="change from:find input,select,textarea"
+       hx-trigger="change"
        hx-include="[name='{{ field.html_name }}']"
        hx-vals='{"field": "{{ field.html_name }}"}'
        hx-target="#field-errors-{{ field.html_name }}"
