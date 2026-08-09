@@ -47,6 +47,7 @@ from .serializers import (
     SubmissionCreateSerializer,
     SubmissionDetailSerializer,
     SubmissionListSerializer,
+    SubmissionUpdateResponseSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -339,10 +340,15 @@ class SubmissionViewSet(
         description=(
             "Partial update — include only the fields you want to change.\n\n"
             "Requires `Authorization: ApiKey <your-key>` header.\n\n"
+            "`service_name` is immutable after creation: it is read-only on "
+            "update, so a PATCH that sends a different name still returns `200` "
+            "with the original name kept, all other changes applied, and a "
+            "`warnings` entry noting the rename was ignored.\n\n"
             "Note: updating an approved submission resets its status to `submitted` "
             "for re-review, unless every changed field is listed in "
             "`SUBMISSION_NO_RESET_FIELDS` (configured in `site.toml`)."
         ),
+        responses=SubmissionUpdateResponseSerializer,
     )
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True

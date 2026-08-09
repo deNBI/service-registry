@@ -1285,6 +1285,13 @@ class TestOpenAPIEndpoints:
         assert b"internal_contact_email" in content
         assert b"internal_contact_name" in content
 
+    def test_schema_documents_patch_warnings(self, api_client):
+        """The PATCH response schema must document the optional `warnings` field
+        (e.g. a rejected service_name change), not only the prose docs."""
+        resp = api_client.get("/api/schema/")
+        assert b"SubmissionUpdateResponse" in resp.content
+        assert b"warnings" in resp.content
+
 
 # ===========================================================================
 # Error envelope consistency
