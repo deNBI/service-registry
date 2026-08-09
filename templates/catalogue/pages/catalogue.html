@@ -169,12 +169,11 @@
 
     // ── Element-specific init: runs on page load AND after HTMX history restore ──
     function catalogueInit() {
-      var viewInput = document.getElementById('view-mode-input');
-      var storedView = lsGet('catalogue-view');
-      if (viewInput && storedView && storedView !== viewInput.value) {
-        viewInput.value = storedView;
-      }
-
+      // NOTE: the displayed view is authoritative — it comes from the server
+      // (params.view, driven by the URL). We deliberately do NOT override the
+      // hidden #view-mode-input from localStorage here: doing so made the hidden
+      // input disagree with the visible grid/buttons, so the next search/sort
+      // (which sends the hidden input via hx-include) silently flipped the view.
       var urlParams = new URLSearchParams(window.location.search);
       var clearBtn = document.getElementById('sidebar-clear-btn');
       if (clearBtn) {
@@ -207,7 +206,6 @@
         var view = btn.dataset.view;
         var viewInput = document.getElementById('view-mode-input');
         if (viewInput) viewInput.value = view;
-        lsSet('catalogue-view', view);
         document.querySelectorAll('.catalogue-view-btn').forEach(function (b) {
           var active = b.dataset.view === view;
           b.classList.toggle('btn-success', active);
