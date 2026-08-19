@@ -9,6 +9,8 @@ loop and are covered by integration tests. These unit tests cover the
 Django/DRF layer.
 """
 
+from pathlib import Path
+
 import pytest
 from django.contrib.auth import get_user_model
 from django.test import Client
@@ -269,6 +271,75 @@ class TestCSRFProtection:
         assert b"(?:^|;\\s*)csrftoken=" in content
         # ... and the naive unanchored opener gone.
         assert b"match(/csrftoken=" not in content
+
+    # -- htmx requests must carry the live cookie token, not a stale one ------
+    #
+    # htmx-csrf-refresh.js refreshes the CSRF token on every htmx request from
+    # the live cookie, so inline validation (/register/validate/) can't 403 on a
+    # stale render-time token. The old form-level hx-headers token is removed.
+
+    HTMX_SCRIPT = b"htmx-csrf-refresh.js"
+
+    # The render-time form attribute: hx-headers='{"X-CSRFToken": "<token>"}'.
+    STATIC_HX_TOKEN = b'hx-headers=\'{"X-CSRFToken"'
+
+    def test_register_page_includes_htmx_csrf_refresh_script(self):
+        resp = Client().get(reverse("submissions:register"))
+        assert self.HTMX_SCRIPT in resp.content
+
+    def test_update_page_includes_htmx_csrf_refresh_script(self):
+        resp = Client().get(reverse("submissions:update"))
+        assert self.HTMX_SCRIPT in resp.content
+
+    def test_edit_page_includes_htmx_csrf_refresh_script(self):
+        client, sub = self._edit_client()
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
+        assert resp.status_code == 200
+        assert self.HTMX_SCRIPT in resp.content
+
+    def test_register_form_omits_render_time_csrf_hx_headers(self):
+        """No render-time CSRF token baked into hx-headers — it goes stale on
+        cookie rotation. The live-cookie listener handles it instead."""
+        resp = Client().get(reverse("submissions:register"))
+        assert self.STATIC_HX_TOKEN not in resp.content
+
+    def test_edit_form_omits_render_time_csrf_hx_headers(self):
+        client, sub = self._edit_client()
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
+        assert resp.status_code == 200
+        assert self.STATIC_HX_TOKEN not in resp.content
+
+    def test_htmx_csrf_refresh_script_uses_configrequest_and_anchored_regex(self):
+        """Hooks htmx:configRequest, sets X-CSRFToken, and reads the cookie with
+        an anchored regex so a decoy cookie (e.g. ``xcsrftoken``) can't shadow
+        the real one."""
+        js = (
+            Path(__file__).resolve().parent.parent
+            / "static"
+            / "js"
+            / "htmx-csrf-refresh.js"
+        )
+        assert js.exists(), f"missing {js}"
+        src = js.read_text()
+        assert "htmx:configRequest" in src
+        assert "X-CSRFToken" in src
+        assert "(?:^|;\\s*)csrftoken=" in src
+        assert "match(/csrftoken=" not in src
+
+    def test_htmx_csrf_refresh_script_restamps_csrfmiddlewaretoken_param(self):
+        """Django checks the POSTed csrfmiddlewaretoken before the header, and
+        htmx sends the form's field, so the listener must refresh the param too.
+        A header-only fix is ignored by Django and would not stop the 403."""
+        js = (
+            Path(__file__).resolve().parent.parent
+            / "static"
+            / "js"
+            / "htmx-csrf-refresh.js"
+        )
+        src = js.read_text()
+        assert "csrfmiddlewaretoken" in src
+        # via event.detail.parameters, the object configRequest exposes.
+        assert "parameters" in src
 
     @staticmethod
     def _edit_client(enforce_csrf_checks=False):

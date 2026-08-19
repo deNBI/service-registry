@@ -216,6 +216,9 @@
   document.body.setAttribute('hx-headers', '{"X-CSRFToken": "' + (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1] || '') + '"}');
 </script>
 
+<!-- Keep htmx CSRF tokens in sync with the live cookie -->
+<script src="{% static 'js/htmx-csrf-refresh.js' %}"></script>
+
 <!-- Keep native form CSRF tokens in sync with the live cookie at submit time -->
 <script src="{% static 'js/csrf-token-refresh.js' %}"></script>
 
