@@ -19,7 +19,7 @@ Everything you need to go from a fresh clone to a running local stack.
 ### 2. Clone and configure
 
 ```bash
-git clone https://github.com/denbi/service-registry
+git clone https://github.com/deNBI/service-registry
 cd service-registry
 cp .env.example .env
 ```
@@ -480,7 +480,9 @@ the `settings` + `tmp_path` fixtures to set a deterministic `MEDIA_ROOT`
 
 ## Form draft (localStorage)
 
-The registration form (`/register/`) and the edit form (`/update/edit/`) auto-save field values to the browser's `localStorage` so that a partially completed form survives a tab close or accidental navigation.
+The registration form (`/register/`) and the edit form (`/update/edit/<submission_id>/`) auto-save field values to the browser's `localStorage` so that a partially completed form survives a tab close or accidental navigation.
+
+The API-key entry page (`/update/`) is deliberately **not** draft-enabled — it carries no draft key and does not load the draft script — so a typed API key is never written to `localStorage`. The key is also never a field on the register/edit forms, so it cannot enter a draft by that route either.
 
 ### Draft key scheme
 

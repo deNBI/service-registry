@@ -324,8 +324,7 @@ class TestSubmissionChangeLogWrites:
 
         key_obj, _ = APIKeyFactory.create_with_plaintext(submission=sub)
         session = client.session
-        session["edit_key_id"] = str(key_obj.pk)
-        session["edit_submission_id"] = str(sub.pk)
+        session["edit_grants"] = {str(sub.pk): str(key_obj.pk)}
         session.save()
 
     def _edit_data(self, sub, **overrides):
@@ -380,17 +379,17 @@ class TestSubmissionChangeLogWrites:
         from apps.submissions.models import SubmissionChangeLog
         from tests.factories import ServiceSubmissionFactory
 
-        sub = ServiceSubmissionFactory(service_name="Before")
+        sub = ServiceSubmissionFactory(comments="before")
         self._setup_session(client, sub)
-        data = self._edit_data(sub, service_name="After")
+        data = self._edit_data(sub, comments="after")
 
-        resp = client.post("/update/edit/", data)
+        resp = client.post(f"/update/edit/{sub.pk}/", data)
         assert resp.status_code == 302
         assert SubmissionChangeLog.objects.filter(submission=sub).exists()
         entry = SubmissionChangeLog.objects.filter(submission=sub).first()
         assert entry.changed_by == "submitter"
         fields_changed = {ch["field"] for ch in entry.changes}
-        assert "service_name" in fields_changed
+        assert "comments" in fields_changed
 
     def test_no_change_does_not_write_log_entry(self, client):
         """EditView.post() with no actual changes must not write a log entry."""
@@ -401,7 +400,7 @@ class TestSubmissionChangeLogWrites:
         self._setup_session(client, sub)
         data = self._edit_data(sub)
 
-        client.post("/update/edit/", data)
+        client.post(f"/update/edit/{sub.pk}/", data)
         assert not SubmissionChangeLog.objects.filter(submission=sub).exists()
 
     def test_api_patch_writes_log_entry(self):
@@ -410,13 +409,13 @@ class TestSubmissionChangeLogWrites:
         from tests.factories import APIKeyFactory, ServiceSubmissionFactory
         from apps.submissions.models import SubmissionChangeLog
 
-        sub = ServiceSubmissionFactory(service_name="Before")
+        sub = ServiceSubmissionFactory(comments="before")
         _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
 
         api = APIClient()
         resp = api.patch(
             f"/api/v1/submissions/{sub.id}/",
-            {"service_name": "After"},
+            {"comments": "after"},
             HTTP_AUTHORIZATION=f"ApiKey {plaintext}",
         )
         assert resp.status_code == 200

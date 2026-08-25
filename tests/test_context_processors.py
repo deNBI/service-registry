@@ -28,3 +28,26 @@ def test_site_context_exposes_form_draft_ttl_days(rf, settings):
     ctx = site_context(request)
     assert "FORM_DRAFT_TTL_DAYS" in ctx
     assert ctx["FORM_DRAFT_TTL_DAYS"] == 14
+
+
+@pytest.mark.django_db
+def test_site_context_exposes_repository_url(rf, settings):
+    """site_context() must expose the [links] repository as REPOSITORY_URL."""
+    from apps.submissions.context_processors import site_context
+
+    settings.SITE_CONFIG = {
+        "links": {"repository": "https://github.com/deNBI/service-registry"}
+    }
+    ctx = site_context(rf.get("/"))
+    assert ctx["REPOSITORY_URL"] == "https://github.com/deNBI/service-registry"
+
+
+@pytest.mark.django_db
+def test_repository_url_defaults_to_empty_when_unset(rf, settings):
+    """When no repository link is configured, REPOSITORY_URL is empty (so the
+    footer link is omitted rather than rendering a dead link)."""
+    from apps.submissions.context_processors import site_context
+
+    settings.SITE_CONFIG = {"links": {}}
+    ctx = site_context(rf.get("/"))
+    assert ctx["REPOSITORY_URL"] == ""

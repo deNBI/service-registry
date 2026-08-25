@@ -780,6 +780,48 @@ select.edam-autocomplete { display: none !important; }
   letter-spacing: 0.03em;
 }
 
+/* ── Pills wrap, never overflow ──
+   Bootstrap's .badge forces `white-space: nowrap`, so a single long label —
+   e.g. an EDAM topic like "Molecular interactions, pathways and networks" —
+   renders on one line and spills past the card/row edge. Let every pill wrap
+   its own text and hard-cap it to the container width. `overflow-wrap: anywhere`
+   also lets the flex item shrink below its longest word, so an unbreakable URL
+   or single long token can't overflow either. Type-agnostic on purpose: covers
+   categories, EDAM topics, maturity tags, the active-filter pills (long search
+   strings / category names), and any future pill of any length. Scoped to
+   `#catalogue-grid` — the HTMX swap target that holds the pills, cards, and
+   list rows — so every catalogue pill is covered in one place. The filter
+   sidebar's count badges live outside it and are unaffected (they are numeric,
+   and would not overflow anyway). */
+#catalogue-grid .badge {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+  line-height: 1.2;
+  max-width: 100%;
+}
+
+/* ── Flex children must be allowed to shrink ──
+   A flex item defaults to `min-width: auto`, so it refuses to shrink below its
+   content's intrinsic width — a long title then pushes the whole card wider.
+   The catalogue card/list templates already tag the title/content column with
+   `min-width-0`, but neither Bootstrap 5 nor this stylesheet defined the class,
+   so it was a silent no-op. Define it so the intended shrink actually happens. */
+.min-width-0 {
+  min-width: 0;
+}
+
+/* ── Long, space-less text must break, not overflow ──
+   Titles and the centre short-name are plain text that already wraps at spaces;
+   this only adds a break point for a pathological run-on token (a service name
+   or centre code with no spaces) so it can never spill past the card edge.
+   Normal multi-word text is unaffected. */
+.catalogue-card-title,
+.catalogue-list-title,
+.catalogue-meta-tiny {
+  overflow-wrap: anywhere;
+}
+
 /* ── Tiny metadata label ── */
 .catalogue-meta-tiny {
   font-size: 0.7rem;

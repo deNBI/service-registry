@@ -25,7 +25,7 @@ See [Configuration Reference](configuration.md) for all settings including `.env
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/denbi/service-registry.git
+git clone https://github.com/deNBI/service-registry.git
 cd service-registry
 
 # 2. Configure environment

@@ -47,6 +47,7 @@ from .serializers import (
     SubmissionCreateSerializer,
     SubmissionDetailSerializer,
     SubmissionListSerializer,
+    SubmissionUpdateResponseSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -339,10 +340,15 @@ class SubmissionViewSet(
         description=(
             "Partial update — include only the fields you want to change.\n\n"
             "Requires `Authorization: ApiKey <your-key>` header.\n\n"
+            "`service_name` is immutable after creation: it is read-only on "
+            "update, so a PATCH that sends a different name still returns `200` "
+            "with the original name kept, all other changes applied, and a "
+            "`warnings` entry noting the rename was ignored.\n\n"
             "Note: updating an approved submission resets its status to `submitted` "
             "for re-review, unless every changed field is listed in "
             "`SUBMISSION_NO_RESET_FIELDS` (configured in `site.toml`)."
         ),
+        responses=SubmissionUpdateResponseSerializer,
     )
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
@@ -352,6 +358,22 @@ class SubmissionViewSet(
         # values to the instance, so we must capture the originals first.
         before_scalar = snapshot(instance)
         before_m2m = snapshot_m2m(instance)
+
+        # Detect an attempt to change the (immutable) service_name so we can tell
+        # the client it was ignored. The serializer marks service_name read-only
+        # on update, so the incoming value never reaches validated_data — compare
+        # the raw request value against the stored name here, before save.
+        # Normalise the incoming value exactly as the model does on save
+        # (_sanitise_text: strip null bytes → NFC → strip whitespace) so echoing
+        # the same name in a different byte form (whitespace, Unicode NFD, …) is
+        # correctly treated as unchanged and does not raise a spurious warning.
+        from apps.submissions.models import _sanitise_text
+
+        requested_name = request.data.get("service_name")
+        service_name_change_ignored = (
+            requested_name is not None
+            and _sanitise_text(str(requested_name)) != instance.service_name
+        )
 
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -425,7 +447,17 @@ class SubmissionViewSet(
             len(changes),
             extra={"submission_id": str(instance.id)},
         )
-        return Response(serializer.data)
+        data = serializer.data
+        if service_name_change_ignored:
+            data = {
+                **data,
+                "warnings": [
+                    "The service name cannot be changed after a service is "
+                    "submitted. Your requested name change was not applied; all "
+                    "other changes were accepted."
+                ],
+            }
+        return Response(data)
 
     def update(self, request, *args, **kwargs):
         """Full PUT is disabled — use PATCH."""

@@ -187,6 +187,15 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
 
     links = serializers.SerializerMethodField()
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # service_name is immutable once a submission exists: writable on create
+        # (no instance yet), read-only on update. DRF drops read-only fields from
+        # input, so a PATCH that sends service_name silently keeps the original.
+        # (The view surfaces a warning so the client knows it was not applied.)
+        if self.instance is not None:
+            self.fields["service_name"].read_only = True
+
     class Meta:
         model = ServiceSubmission
         # Explicitly list fields — never use __all__ to prevent accidental leakage
@@ -509,6 +518,31 @@ class SubmissionCreateSerializer(SubmissionDetailSerializer):
                 "This key is shown ONCE. Store it securely — it cannot be retrieved."
             )
         return data
+
+
+class SubmissionUpdateResponseSerializer(SubmissionDetailSerializer):
+    """
+    Response schema for PATCH /api/v1/submissions/{id}/.
+
+    Identical to the detail representation, plus an optional ``warnings`` list.
+    The view adds ``warnings`` only when part of the request was ignored — e.g.
+    an attempt to change the immutable ``service_name`` (see the view's
+    ``partial_update``). Declared here so the field appears in the generated
+    OpenAPI schema instead of only in the prose docs.
+    """
+
+    warnings = serializers.ListField(
+        child=serializers.CharField(),
+        read_only=True,
+        required=False,
+        help_text=(
+            "Present only when part of the request was accepted but not fully "
+            "applied (e.g. a rejected service_name change). Absent otherwise."
+        ),
+    )
+
+    class Meta(SubmissionDetailSerializer.Meta):
+        fields = SubmissionDetailSerializer.Meta.fields + ["warnings"]
 
 
 # ---------------------------------------------------------------------------

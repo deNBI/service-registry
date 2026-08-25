@@ -83,6 +83,7 @@ imprint         = "https://www.denbi.de/imprint"
 data_protection = "https://www.denbi.de/privacy-policy"
 kpi_cheatsheet  = "https://www.denbi.de/images/Service/20210624_KPI_Cheat_Sheet_doi.pdf"
 user_guide      = "https://denbi.github.io/service-registry/user-guide/"
+repository      = "https://github.com/deNBI/service-registry"
 ```
 
 All links are rendered dynamically — changing a URL here updates it everywhere in the UI without touching template files.
@@ -95,6 +96,7 @@ All links are rendered dynamically — changing a URL here updates it everywhere
 | `data_protection` | Data protection information                 | `https://www.denbi.de/privacy-policy`                  |
 | `kpi_cheatsheet`  | KPI cheat-sheet PDF                         | PDF URL                                                |
 | `user_guide`      | User documentation page (appears in navbar) | `https://denbi.github.io/service-registry/user-guide/` |
+| `repository`      | Public source-code repo — shown as a "GitHub" link in the footer; set `""` to hide it | `https://github.com/deNBI/service-registry` |
 
 ### OpenAPI metadata
 
@@ -177,10 +179,16 @@ Controls how the platform handles status resets when a submitter edits an alread
 
 ```toml
 [submission]
+# Illustrative subset — the shipped config/site.toml enables a broader default
+# set (external links, EDAM annotations, keywords, publications, contact fields,
+# KPI fields, comments). See that file for the authoritative default list.
 no_reset_fields = ["logo", "github_url", "biotools_url", "fairsharing_url",
                    "edam_topics", "edam_operations"]
 draft_ttl_days = 7
 ```
+
+!!! note "The service name is never editable via a reset-exemption"
+    `service_name` is immutable after the initial submission on both the edit form and the REST API — independent of `no_reset_fields`. It cannot be made editable through this setting; only a Django admin can change a submitted name.
 
 #### `no_reset_fields`
 
@@ -197,7 +205,7 @@ Rules and constraints:
 - When status **is** reset, the submitter update email includes a lifecycle notice.
 - System-controlled fields (`status`, `date_of_entry`, `primary_maturity_tag`, `secondary_maturity_tags`, `register_as_elixir`) cannot be made exempt and are silently rejected with a startup warning if included.
 - Unknown field names are also logged at startup and ignored.
-- The same exemption is applied consistently to both the submitter web form (`/update/edit/`) and the REST API (`PATCH /api/v1/submissions/{id}/`).
+- The same exemption is applied consistently to both the submitter web form (`/update/edit/<submission_id>/`) and the REST API (`PATCH /api/v1/submissions/{id}/`).
 - Validation runs at startup via `SubmissionsConfig.ready()`. Misconfigured entries appear in the server log immediately, not silently at request time.
 
 Available field names (use the model-level name, not the form or serializer alias):
@@ -286,16 +294,23 @@ FORWARDED_ALLOW_IPS=127.0.0.1
 **`FORWARDED_ALLOW_IPS`** only affects Gunicorn's own access log (stdout).
 It has no effect on the IP that Django views or django-axes record.
 
-    **Application-level IP** (axes lockout log, `submission_ip` field) is resolved
-    by `django-ipware` reading the `X-Real-IP` header, which the upstream proxy sets
-    to `$remote_addr` — the real client IP.  This path is independent of
-    `FORWARDED_ALLOW_IPS`.
+    **Application-level IP** (axes lockout log, `submission_ip` field, **and
+    per-client rate limiting**) is resolved from the `X-Real-IP` header, which the
+    upstream proxy sets to `$remote_addr` — the real client IP. django-axes reads
+    it via `django-ipware`; `submission_ip` and django-ratelimit read it via
+    `get_client_ip` (`apps/submissions/http_utils.py`, wired up as
+    `RATELIMIT_IP_META_KEY`), which tries `X-Real-IP` → `X-Forwarded-For` →
+    `REMOTE_ADDR`. This path is independent of `FORWARDED_ALLOW_IPS`.
 
     For the application IP to be correct, two things must be true:
 
     1. The upstream proxy sets `proxy_set_header X-Real-IP $remote_addr` (already
        in `nginx/host/service-registry.bi.denbi.de.conf`).
     2. `django-ipware` is installed (listed in `requirements/base.txt`).
+
+    If `X-Real-IP` is missing, every request resolves to the proxy's own IP, so
+    django-axes and django-ratelimit collapse to a single shared bucket and one
+    client can exhaust everyone's budget. See [Rate limiting](#rate-limiting).
 
 ### Security
 
@@ -304,8 +319,30 @@ HSTS_SECONDS=31536000           # HSTS max-age in seconds (default: 1 year)
 SECURE_SSL_REDIRECT=true        # Force HTTP → HTTPS at Django layer
 SESSION_COOKIE_SECURE=true      # Mark session cookie as HTTPS-only
 SESSION_COOKIE_AGE=3600         # Session lifetime in seconds (default: 1 hour)
+SESSION_ENGINE=django.contrib.sessions.backends.db  # Session store (default: DB)
 CSRF_COOKIE_SECURE=true         # Mark CSRF cookie as HTTPS-only
 ```
+
+`SESSION_ENGINE` chooses **where session data is stored**. It must be a
+**server-side** backend, because the one-time plaintext API key is kept in the
+session. The `signed_cookies` backend is rejected at startup — it would put the
+session (and therefore the key) into a client-readable cookie (signed, but
+**not** encrypted). Leave it at the default unless you have a specific reason to
+change it.
+
+| Value (`SESSION_ENGINE=…`)                          | What it does                                                        | When to use it                                                                                 |
+| --------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `django.contrib.sessions.backends.db` *(default)*   | Stores sessions in the database.                                   | The safe default. Use this unless you have a reason not to.                                     |
+| `django.contrib.sessions.backends.cached_db`        | Reads from cache, falls back to the DB; writes to both.            | High traffic: faster reads while the DB stays the durable source of truth.                      |
+| `django.contrib.sessions.backends.cache`            | Stores sessions **only** in the cache (e.g. Redis).               | Fastest, but sessions vanish if the cache is cleared/restarted — only with a persistent cache. |
+| `django.contrib.sessions.backends.file`             | Stores each session as a file on disk.                            | Single-server setups without a shared DB/cache; not suitable across multiple app servers.       |
+| `django.contrib.sessions.backends.signed_cookies`   | Stores the whole session in the browser cookie. **Rejected here.** | Never — the app refuses to start with it (would expose the plaintext API key).                  |
+
+Entering an API key on `/update/` unlocks the web edit form for the rest of the
+browsing session. That unlock is bounded by the session: `SESSION_COOKIE_AGE`
+caps it (1 hour by default), and `SESSION_EXPIRE_AT_BROWSER_CLOSE = True`
+(set in `settings.py`) ends it when the browser is closed. Lower
+`SESSION_COOKIE_AGE` if you want a tighter window on shared machines.
 
 ### Admin brute-force protection
 
@@ -325,12 +362,20 @@ Format: `<count>/<period>` where period is `s` / `m` / `h` / `d`.
 
 ```bash
 RATE_LIMIT_SUBMIT=10/h          # Registration form submissions (POST /register/)
-RATE_LIMIT_UPDATE=20/h          # Key-entry and edit form submissions (POST /update/ and /update/edit/)
+RATE_LIMIT_UPDATE=20/h          # Key-entry and edit form submissions (POST /update/ and /update/edit/<submission_id>/)
 RATE_LIMIT_API=60/m             # REST API (authenticated users)
 RATE_LIMIT_CHALLENGE=60/h       # ALTCHA challenge generation (GET /captcha/)
 RATE_LIMIT_BIOTOOLS=60/h        # bio.tools prefill/search proxy (GET /biotools/*)
 RATE_LIMIT_VALIDATE=120/h       # Inline field validation (POST /register/validate/)
 ```
+
+!!! warning "Limits are bucketed per real client IP"
+    Every limit is keyed on the real client IP, not `REMOTE_ADDR`
+    (`RATELIMIT_IP_META_KEY = apps.submissions.http_utils.get_client_ip`, which
+    reads `X-Real-IP` → `X-Forwarded-For` → `REMOTE_ADDR`). Behind a reverse
+    proxy the proxy **must** set `X-Real-IP` to the client address (see the
+    `X-Real-IP` note above); otherwise all users share one global bucket and the
+    limits become effectively site-wide.
 
 ### ALTCHA CAPTCHA
 

@@ -9,9 +9,12 @@ loop and are covered by integration tests. These unit tests cover the
 Django/DRF layer.
 """
 
+from pathlib import Path
+
 import pytest
 from django.contrib.auth import get_user_model
 from django.test import Client
+from django.urls import reverse
 
 from tests.factories import APIKeyFactory, ServiceSubmissionFactory
 
@@ -170,6 +173,255 @@ class TestCSRFProtection:
         client = Client()
         resp = client.get("/register/")
         assert "csrftoken" in resp.cookies
+
+    # -- csrftoken cookie guaranteed on every form GET (defense in depth) ----
+
+    def test_csrf_cookie_set_on_update_get(self):
+        resp = Client().get(reverse("submissions:update"))
+        assert "csrftoken" in resp.cookies
+
+    def test_csrf_cookie_set_on_edit_get(self):
+        client, sub = self._edit_client()
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
+        assert resp.status_code == 200
+        assert "csrftoken" in resp.cookies
+
+    # -- client-side token refresh script is delivered on all form pages -----
+    #
+    # The four native-POST forms (register, update, edit, deprecate) embed a
+    # render-time CSRF token that can drift out of sync with the browser's
+    # csrftoken cookie (concurrent first-visit / multi-tab race, amplified by
+    # SameSite=Strict on external-link entry). The shared refresh script
+    # rewrites the hidden csrfmiddlewaretoken from the live cookie at submit
+    # time, mirroring the admin AJAX path and base.html's HTMX header. These
+    # tests assert the script is actually delivered to each form page.
+
+    SCRIPT = b"csrf-token-refresh.js"
+
+    def test_register_page_includes_csrf_refresh_script(self):
+        resp = Client().get(reverse("submissions:register"))
+        assert self.SCRIPT in resp.content
+
+    def test_update_page_includes_csrf_refresh_script(self):
+        resp = Client().get(reverse("submissions:update"))
+        assert self.SCRIPT in resp.content
+
+    def test_edit_page_includes_csrf_refresh_script(self):
+        client, sub = self._edit_client()
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
+        assert resp.status_code == 200
+        assert self.SCRIPT in resp.content
+
+    # -- CSRF protection itself must remain intact (the fix must not weaken) --
+
+    def test_token_equal_to_cookie_secret_is_accepted(self):
+        """
+        The refresh script writes the raw csrftoken cookie value into the
+        hidden field. Django must accept that value as a valid token, i.e. the
+        request must NOT be rejected with 403 (it fails later validation with
+        400/422 instead). This locks in the mechanism the fix relies on.
+        """
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("submissions:register"))
+        cookie_secret = client.cookies["csrftoken"].value
+
+        resp = client.post(
+            reverse("submissions:register"),
+            {"csrfmiddlewaretoken": cookie_secret},
+        )
+        assert resp.status_code != 403
+
+    def test_forged_token_is_rejected_on_register(self):
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("submissions:register"))
+        resp = client.post(
+            reverse("submissions:register"),
+            {"csrfmiddlewaretoken": "forged" + "a" * 58},
+        )
+        assert resp.status_code == 403
+
+    def test_forged_token_is_rejected_on_update(self):
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("submissions:update"))
+        resp = client.post(
+            reverse("submissions:update"),
+            {"csrfmiddlewaretoken": "forged" + "a" * 58},
+        )
+        assert resp.status_code == 403
+
+    def test_forged_token_is_rejected_on_edit(self):
+        """CSRF is enforced at the middleware layer, before the view's session
+        check — a forged token is rejected even with a valid edit session."""
+        client, sub = self._edit_client(enforce_csrf_checks=True)
+        resp = client.post(
+            reverse("submissions:edit", args=[sub.pk]),
+            {"csrfmiddlewaretoken": "forged" + "a" * 58},
+        )
+        assert resp.status_code == 403
+
+    def test_base_hx_headers_uses_anchored_cookie_regex(self):
+        """
+        The inline body hx-headers setup in base.html reads the csrftoken
+        cookie for HTMX requests. It must use an anchored regex so a decoy
+        cookie whose name *ends with* ``csrftoken`` (e.g. ``xcsrftoken``)
+        cannot shadow the real token and feed a wrong X-CSRFToken header.
+        """
+        content = Client().get(reverse("submissions:register")).content
+        # Anchored form present ...
+        assert b"(?:^|;\\s*)csrftoken=" in content
+        # ... and the naive unanchored opener gone.
+        assert b"match(/csrftoken=" not in content
+
+    # -- htmx requests must carry the live cookie token, not a stale one ------
+    #
+    # htmx-csrf-refresh.js refreshes the CSRF token on every htmx request from
+    # the live cookie, so inline validation (/register/validate/) can't 403 on a
+    # stale render-time token. The old form-level hx-headers token is removed.
+
+    HTMX_SCRIPT = b"htmx-csrf-refresh.js"
+
+    # The render-time form attribute: hx-headers='{"X-CSRFToken": "<token>"}'.
+    STATIC_HX_TOKEN = b'hx-headers=\'{"X-CSRFToken"'
+
+    def test_register_page_includes_htmx_csrf_refresh_script(self):
+        resp = Client().get(reverse("submissions:register"))
+        assert self.HTMX_SCRIPT in resp.content
+
+    def test_update_page_includes_htmx_csrf_refresh_script(self):
+        resp = Client().get(reverse("submissions:update"))
+        assert self.HTMX_SCRIPT in resp.content
+
+    def test_edit_page_includes_htmx_csrf_refresh_script(self):
+        client, sub = self._edit_client()
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
+        assert resp.status_code == 200
+        assert self.HTMX_SCRIPT in resp.content
+
+    def test_register_form_omits_render_time_csrf_hx_headers(self):
+        """No render-time CSRF token baked into hx-headers — it goes stale on
+        cookie rotation. The live-cookie listener handles it instead."""
+        resp = Client().get(reverse("submissions:register"))
+        assert self.STATIC_HX_TOKEN not in resp.content
+
+    def test_edit_form_omits_render_time_csrf_hx_headers(self):
+        client, sub = self._edit_client()
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
+        assert resp.status_code == 200
+        assert self.STATIC_HX_TOKEN not in resp.content
+
+    def test_htmx_csrf_refresh_script_uses_configrequest_and_anchored_regex(self):
+        """Hooks htmx:configRequest, sets X-CSRFToken, and reads the cookie with
+        an anchored regex so a decoy cookie (e.g. ``xcsrftoken``) can't shadow
+        the real one."""
+        js = (
+            Path(__file__).resolve().parent.parent
+            / "static"
+            / "js"
+            / "htmx-csrf-refresh.js"
+        )
+        assert js.exists(), f"missing {js}"
+        src = js.read_text()
+        assert "htmx:configRequest" in src
+        assert "X-CSRFToken" in src
+        assert "(?:^|;\\s*)csrftoken=" in src
+        assert "match(/csrftoken=" not in src
+
+    def test_htmx_csrf_refresh_script_restamps_csrfmiddlewaretoken_param(self):
+        """Django checks the POSTed csrfmiddlewaretoken before the header, and
+        htmx sends the form's field, so the listener must refresh the param too.
+        A header-only fix is ignored by Django and would not stop the 403."""
+        js = (
+            Path(__file__).resolve().parent.parent
+            / "static"
+            / "js"
+            / "htmx-csrf-refresh.js"
+        )
+        src = js.read_text()
+        assert "csrfmiddlewaretoken" in src
+        # via event.detail.parameters, the object configRequest exposes.
+        assert "parameters" in src
+
+    @staticmethod
+    def _edit_client(enforce_csrf_checks=False):
+        """A Client with a valid EditView session grant, plus its submission."""
+        sub = ServiceSubmissionFactory(biotools_url="")
+        key_obj, _ = APIKeyFactory.create_with_plaintext(submission=sub)
+        client = Client(enforce_csrf_checks=enforce_csrf_checks)
+        session = client.session
+        session["edit_grants"] = {str(sub.pk): str(key_obj.pk)}
+        session.save()
+        return client, sub
+
+
+# ===========================================================================
+# Session unlock scoping (kiosk hardening)
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestSessionExpiry:
+    """Entering an API key unlocks the web edit form for the browsing session
+    (the grant is session-lived, re-verified every request). The exposure window
+    on a shared/kiosk machine is bounded by the session, so these properties
+    must hold: the session cookie dies on browser close, and SESSION_COOKIE_AGE
+    is the server-side cap. Removing SESSION_EXPIRE_AT_BROWSER_CLOSE would
+    silently widen that window — these tests guard against that regression."""
+
+    def test_session_expire_at_browser_close_is_enabled(self, settings):
+        assert settings.SESSION_EXPIRE_AT_BROWSER_CLOSE is True
+        # The session must still have a finite server-side cap.
+        assert settings.SESSION_COOKIE_AGE and settings.SESSION_COOKIE_AGE > 0
+
+    def test_unlock_session_cookie_is_browser_scoped(self, client):
+        """After a successful key entry (which records the edit grant), the
+        sessionid cookie must be a browser-session cookie — no Max-Age/Expires —
+        so the unlock cannot outlive the browser session on a shared machine."""
+        sub = ServiceSubmissionFactory(biotools_url="")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+
+        resp = client.post(reverse("submissions:update"), {"api_key": plaintext})
+        assert resp.status_code == 302
+
+        cookie = resp.cookies.get("sessionid")
+        assert cookie is not None, "key entry must establish a session"
+        assert cookie["max-age"] in ("", None)
+        assert cookie["expires"] in ("", None)
+
+
+# ===========================================================================
+# Sensitive-page caching (no-store)
+# ===========================================================================
+
+
+@pytest.mark.django_db
+class TestSensitivePageCaching:
+    """The success page renders the one-time API key, and the edit page is an
+    authenticated form; neither may be cached (disk cache / bfcache could
+    re-expose them on a shared machine after the session ends)."""
+
+    def test_success_page_is_not_cacheable(self, client):
+        import uuid
+
+        sub_id = str(uuid.uuid4())
+        session = client.session
+        session["pending_keys"] = {sub_id: "one-time-key"}
+        session.save()
+
+        resp = client.get(reverse("submissions:success", args=[sub_id]))
+        assert resp.status_code == 200
+        assert "no-store" in resp.headers.get("Cache-Control", "")
+
+    def test_edit_page_is_not_cacheable(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        key_obj, _ = APIKeyFactory.create_with_plaintext(submission=sub)
+        client = Client()
+        session = client.session
+        session["edit_grants"] = {str(sub.pk): str(key_obj.pk)}
+        session.save()
+
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
+        assert resp.status_code == 200
+        assert "no-store" in resp.headers.get("Cache-Control", "")
 
 
 # ===========================================================================

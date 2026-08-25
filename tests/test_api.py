@@ -119,6 +119,15 @@ class TestSubmissionCreate:
         resp = api_client.post("/api/v1/submissions/", _valid_payload(), format="json")
         assert resp.status_code == 201
 
+    def test_create_sets_service_name(self, api_client):
+        """Regression guard: service_name is writable on create (the lock only
+        applies to updates)."""
+        payload = _valid_payload()
+        payload["service_name"] = "Fresh Service Name"
+        resp = api_client.post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 201
+        assert resp.json()["service_name"] == "Fresh Service Name"
+
     def test_create_response_contains_api_key(self, api_client):
         resp = api_client.post("/api/v1/submissions/", _valid_payload(), format="json")
         data = resp.json()
@@ -377,6 +386,85 @@ class TestSubmissionUpdate:
         assert resp.status_code == 200
         sub.refresh_from_db()
         assert sub.kpi_start_year == "2025"
+
+    def test_patch_cannot_change_service_name(self, api_client):
+        """service_name is locked after submission: a PATCH that tries to change
+        it succeeds (200) but keeps the original name and other changes apply."""
+        sub = ServiceSubmissionFactory(service_name="Original API Name")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"service_name": "Hacked Name", "comments": "changed"},
+            format="json",
+        )
+        assert resp.status_code == 200
+        sub.refresh_from_db()
+        assert sub.service_name == "Original API Name"  # name locked
+        assert sub.comments == "changed"  # other change applied
+
+    def test_patch_changing_name_returns_warning(self, api_client):
+        """A PATCH attempting to change the name must include a note explaining
+        the change was not applied."""
+        sub = ServiceSubmissionFactory(service_name="Original API Name")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"service_name": "Hacked Name"},
+            format="json",
+        )
+        assert resp.status_code == 200
+        warnings = resp.json().get("warnings", [])
+        assert any("cannot be changed" in w.lower() for w in warnings)
+
+    def test_patch_same_service_name_no_warning(self, api_client):
+        """Echoing the unchanged name (common in round-trips) must NOT warn."""
+        sub = ServiceSubmissionFactory(service_name="Original API Name")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"service_name": "Original API Name", "comments": "x"},
+            format="json",
+        )
+        assert resp.status_code == 200
+        assert resp.json().get("warnings", []) == []
+
+    def test_patch_same_name_different_unicode_form_no_warning(self, api_client):
+        """Echoing the same name in a different Unicode normalisation (or with
+        surrounding whitespace) must be treated as unchanged — no warning. The
+        stored value is NFC-normalised on save, so the comparison must normalise
+        the incoming value the same way."""
+        import unicodedata
+
+        stored = unicodedata.normalize("NFC", "Café Tool")
+        sub = ServiceSubmissionFactory(service_name=stored)
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+
+        decomposed = unicodedata.normalize("NFD", "Café Tool")
+        assert decomposed != stored  # sanity: genuinely different byte strings
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"service_name": f"  {decomposed}  ", "comments": "x"},
+            format="json",
+        )
+        assert resp.status_code == 200
+        assert resp.json().get("warnings", []) == []
+
+    def test_patch_without_service_name_no_warning(self, api_client):
+        """A PATCH that never mentions service_name must not warn."""
+        sub = ServiceSubmissionFactory(service_name="Original API Name")
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api_client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        resp = api_client.patch(
+            f"/api/v1/submissions/{sub.pk}/",
+            {"comments": "just a comment"},
+            format="json",
+        )
+        assert resp.status_code == 200
+        assert "warnings" not in resp.json()
 
     def test_patch_rejected_without_auth(self, api_client):
         sub = ServiceSubmissionFactory()
@@ -1196,6 +1284,13 @@ class TestOpenAPIEndpoints:
         content = resp.content
         assert b"internal_contact_email" in content
         assert b"internal_contact_name" in content
+
+    def test_schema_documents_patch_warnings(self, api_client):
+        """The PATCH response schema must document the optional `warnings` field
+        (e.g. a rejected service_name change), not only the prose docs."""
+        resp = api_client.get("/api/schema/")
+        assert b"SubmissionUpdateResponse" in resp.content
+        assert b"warnings" in resp.content
 
 
 # ===========================================================================

@@ -219,8 +219,12 @@ When a submitter edits their submission via `/update/`, they see the same form s
 | **Completion progress** | Real-time percentage showing required field completion                       |
 | **Danger Zone card**    | Only shown for non-deprecated services; allows marking service as deprecated |
 | **Deprecated badge**    | Shows if service is deprecated; only admins can reverse                      |
+| **Locked service name** | The **Name of the Service** field is greyed out and cannot be changed after the initial submission; all other fields remain editable |
 
 The sidebar is shared between registration (`/register/`) and edit (`/update/`) forms.
+
+!!! note "Admins can change a locked service name"
+The service name lock applies only to the submitter-facing edit form and the REST API. In this admin change form the **Service name** field (fieldset **B**) stays fully editable, so an administrator can correct a name on a submitter's behalf.
 
 !!! note "Status is read-only"
 The `Status` field is displayed for information only — it cannot be edited directly. All status transitions are made via the **Status action buttons** panel in the same fieldset (see below).
@@ -277,7 +281,7 @@ and is reserved for a future "save as draft" feature.
 
 When a submitter edits an approved service (via the update form or REST API), the platform determines whether to reset the status to `submitted`:
 
-- **Exempt fields** (configured in `site.toml [submission] no_reset_fields`) do not trigger a reset. By default these are: `logo`, `github_url`, `biotools_url`, `fairsharing_url`, `edam_topics`, `edam_operations`, etc.
+- **Exempt fields** (configured in `site.toml [submission] no_reset_fields`) do not trigger a reset. The shipped default set covers supplementary fields: the external links, EDAM annotations, keywords, publications, contact fields, KPI fields, and `comments`. See `no_reset_fields` in `config/site.toml` for the authoritative list.
 - **Any non-exempt field change** resets status to `submitted` and clears maturity tags. The submitter's update email includes a lifecycle notice: *"Because one or more core service fields were modified, your service registration has been reset to Submitted…"*
 - **Exempt-only edits** (e.g. uploading a logo, updating EDAM annotations) preserve the `approved` status and maturity tags. The submitter receives the normal diff email with no lifecycle notice.
 
@@ -693,10 +697,12 @@ Each field shows two types of guidance:
 service_name:
   help: 'Official name of the service.'
   tooltip: 'Use the canonical name as it appears on your website.'
+  locked_note: 'The service name cannot be changed after submission. Contact the registry team if it must be corrected.'
 ```
 
 - Set `help: ""` to hide the help text for a field.
 - Set `tooltip: ""` to hide the info icon for a field.
+- `locked_note` (currently used only for `service_name`) is appended to the field's help text on the **edit** form, where the field is locked. It is not shown on the registration form. Edit it to reword the lock explanation shown to submitters.
 
 ### Deploying form text changes
 
@@ -966,7 +972,7 @@ result = cleanup_stale_drafts()
 print(f"Removed {result} stale session(s)")
 ```
 
-The beat schedule is defined in `settings.py` under `CELERY_BEAT_SCHEDULE`. See [Celery beat tasks](#celery-beat-tasks) for monitoring.
+The beat schedule is defined in `settings.py` under `CELERY_BEAT_SCHEDULE`. See [Monitoring → Celery / Task Queue](#celery-task-queue) for monitoring.
 
 #### Client-side localStorage drafts
 

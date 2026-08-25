@@ -59,6 +59,8 @@ Each submission gets a **write-scope** API key by default, which allows full edi
 
 > **Note:** If your submission was already approved and you edit it, the status will reset to "Submitted" for re-review.
 
+> **The service name is fixed after submission.** On the edit form the **Name of the Service** field is greyed out and cannot be changed — every other field remains editable. If the name genuinely needs correcting, contact the de.NBI administration office; only they can change it.
+
 !!! info "Security notice"
 If you receive a "your registration has been updated" email that you did not initiate, contact the de.NBI administration office immediately. The email will include instructions at the bottom.
 
@@ -70,7 +72,7 @@ When the Service Catalogue is enabled by the site administrators, a **Service Ca
 
 The catalogue at **/catalogue/** lists all approved services and supports:
 
-- **Search** — type in the search box to find services by name, description, host institute, or keywords (debounced, no page reload)
+- **Search** — type in the search box to find services by service name, category, service centre, or responsible PI name — first name, last name, or the full "First Last" name (debounced, no page reload)
 - **Filter** — use the sidebar to filter by category or service centre (multi-select, combined with AND across dimensions)
 - **Sort** — choose A→Z, Z→A, recently updated, or recently added
 - **Group** — group results by category, service centre, or responsible PI (accordion sections)

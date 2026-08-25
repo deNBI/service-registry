@@ -126,35 +126,64 @@ class TestRegisterView:
         resp = client.post(reverse("submissions:register"), data=data)
         # Should redirect to success page
         assert resp.status_code == 302
-        assert resp["Location"] == reverse("submissions:success")
+        from apps.submissions.models import ServiceSubmission
+
+        sub = ServiceSubmission.objects.get(service_name="Unique Test Service XYZ")
+        assert resp["Location"] == reverse("submissions:success", args=[sub.pk])
 
     def test_success_page_shows_api_key(self, client):
         """SuccessView must display the API key from session, then clear it."""
+        import uuid
+
+        sub_id = str(uuid.uuid4())
         session = client.session
-        session["pending_api_key"] = "test-api-key-value"
-        session["pending_submission_id"] = "test-uuid"
+        session["pending_keys"] = {sub_id: "test-api-key-value"}
         session.save()
 
-        resp = client.get(reverse("submissions:success"))
+        resp = client.get(reverse("submissions:success", args=[sub_id]))
         assert resp.status_code == 200
         assert b"test-api-key-value" in resp.content
 
     def test_success_page_without_session_redirects(self, client):
         """Navigating directly to success without submitting must redirect."""
-        resp = client.get(reverse("submissions:success"))
+        import uuid
+
+        resp = client.get(reverse("submissions:success", args=[uuid.uuid4()]))
         assert resp.status_code == 302
 
     def test_success_page_clears_key_from_session(self, client):
         """API key must be removed from session after success page renders."""
+        import uuid
+
+        sub_id = str(uuid.uuid4())
         session = client.session
-        session["pending_api_key"] = "one-time-key"
-        session["pending_submission_id"] = "some-uuid"
+        session["pending_keys"] = {sub_id: "one-time-key"}
         session.save()
 
-        client.get(reverse("submissions:success"))
+        client.get(reverse("submissions:success", args=[sub_id]))
         # Refresh session
         session = client.session
-        assert "pending_api_key" not in session
+        assert sub_id not in session.get("pending_keys", {})
+
+    def test_two_registrations_each_success_page_shows_own_key(self, client):
+        """Regression: registering two services in two tabs of one browser must
+        not lose either one-time API key — each success URL shows its own
+        submission's key, independent of which registration happened last."""
+        import uuid
+
+        id_a, id_b = str(uuid.uuid4()), str(uuid.uuid4())
+        session = client.session
+        session["pending_keys"] = {id_a: "key-for-a", id_b: "key-for-b"}
+        session.save()
+
+        resp_a = client.get(reverse("submissions:success", args=[id_a]))
+        assert resp_a.status_code == 200
+        assert b"key-for-a" in resp_a.content
+
+        # A's key consumed; B's key still retrievable in its own tab.
+        resp_b = client.get(reverse("submissions:success", args=[id_b]))
+        assert resp_b.status_code == 200
+        assert b"key-for-b" in resp_b.content
 
     def test_post_valid_with_logo_creates_submission(self, client):
         """Registration with a valid logo file must succeed and store the logo."""
@@ -269,10 +298,10 @@ class TestRegisterView:
         }
         resp = client.post(reverse("submissions:register"), data=data)
         assert resp.status_code == 302
-        assert resp["Location"] == reverse("submissions:success")
         from apps.submissions.models import ServiceSubmission
 
         sub = ServiceSubmission.objects.get(service_name="Test Service URL Contact")
+        assert resp["Location"] == reverse("submissions:success", args=[sub.pk])
         assert sub.public_contact_email == "https://support.example.com/helpdesk"
         assert sub.public_contact_is_url is True
 
@@ -365,7 +394,7 @@ class TestUpdateView:
 
         resp = client.post(reverse("submissions:update"), {"api_key": plaintext})
         assert resp.status_code == 302
-        assert resp["Location"] == reverse("submissions:edit")
+        assert resp["Location"] == reverse("submissions:edit", args=[sub.pk])
 
     def test_revoked_key_treated_as_invalid(self, client):
         sub = ServiceSubmissionFactory()
@@ -384,19 +413,19 @@ class TestUpdateView:
 @pytest.mark.django_db
 class TestEditView:
     def test_edit_without_session_redirects(self, client):
-        """Accessing edit without a valid session key should redirect to update."""
-        resp = client.get(reverse("submissions:edit"))
+        """Accessing edit without a valid session grant should redirect to update."""
+        sub = ServiceSubmissionFactory()
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
         assert resp.status_code == 302
 
     def test_edit_with_valid_session_shows_form(self, client):
         sub = ServiceSubmissionFactory()
         key_obj, _ = APIKeyFactory.create_with_plaintext(submission=sub)
         session = client.session
-        session["edit_key_id"] = str(key_obj.pk)
-        session["edit_submission_id"] = str(sub.pk)
+        session["edit_grants"] = {str(sub.pk): str(key_obj.pk)}
         session.save()
 
-        resp = client.get(reverse("submissions:edit"))
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
         assert resp.status_code == 200
         assert sub.service_name.encode() in resp.content
 
@@ -446,9 +475,127 @@ class TestEditView:
     def _setup_edit_session(self, client, sub):
         key_obj, _ = APIKeyFactory.create_with_plaintext(submission=sub)
         session = client.session
-        session["edit_key_id"] = str(key_obj.pk)
-        session["edit_submission_id"] = str(sub.pk)
+        grants = session.get("edit_grants", {})
+        grants[str(sub.pk)] = str(key_obj.pk)
+        session["edit_grants"] = grants
         session.save()
+
+    def test_edit_get_renders_service_name_locked(self, client):
+        """The edit form must render service_name as disabled (non-editable) and
+        show an inline note explaining it cannot be changed after submission."""
+        import re
+
+        sub = ServiceSubmissionFactory(service_name="Locked Name", biotools_url="")
+        self._setup_edit_session(client, sub)
+
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
+        assert resp.status_code == 200
+        html = resp.content.decode()
+
+        tag = re.search(r'<input[^>]*name="service_name"[^>]*>', html)
+        assert tag is not None, "service_name input not found"
+        assert "disabled" in tag.group(0), "service_name input must be disabled"
+        assert "cannot be changed" in html.lower()
+
+    def test_edit_post_ignores_tampered_service_name(self, client):
+        """A POST that tampers with service_name must not change the name, while
+        other (permitted) field changes still apply."""
+        sub = ServiceSubmissionFactory(
+            service_name="Real Name", comments="old", biotools_url=""
+        )
+        self._setup_edit_session(client, sub)
+
+        data = self._edit_form_data(
+            sub, service_name="Injected Name", comments="new comment"
+        )
+        resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
+        assert resp.status_code == 302
+
+        sub.refresh_from_db()
+        assert sub.service_name == "Real Name"  # name locked
+        assert sub.comments == "new comment"  # other change applied
+
+    def test_edit_two_tabs_does_not_cross_overwrite(self, client):
+        """Regression: two submissions open in two tabs of one browser must each
+        save to their own submission. The POST target is bound to the URL, not to
+        whichever API key was looked up last in the shared session."""
+        sub_a = ServiceSubmissionFactory(
+            service_name="Service Alpha", comments="alpha-original", biotools_url=""
+        )
+        sub_b = ServiceSubmissionFactory(
+            service_name="Service Beta", comments="beta-original", biotools_url=""
+        )
+        key_a, _ = APIKeyFactory.create_with_plaintext(submission=sub_a)
+        key_b, _ = APIKeyFactory.create_with_plaintext(submission=sub_b)
+
+        # Tab 1 unlocked A, then Tab 2 unlocked B (B authorised last).
+        session = client.session
+        session["edit_grants"] = {
+            str(sub_a.pk): str(key_a.pk),
+            str(sub_b.pk): str(key_b.pk),
+        }
+        session.save()
+
+        # Tab 1 (still showing A) submits an edit to A.
+        data = self._edit_form_data(sub_a, comments="alpha EDITED")
+        resp = client.post(reverse("submissions:edit", args=[sub_a.pk]), data=data)
+        assert resp.status_code == 302
+
+        sub_a.refresh_from_db()
+        sub_b.refresh_from_db()
+        assert sub_a.comments == "alpha EDITED"
+        assert sub_b.comments == "beta-original"  # B must be untouched
+
+    def test_edit_grant_pointing_to_foreign_key_is_rejected(self, client):
+        """Defense in depth: if the session's edit_grants maps a submission id to
+        a key that belongs to a *different* submission (only possible via a
+        server bug or tampered store), the view must refuse rather than serve the
+        wrong submission."""
+        sub_a = ServiceSubmissionFactory(biotools_url="")
+        sub_b = ServiceSubmissionFactory(biotools_url="")
+        key_a, _ = APIKeyFactory.create_with_plaintext(submission=sub_a)
+        # Tampered map: B's id -> A's key.
+        session = client.session
+        session["edit_grants"] = {str(sub_b.pk): str(key_a.pk)}
+        session.save()
+
+        resp = client.get(reverse("submissions:edit", args=[sub_b.pk]))
+        assert resp.status_code == 302
+        assert reverse("submissions:update") in resp["Location"]
+
+    def test_edit_post_to_unauthorised_submission_redirects(self, client):
+        """A POST to a submission not granted in this session must not save."""
+        sub_a = ServiceSubmissionFactory(biotools_url="")
+        sub_b = ServiceSubmissionFactory(comments="untouched", biotools_url="")
+        key_a, _ = APIKeyFactory.create_with_plaintext(submission=sub_a)
+        session = client.session
+        session["edit_grants"] = {str(sub_a.pk): str(key_a.pk)}
+        session.save()
+
+        data = self._edit_form_data(sub_b, comments="hijacked")
+        resp = client.post(reverse("submissions:edit", args=[sub_b.pk]), data=data)
+        assert resp.status_code == 302
+        sub_b.refresh_from_db()
+        assert sub_b.comments == "untouched"
+
+    def test_edit_save_keeps_grant_for_further_edits(self, client):
+        """Entering the key unlocks editing for the whole session: after a
+        successful save the grant survives, so the submitter (or a second tab on
+        the same submission) can keep editing without re-entering the API key.
+        The session itself expires on browser close / SESSION_COOKIE_AGE."""
+        sub = ServiceSubmissionFactory(biotools_url="")
+        self._setup_edit_session(client, sub)
+
+        resp = client.post(
+            reverse("submissions:edit", args=[sub.pk]),
+            self._edit_form_data(sub, comments="Edited"),
+        )
+        assert resp.status_code == 302
+
+        # Grant still present, and the edit form still loads without a re-prompt.
+        assert str(sub.pk) in client.session.get("edit_grants", {})
+        resp2 = client.get(reverse("submissions:edit", args=[sub.pk]))
+        assert resp2.status_code == 200
 
     def test_edit_with_logo_upload_succeeds(self, client):
         """Uploading a valid logo via the edit view must persist the logo."""
@@ -459,7 +606,7 @@ class TestEditView:
             "logo.png", _make_png_bytes(), content_type="image/png"
         )
         data = self._edit_form_data(sub, logo=logo)
-        resp = client.post(reverse("submissions:edit"), data=data)
+        resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         assert resp.status_code == 302
         sub.refresh_from_db()
         assert sub.logo  # logo was saved
@@ -473,7 +620,7 @@ class TestEditView:
             "logo.png", b"not an image", content_type="image/png"
         )
         data = self._edit_form_data(sub, logo=bad_logo)
-        resp = client.post(reverse("submissions:edit"), data=data)
+        resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         assert resp.status_code == 422
         sub.refresh_from_db()
         assert not sub.logo  # logo was not saved
@@ -482,16 +629,31 @@ class TestEditView:
         """Posting _deprecate sets status=deprecated and redirects."""
         sub = ServiceSubmissionFactory(status="approved")
         self._setup_edit_session(client, sub)
-        resp = client.post(reverse("submissions:edit"), {"_deprecate": "1"})
+        resp = client.post(
+            reverse("submissions:edit", args=[sub.pk]), {"_deprecate": "1"}
+        )
         assert resp.status_code == 302
         sub.refresh_from_db()
         assert sub.status == "deprecated"
+
+    def test_deprecate_keeps_grant(self, client):
+        """Deprecating leaves the edit grant in place — the unlock is session-
+        lived, not single-use. The session expires on browser close /
+        SESSION_COOKIE_AGE, which is what bounds the unlock."""
+        sub = ServiceSubmissionFactory(status="approved", biotools_url="")
+        self._setup_edit_session(client, sub)
+
+        client.post(reverse("submissions:edit", args=[sub.pk]), {"_deprecate": "1"})
+
+        assert str(sub.pk) in client.session.get("edit_grants", {})
 
     def test_deprecate_is_idempotent(self, client):
         """Posting _deprecate on an already-deprecated service is harmless."""
         sub = ServiceSubmissionFactory(status="deprecated")
         self._setup_edit_session(client, sub)
-        resp = client.post(reverse("submissions:edit"), {"_deprecate": "1"})
+        resp = client.post(
+            reverse("submissions:edit", args=[sub.pk]), {"_deprecate": "1"}
+        )
         assert resp.status_code == 302
         sub.refresh_from_db()
         assert sub.status == "deprecated"
@@ -500,7 +662,7 @@ class TestEditView:
         """Submitter deprecation records a SubmissionChangeLog entry with changed_by=submitter."""
         sub = ServiceSubmissionFactory(status="approved")
         self._setup_edit_session(client, sub)
-        client.post(reverse("submissions:edit"), {"_deprecate": "1"})
+        client.post(reverse("submissions:edit", args=[sub.pk]), {"_deprecate": "1"})
         log = SubmissionChangeLog.objects.get(submission=sub)
         assert log.changed_by == "submitter"
         assert log.changes[0]["field"] == "status"
@@ -510,7 +672,7 @@ class TestEditView:
         """Submitter deprecation writes last_change_summary on the submission."""
         sub = ServiceSubmissionFactory(status="approved")
         self._setup_edit_session(client, sub)
-        client.post(reverse("submissions:edit"), {"_deprecate": "1"})
+        client.post(reverse("submissions:edit", args=[sub.pk]), {"_deprecate": "1"})
         sub.refresh_from_db()
         assert sub.last_change_summary is not None
         assert sub.last_change_summary["changed_by"] == "submitter"
@@ -520,7 +682,7 @@ class TestEditView:
         """Re-deprecating an already-deprecated service creates no new changelog entry."""
         sub = ServiceSubmissionFactory(status="deprecated")
         self._setup_edit_session(client, sub)
-        client.post(reverse("submissions:edit"), {"_deprecate": "1"})
+        client.post(reverse("submissions:edit", args=[sub.pk]), {"_deprecate": "1"})
         assert SubmissionChangeLog.objects.filter(submission=sub).count() == 0
 
     def test_deprecate_records_maturity_tag_clearing(self, client):
@@ -531,7 +693,7 @@ class TestEditView:
             secondary_maturity_tags=["unstable"],
         )
         self._setup_edit_session(client, sub)
-        client.post(reverse("submissions:edit"), {"_deprecate": "1"})
+        client.post(reverse("submissions:edit", args=[sub.pk]), {"_deprecate": "1"})
         log = SubmissionChangeLog.objects.get(submission=sub)
         fields = [c["field"] for c in log.changes]
         assert "primary_maturity_tag" in fields
@@ -543,7 +705,7 @@ class TestEditView:
         """GET edit page for a deprecated service shows the badge, not the danger zone."""
         sub = ServiceSubmissionFactory(status="deprecated")
         self._setup_edit_session(client, sub)
-        resp = client.get(reverse("submissions:edit"))
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
         assert resp.status_code == 200
         content = resp.content.decode()
         assert "Deprecated" in content
@@ -553,7 +715,7 @@ class TestEditView:
         """GET edit page for an active service shows the danger zone deprecate button."""
         sub = ServiceSubmissionFactory(status="approved")
         self._setup_edit_session(client, sub)
-        resp = client.get(reverse("submissions:edit"))
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
         assert resp.status_code == 200
         assert b"Deprecate this service" in resp.content
 
@@ -564,11 +726,13 @@ class TestEditView:
         settings.ALTCHA_HMAC_KEY = ""  # disable CAPTCHA in tests
         settings.CELERY_TASK_ALWAYS_EAGER = True
 
-        sub = ServiceSubmissionFactory(service_name="Before Name", comments="")
+        sub = ServiceSubmissionFactory(comments="")
         self._setup_edit_session(client, sub)
 
-        data = self._edit_form_data(sub, service_name="After Name")
-        resp = client.post(reverse("submissions:edit"), data=data)
+        data = self._edit_form_data(
+            sub, comments="A newly added comment on this submission."
+        )
+        resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         assert resp.status_code == 302
 
         sub.refresh_from_db()
@@ -577,26 +741,30 @@ class TestEditView:
         assert summary["changed_by"] == "submitter"
         assert "changed_at" in summary
         fields = {ch["field"] for ch in summary["changes"]}
-        assert "service_name" in fields
+        assert "comments" in fields
 
     def test_edit_post_old_and_new_values_recorded(self, client, settings):
         settings.ALTCHA_HMAC_KEY = ""
         settings.CELERY_TASK_ALWAYS_EAGER = True
 
-        sub = ServiceSubmissionFactory(service_name="Old Name")
+        old_desc = "The original service description, long enough to pass validation."
+        new_desc = (
+            "The updated service description, long enough to pass validation too."
+        )
+        sub = ServiceSubmissionFactory(service_description=old_desc)
         self._setup_edit_session(client, sub)
 
-        data = self._edit_form_data(sub, service_name="New Name")
-        client.post(reverse("submissions:edit"), data=data)
+        data = self._edit_form_data(sub, service_description=new_desc)
+        client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         sub.refresh_from_db()
 
-        name_change = next(
+        desc_change = next(
             ch
             for ch in sub.last_change_summary["changes"]
-            if ch["field"] == "service_name"
+            if ch["field"] == "service_description"
         )
-        assert name_change["old"] == "Old Name"
-        assert name_change["new"] == "New Name"
+        assert desc_change["old"] == old_desc
+        assert desc_change["new"] == new_desc
 
     def test_edit_post_no_change_does_not_write_summary(self, client, settings):
         """Posting without changing any field leaves last_change_summary None."""
@@ -608,7 +776,7 @@ class TestEditView:
         self._setup_edit_session(client, sub)
 
         data = self._edit_form_data(sub)  # no overrides — nothing changes
-        client.post(reverse("submissions:edit"), data=data)
+        client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         sub.refresh_from_db()
         assert sub.last_change_summary is None
 
@@ -630,7 +798,7 @@ class TestEditView:
             "logo.png", _make_png_bytes(), content_type="image/png"
         )
         data = self._edit_form_data(sub, logo=logo)
-        client.post(reverse("submissions:edit"), data=data)
+        client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         sub.refresh_from_db()
 
         # The summary must exist (logo changed) but must only mention the logo.
@@ -651,12 +819,16 @@ class TestEditView:
         settings.CELERY_TASK_EAGER_PROPAGATES = True
 
         sub = ServiceSubmissionFactory(
-            service_name="Old", internal_contact_email="pi@example.com"
+            service_description="An original description long enough to pass validation.",
+            internal_contact_email="pi@example.com",
         )
         self._setup_edit_session(client, sub)
 
-        data = self._edit_form_data(sub, service_name="New")
-        client.post(reverse("submissions:edit"), data=data)
+        data = self._edit_form_data(
+            sub,
+            service_description="An updated description long enough to pass validation.",
+        )
+        client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
 
         recipients = [addr for m in mail.outbox for addr in m.to]
         assert "pi@example.com" in recipients
@@ -675,14 +847,18 @@ class TestEditView:
         )
         self._setup_edit_session(client, sub)
         data = self._edit_form_data(sub, **overrides)
-        client.post(reverse("submissions:edit"), data=data)
+        client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         sub.refresh_from_db()
         return sub
 
     def test_edit_approved_non_exempt_resets_status(self, client, settings):
         """Editing a non-exempt field resets an approved submission to submitted."""
         settings.SUBMISSION_NO_RESET_FIELDS = ["logo", "github_url"]
-        sub = self._edit_approved(client, settings, service_name="Changed Name")
+        sub = self._edit_approved(
+            client,
+            settings,
+            service_description="A changed description that is definitely long enough.",
+        )
         assert sub.status == "submitted"
 
     def test_edit_approved_non_exempt_clears_maturity_tags(self, client, settings):
@@ -699,9 +875,12 @@ class TestEditView:
             secondary_maturity_tags=["unstable"],
         )
         self._setup_edit_session(client, sub)
-        # Changing service_name (non-exempt) → status reset + tag clear
-        data = self._edit_form_data(sub, service_name="New Name")
-        client.post(reverse("submissions:edit"), data=data)
+        # Changing service_description (non-exempt) → status reset + tag clear
+        data = self._edit_form_data(
+            sub,
+            service_description="A changed description that is definitely long enough.",
+        )
+        client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         sub.refresh_from_db()
         assert sub.status == "submitted"
         assert not sub.primary_maturity_tag
@@ -722,7 +901,7 @@ class TestEditView:
             client,
             settings,
             github_url="https://github.com/org/new-repo",
-            service_name="Also Changed",
+            service_description="A changed description that is definitely long enough.",
         )
         assert sub.status == "submitted"
 
@@ -751,7 +930,7 @@ class TestEditView:
         )
         self._setup_edit_session(client, sub)
         data = self._edit_form_data(sub, github_url="https://github.com/org/new-repo")
-        client.post(reverse("submissions:edit"), data=data)
+        client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         sub.refresh_from_db()
         assert sub.status == "approved"
         assert sub.primary_maturity_tag == "mature"
@@ -785,7 +964,7 @@ class TestEditView:
         # will include service_description, but after clean() the value is identical
         # to the DB value.  The status must NOT be reset.
         data = self._edit_form_data(sub, service_description="A" * 200 + "  ")
-        resp = client.post(reverse("submissions:edit"), data=data)
+        resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         assert resp.status_code == 302
         sub.refresh_from_db()
         assert sub.status == "approved", (
@@ -812,7 +991,7 @@ class TestEditView:
                 "logo.png", _make_png_bytes(), content_type="image/png"
             ),
         )
-        resp = client.post(reverse("submissions:edit"), data=data)
+        resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         assert resp.status_code == 302
         sub.refresh_from_db()
         assert sub.status == "approved"
@@ -840,7 +1019,7 @@ class TestEditView:
                 "logo.png", _make_png_bytes(), content_type="image/png"
             ),
         )
-        resp = client.post(reverse("submissions:edit"), data=data)
+        resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         assert resp.status_code == 302
         sub.refresh_from_db()
         assert sub.status == "approved"
@@ -869,9 +1048,9 @@ class TestEditView:
             logo=SimpleUploadedFile(
                 "logo.png", _make_png_bytes(), content_type="image/png"
             ),
-            service_name="Changed Name",
+            service_description="A changed description that is definitely long enough.",
         )
-        resp = client.post(reverse("submissions:edit"), data=data)
+        resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         assert resp.status_code == 302
         sub.refresh_from_db()
         assert sub.status == "submitted"
@@ -883,7 +1062,7 @@ class TestEditView:
         settings.FORM_DRAFT_TTL_DAYS = 3
         sub = ServiceSubmissionFactory()
         self._setup_edit_session(client, sub)
-        resp = client.get(reverse("submissions:edit"))
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
         assert resp.status_code == 200
         assert b'data-draft-ttl-days="3"' in resp.content
 
@@ -912,7 +1091,7 @@ class TestEditView:
         )
         self._setup_edit_session(client, sub)
         data = self._edit_form_data(sub, **{exempt_field: new_value})
-        resp = client.post(reverse("submissions:edit"), data=data)
+        resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         assert resp.status_code == 302
         sub.refresh_from_db()
         assert sub.status == "approved", (
@@ -1147,8 +1326,7 @@ class TestAltchaVerification:
     def _setup_edit_altcha_session(self, client, sub):
         key_obj, _ = APIKeyFactory.create_with_plaintext(submission=sub)
         session = client.session
-        session["edit_key_id"] = str(key_obj.pk)
-        session["edit_submission_id"] = str(sub.pk)
+        session["edit_grants"] = {str(sub.pk): str(key_obj.pk)}
         session.save()
 
     def test_edit_post_without_altcha_returns_400_when_key_configured(self, client):
@@ -1159,7 +1337,7 @@ class TestAltchaVerification:
         self._setup_edit_altcha_session(client, sub)
         data = self._edit_submission_data(sub)
         with override_settings(ALTCHA_HMAC_KEY="test-hmac-key"):
-            resp = client.post(reverse("submissions:edit"), data=data)
+            resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         assert resp.status_code == 400
         assert b"CAPTCHA" in resp.content
 
@@ -1172,7 +1350,7 @@ class TestAltchaVerification:
         data = self._edit_submission_data(sub)
         data["altcha"] = "not-valid-base64-json"
         with override_settings(ALTCHA_HMAC_KEY="test-hmac-key"):
-            resp = client.post(reverse("submissions:edit"), data=data)
+            resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         assert resp.status_code == 400
         assert b"CAPTCHA" in resp.content
 
@@ -1184,7 +1362,7 @@ class TestAltchaVerification:
         self._setup_edit_altcha_session(client, sub)
         data = self._edit_submission_data(sub)
         with override_settings(ALTCHA_HMAC_KEY=""):
-            resp = client.post(reverse("submissions:edit"), data=data)
+            resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         assert resp.status_code == 302
 
     def test_edit_post_with_valid_solved_altcha_succeeds(self, client):
@@ -1215,7 +1393,7 @@ class TestAltchaVerification:
         data = self._edit_submission_data(sub)
         data["altcha"] = altcha_value
         with override_settings(ALTCHA_HMAC_KEY=hmac_key):
-            resp = client.post(reverse("submissions:edit"), data=data)
+            resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         assert resp.status_code == 302
 
     def test_register_captcha_failure_shows_error_message(self, client):
@@ -1297,7 +1475,7 @@ class TestAltchaVerification:
         data = self._edit_submission_data(sub)
         data["altcha"] = altcha_value
         with override_settings(ALTCHA_HMAC_KEY=hmac_key):
-            resp = client.post(reverse("submissions:edit"), data=data)
+            resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         assert resp.status_code == 400
         assert b"CAPTCHA" in resp.content
 
@@ -1327,7 +1505,7 @@ class TestAltchaVerification:
         sub = ServiceSubmissionFactory()
         self._setup_edit_altcha_session(client, sub)
         with override_settings(ALTCHA_HMAC_KEY="test-hmac-key"):
-            resp = client.get(reverse("submissions:edit"))
+            resp = client.get(reverse("submissions:edit", args=[sub.pk]))
         assert resp.status_code == 200
         assert b"<altcha-widget" in resp.content
 
@@ -1338,7 +1516,7 @@ class TestAltchaVerification:
         sub = ServiceSubmissionFactory()
         self._setup_edit_altcha_session(client, sub)
         with override_settings(ALTCHA_HMAC_KEY=""):
-            resp = client.get(reverse("submissions:edit"))
+            resp = client.get(reverse("submissions:edit", args=[sub.pk]))
         assert resp.status_code == 200
         assert b"<altcha-widget" not in resp.content
 
@@ -1382,15 +1560,14 @@ class TestEditViewScopeEnforcement:
     def _setup_session(self, client, sub, scope):
         key_obj = APIKeyFactory(submission=sub, scope=scope)
         session = client.session
-        session["edit_key_id"] = str(key_obj.pk)
-        session["edit_submission_id"] = str(sub.pk)
+        session["edit_grants"] = {str(sub.pk): str(key_obj.pk)}
         session.save()
 
     def test_read_only_key_can_load_edit_form(self, client):
         """GET /update/edit/ with a SCOPE_READ key must succeed (200)."""
         sub = ServiceSubmissionFactory()
         self._setup_session(client, sub, scope="read")
-        resp = client.get(reverse("submissions:edit"))
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
         assert resp.status_code == 200
 
     def test_read_only_key_cannot_post_edit_form(self, client):
@@ -1399,7 +1576,9 @@ class TestEditViewScopeEnforcement:
         original_name = sub.service_name
         self._setup_session(client, sub, scope="read")
 
-        resp = client.post(reverse("submissions:edit"), data={"service_name": "hacked"})
+        resp = client.post(
+            reverse("submissions:edit", args=[sub.pk]), data={"service_name": "hacked"}
+        )
         assert resp.status_code == 302
         assert reverse("submissions:update") in resp["Location"]
         sub.refresh_from_db()
@@ -1411,7 +1590,121 @@ class TestEditViewScopeEnforcement:
         self._setup_session(client, sub, scope="write")
         # A POST without a full valid form just re-renders the form (200 or 302),
         # the key point is that it does NOT redirect to the key-entry page.
-        resp = client.post(reverse("submissions:edit"), data={})
+        resp = client.post(reverse("submissions:edit", args=[sub.pk]), data={})
         assert resp.status_code not in (301, 302) or reverse(
             "submissions:update"
         ) not in resp.get("Location", "")
+
+
+@pytest.mark.django_db
+class TestServiceNameLockE2E:
+    """End-to-end web flow proving service_name is locked after the initial
+    submission: register → unlock with the issued API key → edit."""
+
+    def _register_data(self, service_name):
+        from django.utils import timezone
+        from tests.factories import (
+            PIFactory,
+            ServiceCategoryFactory,
+            ServiceCenterFactory,
+        )
+
+        cat = ServiceCategoryFactory()
+        center = ServiceCenterFactory()
+        pi = PIFactory()
+        return {
+            "date_of_entry": timezone.now().date().isoformat(),
+            "submitter_first_name": "Flow",
+            "submitter_last_name": "Tester",
+            "submitter_affiliation": "Test Institute",
+            "register_as_elixir": "False",
+            "service_name": service_name,
+            "service_description": "A sufficiently long description for the end-to-end lock test service.",
+            "year_established": 2023,
+            "service_categories": [cat.pk],
+            "is_toolbox": "False",
+            "toolbox_name": "",
+            "user_knowledge_required": "",
+            "publications_pmids": "12345678",
+            "responsible_pis": [pi.pk],
+            "associated_partner_note": "",
+            "host_institute": "Flow Institute",
+            "service_center": center.pk,
+            "public_contact_email": "flow@test.com",
+            "internal_contact_name": "Flow Contact",
+            "internal_contact_email": "flow-int@test.com",
+            "internal_contact_email_confirm": "flow-int@test.com",
+            "website_url": "https://flow-example.com",
+            "terms_of_use_url": "https://flow-example.com/tos",
+            "license_note": "MIT",
+            "github_url": "",
+            "biotools_url": "",
+            "fairsharing_url": "",
+            "other_registry_url": "",
+            "kpi_monitoring": "yes",
+            "kpi_start_year": "2023",
+            "keywords_uncited": "",
+            "keywords_seo": "",
+            "survey_participation": "True",
+            "comments": "",
+            "data_protection_consent": "True",
+        }
+
+    def test_register_unlock_then_name_is_locked_on_edit(self, client):
+        from apps.submissions.models import ServiceSubmission
+
+        original_name = "E2E Locked Service"
+
+        # 1. Register — service_name is set at creation.
+        resp = client.post(
+            reverse("submissions:register"), data=self._register_data(original_name)
+        )
+        assert resp.status_code == 302
+        sub = ServiceSubmission.objects.get(service_name=original_name)
+
+        # 2. Retrieve the one-time plaintext key the app stashed for the success page.
+        plaintext = client.session["pending_keys"][str(sub.id)]
+
+        # 3. Unlock the edit form by entering the API key.
+        resp = client.post(reverse("submissions:update"), {"api_key": plaintext})
+        assert resp.status_code == 302
+        assert resp["Location"] == reverse("submissions:edit", args=[sub.pk])
+
+        # 4. The edit form loads and shows the name as locked.
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
+        assert resp.status_code == 200
+        assert "cannot be changed" in resp.content.decode().lower()
+
+        # 5. Attempt to change the name (plus a permitted change) on save.
+        data = self._register_data(original_name)
+        data["service_name"] = "Renamed By Submitter"
+        data["comments"] = "an allowed edit"
+        resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
+        assert resp.status_code == 302
+
+        # 6. End state: name unchanged, permitted change applied.
+        sub.refresh_from_db()
+        assert sub.service_name == original_name
+        assert sub.comments == "an allowed edit"
+
+
+@pytest.mark.django_db
+class TestFooterRepositoryLink:
+    """The footer shows a GitHub source-code link when [links] repository is
+    configured, and omits it entirely when unset."""
+
+    def test_footer_shows_github_link_when_repository_set(self, client, settings):
+        settings.SITE_CONFIG = {
+            "links": {"repository": "https://github.com/test-org/test-repo"}
+        }
+        resp = client.get(reverse("submissions:register"))
+        assert resp.status_code == 200
+        html = resp.content.decode()
+        assert "https://github.com/test-org/test-repo" in html
+        assert "GitHub" in html
+
+    def test_footer_omits_github_link_when_repository_unset(self, client, settings):
+        settings.SITE_CONFIG = {"links": {}}
+        resp = client.get(reverse("submissions:register"))
+        assert resp.status_code == 200
+        assert "test-org/test-repo" not in resp.content.decode()

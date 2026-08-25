@@ -58,22 +58,22 @@ except ImportError:
 _STATIC_PAYLOAD: dict = {
     # ── Section A: General ────────────────────────────────────────────────
     "date_of_entry": "2026-04-10",
-    "submitter_first_name": "Sanjay",
-    "submitter_last_name": "Srikakulam",
-    "submitter_affiliation": "Forschungszentrum Jülich",
+    "submitter_first_name": "John",
+    "submitter_last_name": "Doe",
+    "submitter_affiliation": "Saarland University",
     "register_as_elixir": False,
     # ── Section B: Service master data ───────────────────────────────────
-    "service_name": "MetaProFi",
+    "service_name": "BioCypher",
     "service_description": (
-        "MetaProFi is a protein-family database tool designed for storing and "
+        "BioCypher is a protein-family database tool designed for storing and "
         "searching protein and nucleotide sequences using content-based Bloom "
         "filter indexing. It enables efficient large-scale sequence similarity "
-        "search across metagenomic and metatranscriptomic datasets. MetaProFi is "
+        "search across metagenomic and metatranscriptomic datasets. BioCypher is "
         "implemented in Python and supports multiple sequence formats. It is "
         "particularly suited for high-throughput environments where fast, "
         "memory-efficient queries over large sequence collections are required."
     ),
-    "year_established": 2022,
+    "year_established": 2024,
     # service_category_ids injected at runtime
     "is_toolbox": False,
     "toolbox_name": "",
@@ -95,8 +95,8 @@ _STATIC_PAYLOAD: dict = {
     "licenses": [
         "MIT"
     ],
-    "github_url": "https://github.com/kalininalab/metaprofi",
-    "biotools_url": "https://bio.tools/metaprofi",
+    "github_url": "https://github.com/sanjaysrikakulam/biocypher",
+    "biotools_url": "https://bio.tools/biocypher",
     "fairsharing_url": "",
     "other_registry_url": "",
     # ── Section E: KPIs ──────────────────────────────────────────────────
@@ -104,9 +104,9 @@ _STATIC_PAYLOAD: dict = {
     "kpi_start_year": "",
     # ── Section F: Discoverability ────────────────────────────────────────
     "keywords_uncited": "bloom filter, sequence search, metagenomics, protein families",
-    "keywords_seo": "metaprofi bloom filter protein sequence search tool bioinformatics",
+    "keywords_seo": "biocypher bloom filter protein sequence search tool bioinformatics",
     "survey_participation": True,
-    "comments": "Test submission created by submit_test_submission.py — safe to delete.",
+    "comments": "BioCypher Test submission created by submit_test_submission.py — safe to delete.",
     # ── Section G: Consent ───────────────────────────────────────────────
     "data_protection_consent": True,
 }

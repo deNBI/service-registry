@@ -195,6 +195,12 @@
       <a href="{{ PRIVACY_POLICY_URL }}" target="_blank">Privacy Policy</a> &middot;
       <a href="{{ IMPRINT_URL }}" target="_blank">Imprint</a> &middot;
       <a href="mailto:{{ CONTACT_EMAIL }}">Contact</a>
+      {% if REPOSITORY_URL %} &middot;
+      <a href="{{ REPOSITORY_URL }}" target="_blank" rel="noopener"
+         class="text-decoration-none" aria-label="Source code on GitHub">
+        <img src="{% static 'img/icons/github.svg' %}" alt="" width="14" height="14"
+             class="align-text-bottom me-1" aria-hidden="true">GitHub</a>
+      {% endif %}
     </div>
   </div>
 </footer>
@@ -207,8 +213,14 @@
 <script src="{% static 'js/htmx.min.js' %}"></script>
 
 <script>
-  document.body.setAttribute('hx-headers', '{"X-CSRFToken": "' + (document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '') + '"}');
+  document.body.setAttribute('hx-headers', '{"X-CSRFToken": "' + (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1] || '') + '"}');
 </script>
+
+<!-- Keep htmx CSRF tokens in sync with the live cookie -->
+<script src="{% static 'js/htmx-csrf-refresh.js' %}"></script>
+
+<!-- Keep native form CSRF tokens in sync with the live cookie at submit time -->
+<script src="{% static 'js/csrf-token-refresh.js' %}"></script>
 
 <script src="{% static 'js/edam-autocomplete.js' %}"></script>
 
