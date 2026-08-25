@@ -108,7 +108,7 @@ def group_services(services, group_by: str) -> list:
     elif group_by == "pi":
 
         def keys_fn(s):
-            return [str(p) for p in s.responsible_pis.all()] or ["Unknown"]
+            return [p.public_name for p in s.responsible_pis.all()] or ["Unknown"]
     else:
         return [("All Services", list(services))]
 

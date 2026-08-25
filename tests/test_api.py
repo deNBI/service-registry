@@ -24,6 +24,7 @@ from rest_framework.test import APIClient
 
 from tests.factories import (
     APIKeyFactory,
+    AssociatedPartnerPIFactory,
     BioToolsFunctionFactory,
     BioToolsRecordFactory,
     PIFactory,
@@ -848,6 +849,12 @@ class TestReferenceDataEndpoints:
         pi = next(p for p in resp.json() if p["last_name"] == "Lovelace")
         assert "display_name" in pi
         assert "Lovelace" in pi["display_name"]
+
+    def test_associated_partner_display_name_omits_form_prompt(self, staff_client):
+        AssociatedPartnerPIFactory(is_active=True)
+        resp = staff_client.get("/api/v1/pis/")
+        pi = next(p for p in resp.json() if p["is_associated_partner"])
+        assert pi["display_name"] == "Associated partner"
 
 
 # ===========================================================================
