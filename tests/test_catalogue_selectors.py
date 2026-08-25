@@ -6,6 +6,7 @@ from apps.catalogue.selectors import (
     group_services,
 )
 from tests.factories import (
+    AssociatedPartnerPIFactory,
     PIFactory,
     ServiceCategoryFactory,
     ServiceCenterFactory,
@@ -204,6 +205,20 @@ class TestGroupServices:
 
         assert "MultiPI Service" in [s.service_name for s in groups[str(pi_a)]]
         assert "MultiPI Service" in [s.service_name for s in groups[str(pi_b)]]
+
+    def test_group_by_pi_associated_partner_omits_form_prompt(self):
+        partner = AssociatedPartnerPIFactory()
+        ServiceSubmissionFactory(
+            status="approved",
+            service_name="Partner Service",
+            responsible_pis=[partner],
+        )
+
+        services = list(get_approved_services())
+        groups = dict(group_services(services, "pi"))
+
+        assert "Associated partner" in groups
+        assert "Associated partner [please state below]" not in groups
 
     def test_group_by_category_service_appears_under_every_category(self):
         cat_a = ServiceCategoryFactory(name="Aardvark")
