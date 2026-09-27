@@ -54,7 +54,8 @@ class Command(BaseCommand):
     help = (
         "Read-only audit: list service descriptions whose visible text would "
         "change when rendered as Markdown (text_changed), or that lose content "
-        "to sanitization such as headings or blocked links (content_removed). "
+        "to sanitization such as images, code or blocked links "
+        "(content_removed). "
         "Run before enabling the markdown_descriptions feature flag and fix "
         "flagged rows in the admin. Legacy HTML-entity rows (e.g. '&gt;') are "
         "not flagged: Markdown renders them as the intended characters, so "

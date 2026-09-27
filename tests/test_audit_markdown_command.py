@@ -151,3 +151,14 @@ def test_csv_neutralises_formula_in_service_name(tmp_path):
     with open(path, newline="") as fh:
         rows = list(csv.reader(fh))
     assert rows[1][1] == "'=HYPERLINK(1)"
+
+
+def test_help_text_does_not_list_headings_as_removed_content():
+    """Headings are supported (rendered h4-h6), so the help must not cite
+    them as content lost to sanitization."""
+    from apps.submissions.management.commands.audit_markdown_descriptions import (
+        Command,
+    )
+
+    assert "headings" not in Command.help
+    assert "images, code or blocked links (content_removed)" in Command.help

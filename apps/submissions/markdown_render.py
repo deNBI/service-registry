@@ -75,7 +75,10 @@ def _harden_anchors(html: str) -> str:
     """Finish anchors bleach has already filtered. No autolinking of bare text.
 
     An anchor whose href bleach dropped (blocked or scheme-less link) is
-    unwrapped to its inner text rather than left as a dead <a>. Kept anchors
+    unwrapped to its inner text rather than left as a dead <a>. An anchor
+    left with empty or whitespace-only content (e.g. a README badge whose
+    image was stripped) is unwrapped too, so no text-less link remains. Kept
+    anchors
     get rel="nofollow noopener noreferrer"; only http(s) links also get
     target="_blank" (opening an empty tab for a mail client is bad UX).
     """
@@ -87,7 +90,7 @@ def _harden_anchors(html: str) -> str:
             if k not in ("rel", "target")
         ]
         href = dict(attrs).get("href")
-        if href is None:
+        if href is None or not m.group(2).strip():
             return m.group(2)
         extra = f' rel="{_REL}"'
         if not href.lower().startswith("mailto:"):
@@ -141,7 +144,7 @@ def render_markdown(text: str) -> SafeString:
     """Convert stored Markdown to sanitized, safe HTML.
 
     Order: markdown.convert (raw HTML disabled) -> bleach.clean -> unwrap
-    href-less anchors and add rel/target -> mark_safe. Sanitize on output. Markdown itself escapes
+    href-less or empty anchors and add rel/target -> mark_safe. Sanitize on output. Markdown itself escapes
     '<'/'>'/'&' in text content (see _NoRawHtml); we never pre-escape.
     """
     if not text:
@@ -172,9 +175,8 @@ def render_with_notice(text: str) -> tuple[SafeString, bool]:
         return mark_safe(""), False
     raw_html = _md_to_html(text)
     safe = str(render_markdown(text))
-    # Href-less anchors are unwrapped, so every anchor left in the output
-    # carries an href; fewer anchors than Markdown generated means a link
-    # lost its href.
+    # Href-less and emptied anchors are unwrapped, so fewer anchors than
+    # Markdown generated means a link lost its href or all of its content.
     href_dropped = len(_ANCHOR_OPEN_RE.findall(raw_html)) > len(
         _ANCHOR_OPEN_RE.findall(safe)
     )

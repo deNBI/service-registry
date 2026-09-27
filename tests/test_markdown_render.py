@@ -395,3 +395,39 @@ def test_http_link_opens_in_new_tab():
 
 def test_snippet_of_unwrapped_link_keeps_text():
     assert markdown_to_text("see [docs](/rel) now") == "see docs now"
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "[![i](https://e.org/x.png)](https://e.org)",
+        "[ ![i](https://e.org/x.png) ](https://e.org)",
+    ],
+)
+def test_badge_link_left_empty_by_removed_image_is_unwrapped(src):
+    """A README badge loses its image; the now-empty link must not remain as
+    a clickable anchor with no text (accessibility defect)."""
+    html, removed = render_with_notice(src)
+    assert "<a" not in str(html)
+    assert str(html).replace(" ", "") == "<p></p>"
+    assert removed is True
+    assert "<a" not in str(render_markdown(src))
+
+
+def test_normal_link_next_to_badge_is_kept():
+    html, removed = render_with_notice(
+        "[![i](https://e.org/x.png)](https://e.org) [docs](https://d.org)"
+    )
+    assert str(html).count("<a") == 1
+    assert '<a href="https://d.org"' in str(html)
+    assert ">docs</a>" in str(html)
+    assert removed is True
+
+
+def test_normal_link_unchanged():
+    html, removed = render_with_notice("[docs](https://d.org)")
+    assert str(html) == (
+        '<p><a href="https://d.org" rel="nofollow noopener noreferrer" '
+        'target="_blank">docs</a></p>'
+    )
+    assert removed is False
