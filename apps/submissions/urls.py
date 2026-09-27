@@ -14,6 +14,7 @@ urlpatterns = [
         name="success",
     ),
     path("register/validate/", views.validate_field, name="validate_field"),
+    path("markdown-preview/", views.markdown_preview_view, name="markdown-preview"),
     path("captcha/", views.AltchaChallengeView.as_view(), name="altcha_challenge"),
     path("update/", views.UpdateView.as_view(), name="update"),
     path("update/edit/<uuid:submission_id>/", views.EditView.as_view(), name="edit"),

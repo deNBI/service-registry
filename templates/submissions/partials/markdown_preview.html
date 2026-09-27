@@ -1,0 +1,8 @@
+{% if error %}
+  <div class="alert alert-warning py-1 px-2 small mb-0">{{ error }}</div>
+{% else %}
+  {% if removed %}
+    <div class="alert alert-warning py-1 px-2 small">Some content was removed: unsupported link or tag.</div>
+  {% endif %}
+  <div class="markdown-preview-body">{{ html }}</div>
+{% endif %}

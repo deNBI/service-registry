@@ -95,6 +95,28 @@ def render_markdown(text: str) -> SafeString:
     return mark_safe(_harden_anchors(clean))
 
 
+def render_with_notice(text: str) -> tuple[SafeString, bool]:
+    """Return (safe_html, removed) for the HTMX preview.
+
+    removed is True when sanitization dropped content the user wrote: a link
+    lost its href (blocked javascript:/data: protocol) or a Markdown-generated
+    disallowed tag (heading, code, image) was stripped. The baseline is
+    _md_to_html, whose output contains only Markdown-generated tags because
+    raw HTML is disabled, so literal tag-like text such as '<select>' is
+    escaped in both baseline and output and never triggers the notice.
+    """
+    if not text:
+        return mark_safe(""), False
+    raw_html = _md_to_html(text)
+    safe = str(render_markdown(text))
+    # An anchor with no href= means bleach dropped a blocked-protocol link.
+    href_dropped = bool(re.search(r"<a(?![^>]*\bhref=)[^>]*>", safe))
+    # Fewer '<' after cleaning means a Markdown-generated disallowed tag was
+    # stripped (rel/target hardening adds attributes, never tags).
+    tag_stripped = raw_html.count("<") > safe.count("<")
+    return mark_safe(safe), (href_dropped or tag_stripped)
+
+
 _BLOCK_TAG_RE = re.compile(r"(</(?:p|li|ul|ol|blockquote)>|<br\s*/?>)")
 _WS_RE = re.compile(r"\s+")
 

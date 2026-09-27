@@ -18,12 +18,13 @@ import logging
 
 from django.conf import settings
 from django.contrib import messages
-from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.http import Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils.decorators import method_decorator
 from django.utils.timezone import now
 from django.views import View
 from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_POST
 from django_ratelimit.decorators import ratelimit
 
 from .diff_utils import (
@@ -34,8 +35,10 @@ from .diff_utils import (
 )
 from .forms import SubmissionForm, UpdateKeyForm
 from .http_utils import get_client_ip, hash_user_agent
+from .markdown_render import markdown_enabled, render_with_notice
 from .models import (
     CHANGELOG_ACTOR_SUBMITTER,
+    DESCRIPTION_MAX_LENGTH,
     PRIMARY_MATURITY_TAG_CHOICES,
     SECONDARY_MATURITY_TAG_CHOICES,
     ServiceSubmission,
@@ -645,6 +648,34 @@ def validate_field(request: HttpRequest) -> HttpResponse:
             "field": bound_field,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# HTMX Markdown preview
+# ---------------------------------------------------------------------------
+
+
+@ratelimit(key="ip", rate=settings.RATE_LIMIT_VALIDATE, method="POST", block=True)
+@require_POST
+def markdown_preview_view(request: HttpRequest) -> HttpResponse:
+    """
+    POST /markdown-preview/
+
+    HTMX endpoint: renders the posted description through the shared
+    render_markdown pipeline and returns the preview fragment, plus a
+    non-blocking notice when sanitization removed content. 404 when the
+    markdown_descriptions feature flag is off.
+    """
+    if not markdown_enabled():
+        raise Http404
+    template = "submissions/partials/markdown_preview.html"
+    text = request.POST.get("description", "")
+    if len(text) > DESCRIPTION_MAX_LENGTH:
+        return render(
+            request, template, {"error": "Description is too long to preview."}
+        )
+    html, removed = render_with_notice(text)
+    return render(request, template, {"html": html, "removed": removed})
 
 
 # ---------------------------------------------------------------------------
