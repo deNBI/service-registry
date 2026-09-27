@@ -32,6 +32,18 @@ bioinformatics service for inclusion in the [de.NBI services catalogue](https://
    | F — Discoverability  | Keywords for search, citation tracking, and survey participation               |
    | G — Consent          | Data protection consent (required to submit)                                   |
 
+   **Formatting the description.** When Markdown descriptions are enabled on the site, the service description supports a small subset of Markdown, and a **Preview** button under the field shows how it will look:
+
+   | Supported                                            | Not supported                                                                   |
+   | ---------------------------------------------------- | ------------------------------------------------------------------------------- |
+   | `**bold**`, `_italic_`                               | Headings, code and code blocks, horizontal rules (the text is kept, formatting removed) |
+   | Bullet (`- item`) and numbered (`1. item`) lists     | Images (removed entirely)                                                       |
+   | Links written as `[label](https://example.com)`      | Bare URLs and `<https://...>` (shown as plain text, not turned into links)      |
+   | Blockquotes (`> quoted text`)                        | Raw HTML (shown as literal text, never executed)                                |
+   | Line breaks (a single newline starts a new line)     | Links other than `http`, `https` and `mailto` (the link is removed, the label kept) |
+
+   The preview warns you when some formatting was removed. A line that starts with `#` (even `#1`) is treated as a heading and loses the `#`, so reword such lines. Length limits apply to the text as you type it, including the Markdown characters.
+
 3. Click **Submit Registration**.
 
 4. **You will receive a confirmation email** at the address you provided as internal contact, acknowledging that your registration was received. Keep this email for your records — it contains your Submission ID.
@@ -52,7 +64,7 @@ Each submission gets a **write-scope** API key by default, which allows full edi
 1. Go to **/update/**.
 2. Paste your API key into the text field and click **Retrieve My Registration**.
 3. Your form will be pre-populated with all existing values.
-4. Make your changes and click **Save Changes**.
+4. Make your changes and click **Save Changes**. The description **Preview** button is available here too (see [Registering a New Service](#registering-a-new-service)).
 5. Two emails are sent automatically:
    - **Administration office** — notified of your changes with a summary of what was updated.
    - **You** — a confirmation email is sent to your internal contact address listing exactly which fields changed (previous value → new value).
@@ -78,7 +90,7 @@ The catalogue at **/catalogue/** lists all approved services and supports:
 - **Group** — group results by category, service centre, or responsible PI (accordion sections)
 - **Pagination** — results are paginated server-side; URL state is preserved so you can share or bookmark any view
 
-Each service card shows the service name, description, category, service centre, and optional EDAM topic badges. Where available, icon badges link directly to the service's GitHub repository, bio.tools entry, FAIRsharing record, or other registry.
+Each service card shows the service name, a short plain-text excerpt of the description, category, service centre, and optional EDAM topic badges. When Markdown descriptions are enabled, the list view shows the description with its formatting (links, emphasis, lists); cards show the same text without formatting. Where available, icon badges link directly to the service's GitHub repository, bio.tools entry, FAIRsharing record, or other registry.
 
 The catalogue is read-only and requires no login.
 

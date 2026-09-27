@@ -194,6 +194,21 @@ curl https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
 `GET /api/v1/submissions/{id}/` — requires `ApiKey`. Returns your own submission in full detail.
 Returns 403 if the key does not belong to this submission.
 
+**Description fields.** `service_description` is always the raw text exactly as submitted (it may contain Markdown). The detail response (this endpoint, and the create and update responses) also includes a read-only `service_description_html`:
+
+- It is always safe HTML, ready to insert into a page.
+- When Markdown rendering is enabled on the server, it is the sanitized rendered HTML (paragraphs, line breaks, bold/italic, lists, blockquotes and `http`/`https`/`mailto` links with `rel="nofollow noopener noreferrer" target="_blank"`).
+- When it is disabled, it is the raw text HTML-escaped, with no paragraph or line-break markup.
+
+`service_description_html` is not included in the list endpoint (`GET /api/v1/submissions/`) and is ignored if sent in a `POST` or `PATCH`. Length validation applies to the raw `service_description`.
+
+```json
+{
+  "service_description": "Aligns **short reads**.\n\n- fast\n- accurate",
+  "service_description_html": "<p>Aligns <strong>short reads</strong>.</p>\n<ul>\n<li>fast</li>\n<li>accurate</li>\n</ul>"
+}
+```
+
 ---
 
 ### Update a submission
@@ -470,6 +485,7 @@ header and in error bodies. Use it when reporting issues.
 | `internal_contact_email`  | required   | never        | Write-only; stored for admin use only                                            |
 | `primary_maturity_tag`    | ignored    | yes          | Read-only in API; set by admins via backend. See [Maturity Tags](#maturity-tags) |
 | `secondary_maturity_tags` | ignored    | yes          | Read-only in API; set by admins via backend. See [Maturity Tags](#maturity-tags) |
+| `service_description_html` | ignored   | detail only  | Read-only; safe HTML rendering of `service_description`. See [Retrieve a submission](#retrieve-a-submission) |
 | `submission_ip`           | —          | never        | Server-generated; not exposed via API                                            |
 | `user_agent_hash`         | —          | never        | Server-generated; not exposed via API                                            |
 

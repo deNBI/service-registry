@@ -361,6 +361,40 @@ element.
 
 ---
 
+## Markdown service descriptions (`markdown_render`)
+
+`service_description` can be rendered as Markdown when `[features] markdown_descriptions` is on (see [Configuration](configuration.md#feature-flags)). `linkify_description` above is unrelated: it only formats section descriptions from `form_texts.yaml`.
+
+All rendering goes through one module, `apps/submissions/markdown_render.py`, used by the catalogue, the API, the HTMX preview and the admin, so output is identical everywhere:
+
+| Function                              | Purpose                                                                                                   |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `render_markdown(text)`               | Markdown to sanitized `SafeString` (flag-independent, uncached)                                            |
+| `render_with_notice(text)`            | `(html, removed)` for the preview; `removed` is true when sanitization dropped content                     |
+| `markdown_to_text(text, limit=300)`   | Plain-text snippet derived from `render_markdown()` output, so cards show the same text as the list view   |
+| `render_submission_description(sub)`  | Flag-aware, cached HTML. Flag off returns the raw string (not safe) so templates autoescape it as before    |
+| `submission_description_snippet(sub)` | Flag-aware, cached plain-text snippet                                                                      |
+| `markdown_enabled()`                  | Reads the feature flag from `SITE_CONFIG`                                                                  |
+
+**Pipeline:** Python-Markdown with `sane_lists`, `nl2br` and a custom extension that disables raw HTML and `<url>` autolinks, then `bleach.clean` with an allowlist (`p`, `br`, `strong`, `em`, `ul`, `ol`, `li`, `a`, `blockquote`; `a` keeps only `href` and `title`; protocols `http`, `https`, `mailto`), then every anchor gets `rel="nofollow noopener noreferrer" target="_blank"`, then `mark_safe`. Descriptions are stored raw and sanitized on output only.
+
+**Caching:** the flag-aware helpers cache per `(pk, updated_at)` for 24 hours (`MD_CACHE_TTL`) under a key that includes `RENDER_VERSION`. **Bump `RENDER_VERSION` whenever you change the render or sanitize rules**, otherwise stale HTML is served until entries expire.
+
+**Template filters** (`apps/catalogue/templatetags/markdown_tags.py`, `{% load markdown_tags %}`):
+
+```django
+<div class="catalogue-list-desc-text">{{ service|md_description }}</div>  {# list view #}
+<p class="catalogue-description">{{ service|md_snippet }}</p>            {# card #}
+```
+
+**Preview endpoint:** `markdown_preview_view` (`POST /markdown-preview/`, URL name `submissions:markdown-preview`) renders `templates/submissions/partials/markdown_preview.html`. It returns 404 when the flag is off and shares the `RATE_LIMIT_VALIDATE` rate; throttled requests get a 200 fragment with an inline message because htmx ignores 4xx responses. The button and pane come from `templates/submissions/partials/markdown_preview_controls.html`, which the admin reuses.
+
+**Plain-text emails:** render every `.txt` email body with `render_plaintext(template_name, context)` from `apps/submissions/tasks.py`, not `render_to_string()`. It disables autoescaping, so the raw Markdown (and characters such as `&`, `<`, `>`, `'`) arrive unescaped. HTML email bodies keep using `render_to_string()` and stay escaped.
+
+**Tests:** `tests/test_markdown_render.py` (pipeline), `tests/test_markdown_consistency.py` (XSS and cross-surface parity), `tests/test_markdown_behaviour.py` (storage, edit status reset, template guards), `tests/test_markdown_tags.py`, `tests/test_catalogue_markdown_render.py`, `tests/test_markdown_preview_view.py`, `tests/test_markdown_editor_render.py`, `tests/test_markdown_input_unification.py`, `tests/test_api_markdown.py`, `tests/test_admin_markdown.py`, `tests/test_audit_markdown_command.py`, `tests/test_export_formula_guard.py` and `tests/test_email_plaintext.py`.
+
+---
+
 ## Field-level diff (`diff_utils`)
 
 `apps/submissions/diff_utils.py` computes a human-readable before/after diff for any submission save. It is used by all three edit paths — the submitter web form (`views.py`), the admin backend (`admin.py`), and the REST API (`api/views.py`).

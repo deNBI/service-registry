@@ -229,6 +229,35 @@ The service name lock applies only to the submitter-facing edit form and the RES
 !!! note "Status is read-only"
 The `Status` field is displayed for information only — it cannot be edited directly. All status transitions are made via the **Status action buttons** panel in the same fieldset (see below).
 
+### Markdown descriptions
+
+When `[features] markdown_descriptions = true` (see [Configuration](configuration.md#feature-flags)), the change form adds two things to fieldset **B**:
+
+- A **Preview** button under **Service description**, identical to the public forms. It renders the current text through the same sanitizer used by the catalogue and the API, and warns when formatting (headings, code, images, unsafe links) was removed.
+- A read-only **Description (rendered)** field showing the saved description as the catalogue list view displays it.
+
+With the flag off, neither appears and the description is edited as plain text. Descriptions are always stored as the raw text that was typed; rendering happens on output.
+
+Notification emails never render Markdown: plain-text bodies show the raw description source without HTML escaping, and values shown in HTML bodies (such as the change table) stay escaped.
+
+**Auditing existing descriptions.** Before enabling the flag, list the descriptions whose display would change:
+
+```bash
+docker compose exec web python manage.py audit_markdown_descriptions
+docker compose exec web python manage.py audit_markdown_descriptions --csv /tmp/md-audit.csv
+```
+
+The command is read-only (a single query, no database or cache writes). Each flagged row is printed with its reasons and a `today:` / `markdown:` preview of the visible text:
+
+| Reason            | Meaning                                                                                                         |
+| ----------------- | --------------------------------------------------------------------------------------------------------------- |
+| `text_changed`    | The visible text would differ once rendered (e.g. `*` or `_` pairs become emphasis, a line starting with `#` loses it) |
+| `content_removed` | Sanitization would drop content: a heading, code, image, or a link with a blocked scheme such as `javascript:`   |
+
+Legacy rows containing HTML entities such as `&gt;` are not flagged, because Markdown displays them as the intended characters. The command exits non-zero when any row is flagged, so it can gate a deployment script. `--csv PATH` also writes `id,service_name,status,reasons` for the flagged rows.
+
+Fix flagged rows by editing the description in this change form. **Admin edits do not reset the submission status**, so approved services stay approved. See the [Markdown descriptions rollout](rollout.md#markdown-descriptions-rollout) for the full sequence.
+
 ### Changing Submission Status
 
 **On new submission:** When a submitter registers a new service, two emails are sent automatically:
@@ -417,6 +446,9 @@ Both formats include all submission fields:
 | bio.tools (EDAM)       | `biotools_edam_topic_uris`, `biotools_edam_operation_uris` — semicolons in CSV, arrays in JSON                                                                                                   |
 | bio.tools (structured) | `biotools_functions`, `biotools_publications`, `biotools_documentation`, `biotools_download`, `biotools_links` — JSON strings in CSV, arrays of objects in JSON                                  |
 | bio.tools (sync)       | `biotools_last_synced_at` — ISO datetime of last successful sync, or empty                                                                                                                       |
+
+!!! note "CSV formula-injection guard"
+In the CSV export, any text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'` so spreadsheet applications treat it as text instead of a formula. A description that starts with a Markdown bullet therefore appears as `'- item`. The JSON export and the API return the raw values unchanged.
 
 !!! note "JSON export uses a nested submitter object"
 In the JSON export, submitter fields are grouped under a `"submitter"` key:

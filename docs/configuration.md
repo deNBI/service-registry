@@ -114,7 +114,10 @@ license_name = "MIT"
 biotools_prefill  = true   # Show bio.tools prefill banner on the form
 edam_annotations  = true   # Show EDAM ontology fields on the form
 catalogue         = false  # Enable the public Registry Catalogue at /catalogue/
+markdown_descriptions = false  # Render service descriptions as Markdown
 ```
+
+`markdown_descriptions` (default `false`) renders `service_description` as sanitized Markdown in the catalogue, the admin and the API `service_description_html` field, and enables the **Preview** button on the forms. With the flag off every surface shows today's plain, autoescaped text. Run `python manage.py audit_markdown_descriptions` before enabling it in production (see [Markdown descriptions rollout](rollout.md#markdown-descriptions-rollout)). Like all `site.toml` changes, it takes effect after `docker compose restart web worker beat`.
 
 ### Registry Catalogue
 
@@ -366,7 +369,7 @@ RATE_LIMIT_UPDATE=20/h          # Key-entry and edit form submissions (POST /upd
 RATE_LIMIT_API=60/m             # REST API (authenticated users)
 RATE_LIMIT_CHALLENGE=60/h       # ALTCHA challenge generation (GET /captcha/)
 RATE_LIMIT_BIOTOOLS=60/h        # bio.tools prefill/search proxy (GET /biotools/*)
-RATE_LIMIT_VALIDATE=120/h       # Inline field validation (POST /register/validate/)
+RATE_LIMIT_VALIDATE=120/h       # Inline field validation (POST /register/validate/) and Markdown preview (POST /markdown-preview/)
 ```
 
 !!! warning "Limits are bucketed per real client IP"

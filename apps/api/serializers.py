@@ -333,10 +333,10 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(str)
     def get_service_description_html(self, obj) -> str:
-        """Rendered description, always safe to insert as HTML.
+        """Description rendered as sanitized HTML, safe to insert into a page.
 
-        Flag on: sanitized Markdown HTML. Flag off: the raw text HTML-escaped,
-        so consumers can treat this field as HTML regardless of the flag.
+        When Markdown rendering is disabled on the server, this is the plain
+        description HTML-escaped (no paragraph or line-break markup).
         """
         if not markdown_enabled():
             return str(escape(obj.service_description or ""))

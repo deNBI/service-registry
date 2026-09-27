@@ -409,6 +409,30 @@ Tools: Uptime Kuma (self-hosted), Healthchecks.io, or your institution's monitor
 
 ---
 
+## Markdown Descriptions Rollout
+
+Markdown rendering of `service_description` is behind the `[features] markdown_descriptions` flag in `config/site.toml`. It involves no data migration: descriptions are stored as raw text either way, and the flag only changes how they are displayed. Enable it in production in this order:
+
+1. **Deploy with the flag off** (`markdown_descriptions = false`, the default). Every surface keeps showing the plain, autoescaped description.
+2. **Run the audit** against production:
+   ```bash
+   docker compose exec web python manage.py audit_markdown_descriptions --csv /tmp/md-audit.csv
+   ```
+   It is read-only and exits non-zero while any row is flagged. See [Auditing existing descriptions](admin-guide.md#markdown-descriptions) for what `text_changed` and `content_removed` mean.
+3. **Fix flagged rows in the admin** change form. Admin edits do not reset the submission status. Re-run the audit until it reports `0 row(s) flagged.`, or until the remaining rows are acceptable as rendered.
+4. **Enable the flag**: set `markdown_descriptions = true` in the bind-mounted `site.toml`.
+5. **Restart** so the web, worker and beat processes reload it:
+   ```bash
+   docker compose restart web worker beat
+   ```
+6. **Spot-check**: the catalogue list view shows formatted descriptions, cards show plain-text excerpts, the form **Preview** button works, and `GET /api/v1/submissions/{id}/` returns rendered HTML in `service_description_html`.
+
+**Rollback:** set `markdown_descriptions = false` and restart the same services. Display returns to plain text immediately; no data changes are needed.
+
+Rendered HTML is cached per submission (keyed on its `updated_at`) for 24 hours. When a release changes the rendering or sanitization rules, bump `RENDER_VERSION` in `apps/submissions/markdown_render.py` so no stale output is served.
+
+---
+
 ## EDAM Ontology Releases
 
 EDAM publishes new releases several times a year. When a new release is out:
