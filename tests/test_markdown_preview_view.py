@@ -117,4 +117,15 @@ def test_preview_accepts_service_description_field_name(client, md_on):
 
 def test_preview_removed_notice_lists_unsupported_formatting(client, md_on):
     resp = client.post(URL, {"description": "# Heading"})
-    assert b"Some formatting was removed" in resp.content
+    assert (
+        b"Some formatting was removed: headings, code, images and unsafe links "
+        b"are not supported." in resp.content
+    )
+
+
+@pytest.mark.parametrize("text", ["", "   ", "\n\t \n"])
+def test_preview_empty_text_returns_empty_body(client, md_on, text):
+    """Empty input yields an empty body so the pane matches :empty and hides."""
+    resp = client.post(URL, {"service_description": text})
+    assert resp.status_code == 200
+    assert resp.content == b""

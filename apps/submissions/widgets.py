@@ -32,11 +32,17 @@ CompactSelectWidget: Compact multi-select with search and checkboxes.
 CompactSelectSingleWidget: Single-select variant of compact select.
   - Similar UX to CompactSelectWidget but only one item selectable
   - Used for fields like service_center
+
+MarkdownTextareaWidget: admin textarea followed by the shared Markdown
+Preview control (submissions/partials/markdown_preview_controls.html).
 """
 
 import json
 
 from django import forms
+from django.contrib.admin.widgets import AdminTextareaWidget
+from django.template.loader import render_to_string
+from django.utils.safestring import mark_safe
 
 
 class EdamAutocompleteWidget(forms.SelectMultiple):
@@ -262,3 +268,20 @@ class CompactSelectSingleWidget(forms.Select):
         js = [
             "js/edam-autocomplete.js",  # Will extend to include buildCompactSelectSingle()
         ]
+
+
+class MarkdownTextareaWidget(AdminTextareaWidget):
+    """Admin textarea plus the shared Markdown Preview control.
+
+    The control is appended via render_to_string because the default form
+    renderer does not search the project templates/ directory.
+    """
+
+    def render(self, name, value, attrs=None, renderer=None):
+        textarea = super().render(name, value, attrs, renderer)
+        field_id = (attrs or {}).get("id") or self.attrs.get("id") or f"id_{name}"
+        controls = render_to_string(
+            "submissions/partials/markdown_preview_controls.html",
+            {"field_id": field_id},
+        )
+        return mark_safe(textarea + controls)

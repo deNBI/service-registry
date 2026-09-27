@@ -664,7 +664,8 @@ def markdown_preview_view(request: HttpRequest) -> HttpResponse:
     HTMX endpoint: renders the posted description (``service_description`` or
     ``description``) through the shared render_markdown pipeline and returns
     the preview fragment, plus a non-blocking notice when sanitization removed
-    content. 404 when the markdown_descriptions feature flag is off.
+    content. Empty/whitespace-only input returns an empty body so the pane
+    hides again. 404 when the markdown_descriptions feature flag is off.
 
     Rate limiting is non-blocking: htmx silently ignores 4xx responses, so a
     throttled request gets a 200 fragment with an inline message instead.
@@ -681,6 +682,9 @@ def markdown_preview_view(request: HttpRequest) -> HttpResponse:
     text = request.POST.get("service_description") or request.POST.get(
         "description", ""
     )
+    if not text.strip():
+        # Empty body: the pane matches `.markdown-preview:empty` and hides.
+        return HttpResponse("")
     if len(text) > DESCRIPTION_MAX_LENGTH:
         return render(
             request, template, {"error": "Description is too long to preview."}

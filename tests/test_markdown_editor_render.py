@@ -50,6 +50,7 @@ def test_preview_button_attributes(client, settings):
     assert b"#id_service_description" in button
     assert b"csrfmiddlewaretoken" in button
     assert b'hx-trigger="click"' in button
+    assert b'hx-params="service_description,csrfmiddlewaretoken"' in button
 
 
 def test_preview_pane_is_live_region(client, settings):

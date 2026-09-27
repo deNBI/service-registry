@@ -25,6 +25,7 @@ from django.utils import timezone
 from django.utils.html import escape, format_html, format_html_join, mark_safe
 
 from .diff_utils import build_diff, snapshot, snapshot_m2m
+from .markdown_render import markdown_enabled, render_submission_description
 from .models import (
     CHANGELOG_ACTOR_ADMIN_PREFIX,
     CHANGELOG_ACTOR_API_PREFIX,
@@ -38,6 +39,7 @@ from .models import (
     SubmissionStatus,
 )
 from .tasks import send_submission_notification
+from .widgets import MarkdownTextareaWidget
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +241,11 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         for field_name, rows in textarea_rows.items():
             if field_name in form.base_fields:
                 form.base_fields[field_name].widget.attrs.update({"rows": rows})
+        # Markdown Preview control: swap the widget per request (flag-gated),
+        # carrying over the existing attrs (admin classes + rows override).
+        field = form.base_fields.get("service_description")
+        if field is not None and markdown_enabled():
+            field.widget = MarkdownTextareaWidget(attrs=dict(field.widget.attrs))
         return form
 
     def formfield_for_manytomanyfield(self, db_field, request, **kwargs):
@@ -273,8 +280,16 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
     class Media:
         # Enhanced filter sidebar assets are loaded on the changelist only
         # (the JS guards on `#changelist-filter.changelist-filter--enhanced`).
-        css = {"all": ("admin/css/submissions_filter_sidebar.css",)}
+        css = {
+            "all": (
+                "admin/css/submissions_filter_sidebar.css",
+                "admin/css/markdown_preview.css",
+            )
+        }
         js = (
+            # htmx + CSRF refresh power the Markdown Preview control.
+            "js/htmx.min.js",
+            "js/htmx-csrf-refresh.js",
             "js/admin_submission_change.js",
             "admin/js/submissions_filter_sidebar.js",
         )
@@ -293,7 +308,15 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         "last_change_summary_display",
         "data_protection_consent",
         "change_history_display",
+        "description_rendered",
     )
+
+    @admin.display(description="Description (rendered)")
+    def description_rendered(self, obj):
+        # Only placed in the fieldsets when markdown_descriptions is on.
+        if obj is None or not obj.pk:
+            return "—"
+        return render_submission_description(obj)
 
     @admin.display(description="Logo preview")
     def logo_preview(self, obj):
@@ -863,18 +886,36 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         if not request.user.has_perm("submissions.manage_apikeys"):
             excluded.add("key_management_panel")
 
+        fieldsets = self.fieldsets
+        if markdown_enabled():
+            fieldsets = self._with_description_rendered(fieldsets)
+
         if not excluded:
-            return self.fieldsets
+            return fieldsets
 
         frozen = frozenset(excluded)
         result = []
-        for title, options in self.fieldsets:
+        for title, options in fieldsets:
             filtered = self._strip_fields(options["fields"], frozen)
             if filtered:
                 result.append((title, {**options, "fields": filtered}))
             # If filtered is empty the entire fieldset is dropped — this only
             # happens to "🔑 API Key Management" when manage_apikeys is absent.
         return result
+
+    @staticmethod
+    def _with_description_rendered(fieldsets):
+        """Return a copy of fieldsets with description_rendered inserted right
+        after service_description (class-level fieldsets are not mutated)."""
+        result = []
+        for title, options in fieldsets:
+            fields = options["fields"]
+            if "service_description" in fields:
+                idx = fields.index("service_description") + 1
+                fields = (*fields[:idx], "description_rendered", *fields[idx:])
+                options = {**options, "fields": fields}
+            result.append((title, options))
+        return tuple(result)
 
     @admin.action(
         description="Assign maturity tags to selected submissions",
