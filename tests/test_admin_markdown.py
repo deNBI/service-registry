@@ -202,3 +202,13 @@ def test_admin_description_edit_does_not_reset_status(superuser_client, md_on):
     sub.refresh_from_db()
     assert sub.service_description == new_text
     assert sub.status == "approved"
+
+
+def test_description_rendered_placeholder_without_saved_object():
+    from django.contrib.admin.sites import site
+
+    from apps.submissions.admin import ServiceSubmissionAdmin
+    from apps.submissions.models import ServiceSubmission
+
+    model_admin = ServiceSubmissionAdmin(ServiceSubmission, site)
+    assert model_admin.description_rendered(None) == "—"

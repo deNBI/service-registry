@@ -7,10 +7,11 @@ Markdown, so operators can fix them in the admin before flipping the
 
 import csv
 import html
+import os
 
 from django.core.management.base import BaseCommand, CommandError
 
-from apps.submissions.admin import _csv_safe
+from apps.submissions.csv_utils import csv_safe
 from apps.submissions.markdown_render import (
     _WS_RE,
     markdown_to_text,
@@ -19,16 +20,36 @@ from apps.submissions.markdown_render import (
 from apps.submissions.models import ServiceSubmission
 
 _PREVIEW_LEN = 200
+_PREVIEW_CONTEXT = 60
+_FLAGGED_MSG = (
+    "Flagged rows found; fix them in the admin before enabling markdown_descriptions."
+)
 
 
 def _collapse(text: str) -> str:
     return _WS_RE.sub(" ", text).strip()
 
 
-def _preview(text: str) -> str:
-    if len(text) > _PREVIEW_LEN:
-        return text[:_PREVIEW_LEN].rstrip() + "…"
-    return text
+def _window(text: str, idx: int) -> str:
+    """At most _PREVIEW_LEN chars of text around idx (_PREVIEW_CONTEXT chars
+    before it), with a leading/trailing ellipsis where the text is cut."""
+    if len(text) <= _PREVIEW_LEN:
+        return text
+    start = max(0, idx - _PREVIEW_CONTEXT)
+    lead = "…" if start else ""
+    end = start + _PREVIEW_LEN - len(lead) - 1  # reserve room for a trailing "…"
+    tail = "…" if end < len(text) else ""
+    return lead + text[start:end] + tail
+
+
+def _preview_pair(today: str, rendered: str) -> tuple[str, str]:
+    """Preview both texts around their FIRST differing character, so a change
+    deep inside a long description is visible. Identical texts (only possible
+    for content_removed rows) are shown from the start."""
+    idx = 0
+    if today != rendered:
+        idx = len(os.path.commonprefix([today, rendered]))
+    return _window(today, idx), _window(rendered, idx)
 
 
 def audit_description(raw: str) -> tuple[list[str], str, str]:
@@ -40,6 +61,8 @@ def audit_description(raw: str) -> tuple[list[str], str, str]:
     """
     raw = raw or ""
     today = _collapse(html.unescape(raw))
+    # The plain text never exceeds the raw length (rendering strips syntax
+    # and unescaping only shrinks entities), so len(raw) + 1 never truncates.
     rendered = _collapse(markdown_to_text(raw, limit=len(raw) + 1))
     _, removed = render_with_notice(raw)
     reasons = []
@@ -87,17 +110,17 @@ class Command(BaseCommand):
 
         for rid, name, status, reasons, today, rendered in flagged:
             self.stdout.write(f"[{status}] {name} (id={rid}): {', '.join(reasons)}")
-            self.stdout.write(f"    today:    {_preview(today)}")
-            self.stdout.write(f"    markdown: {_preview(rendered)}")
+            today_preview, rendered_preview = _preview_pair(today, rendered)
+            self.stdout.write(f"    today:    {today_preview}")
+            self.stdout.write(f"    markdown: {rendered_preview}")
 
         if options["csv_path"]:
             with open(options["csv_path"], "w", newline="", encoding="utf-8") as fh:
                 writer = csv.writer(fh)
                 writer.writerow(["id", "service_name", "status", "reasons"])
                 for rid, name, status, reasons, *_ in flagged:
-                    writer.writerow([rid, _csv_safe(name), status, ";".join(reasons)])
+                    writer.writerow([rid, csv_safe(name), status, ";".join(reasons)])
 
-        summary = f"{len(flagged)} row(s) flagged."
-        self.stdout.write(summary)
+        self.stdout.write(f"{len(flagged)} row(s) flagged.")
         if flagged:
-            raise CommandError(summary)
+            raise CommandError(_FLAGGED_MSG)

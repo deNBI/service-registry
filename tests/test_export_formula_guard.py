@@ -7,31 +7,48 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 
-from apps.submissions.admin import _csv_safe
+from apps.submissions.csv_utils import CSV_FORMULA_TRIGGERS, csv_safe
 from tests.factories import ServiceSubmissionFactory
 
 
 def test_prefixes_formula_chars():
     for ch in "=+-@":
-        assert _csv_safe(ch + "cmd") == "'" + ch + "cmd"
+        assert csv_safe(ch + "cmd") == "'" + ch + "cmd"
 
 
 def test_prefixes_leading_tab_and_carriage_return():
-    assert _csv_safe("\tcmd") == "'\tcmd"
-    assert _csv_safe("\rcmd") == "'\rcmd"
+    assert csv_safe("\tcmd") == "'\tcmd"
+    assert csv_safe("\rcmd") == "'\rcmd"
 
 
 def test_leaves_normal_text():
-    assert _csv_safe("normal") == "normal"
-    assert _csv_safe("") == ""
-    assert _csv_safe("a-b=c") == "a-b=c"
+    assert csv_safe("normal") == "normal"
+    assert csv_safe("") == ""
+    assert csv_safe("a-b=c") == "a-b=c"
 
 
 def test_handles_non_string():
-    assert _csv_safe(123) == 123
-    assert _csv_safe(-5) == -5
-    assert _csv_safe(True) is True
-    assert _csv_safe(None) is None
+    assert csv_safe(123) == 123
+    assert csv_safe(-5) == -5
+    assert csv_safe(True) is True
+    assert csv_safe(None) is None
+
+
+def test_triggers_constant():
+    assert CSV_FORMULA_TRIGGERS == ("=", "+", "-", "@", "\t", "\r")
+
+
+def test_admin_and_audit_command_share_csv_utils():
+    import inspect
+
+    from apps.submissions import admin
+    from apps.submissions.management.commands import audit_markdown_descriptions
+
+    assert admin.csv_safe is csv_safe
+    assert audit_markdown_descriptions.csv_safe is csv_safe
+    assert "apps.submissions.admin" not in inspect.getsource(
+        audit_markdown_descriptions
+    )
 
 
 @pytest.mark.django_db

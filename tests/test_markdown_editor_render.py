@@ -235,3 +235,24 @@ def test_help_table_has_explicit_aria_roles():
     assert 'role="table" aria-label="Markdown formatting help"' in html
     assert html.count('role="row"') == html.count("<tr")
     assert html.count('role="cell"') == html.count("<td")
+
+
+@pytest.mark.parametrize(
+    "path,color",
+    [
+        ("css/registry.css", "var(--gray-600)"),
+        ("admin/css/markdown_preview.css", "var(--body-quiet-color)"),
+    ],
+)
+def test_preview_placeholder_contrast_and_no_dead_busy_rule(path, color):
+    """The placeholder colour meets WCAG AA (gray-600 on white 7.56:1; admin
+    quiet colour 5.74:1 light, 12.15:1 dark). The JS swaps in the placeholder
+    before setting aria-busy, so a busy rule on other children is dead, and
+    any opacity pulse on the placeholder would drop it below 4.5:1."""
+    with open(finders.find(path), encoding="utf-8") as fh:
+        css = fh.read()
+    assert (
+        f".md-editor__empty {{ margin: 0; color: {color}; font-style: italic; }}" in css
+    )
+    assert "aria-busy" not in css
+    assert "md-editor-pulse" not in css

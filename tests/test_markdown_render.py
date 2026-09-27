@@ -204,6 +204,7 @@ def test_snippet_empty():
 # --- render_submission_description / submission_description_snippet ---------
 
 _TS = _dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=_dt.timezone.utc)
+_TS_US = int(_TS.timestamp() * 1_000_000)
 
 
 def _sub(desc, pk=1, updated_at=_TS):
@@ -257,11 +258,9 @@ def test_submission_description_key_and_ttl(md_on, monkeypatch):
         mr.cache, "set", lambda k, v, timeout: calls.append((k, timeout))
     )
     mr.render_submission_description(_sub("x", pk=7))
-    assert calls == [
-        (f"md:v{mr.RENDER_VERSION}:html:7:{_TS.timestamp()}", mr.MD_CACHE_TTL)
-    ]
+    assert calls == [(f"md:v{mr.RENDER_VERSION}:html:7:{_TS_US}", mr.MD_CACHE_TTL)]
     assert mr.MD_CACHE_TTL == 60 * 60 * 24
-    assert mr.RENDER_VERSION == 2
+    assert mr.RENDER_VERSION == 3
 
 
 def test_render_version_bump_forces_fresh_render(md_on, monkeypatch):
@@ -296,9 +295,7 @@ def test_snippet_key_and_ttl(md_on, monkeypatch):
         mr.cache, "set", lambda k, v, timeout: calls.append((k, timeout))
     )
     mr.submission_description_snippet(_sub("x", pk=7))
-    assert calls == [
-        (f"md:v{mr.RENDER_VERSION}:text:7:{_TS.timestamp()}", mr.MD_CACHE_TTL)
-    ]
+    assert calls == [(f"md:v{mr.RENDER_VERSION}:text:7:{_TS_US}", mr.MD_CACHE_TTL)]
 
 
 def test_snippet_render_version_bump_forces_fresh(md_on, monkeypatch):
@@ -355,7 +352,7 @@ def test_snippet_word_boundary_after_scaled_heading():
 
 
 def test_render_version_bumped():
-    assert RENDER_VERSION == 2
+    assert RENDER_VERSION == 3
 
 
 @pytest.mark.parametrize(
@@ -431,3 +428,62 @@ def test_normal_link_unchanged():
         'target="_blank">docs</a></p>'
     )
     assert removed is False
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "[**![i](https://e.org/x.png)**](https://e.org)",
+        "[&nbsp;](https://e.org)",
+    ],
+)
+def test_link_with_no_visible_text_is_unwrapped(src):
+    """Emptiness is judged on VISIBLE text: inline wrappers and non-breaking
+    spaces left after sanitization do not count as link text."""
+    html, removed = render_with_notice(src)
+    assert "<a" not in str(html)
+    assert removed is True
+
+
+def test_link_with_formatted_text_is_kept():
+    html, removed = render_with_notice("[**b**](https://e.org)")
+    assert str(html) == (
+        '<p><a href="https://e.org" rel="nofollow noopener noreferrer" '
+        'target="_blank"><strong>b</strong></a></p>'
+    )
+    assert removed is False
+
+
+def test_link_with_removed_image_and_label_keeps_label():
+    html, removed = render_with_notice("[![i](x.png) label](https://e.org)")
+    assert str(html) == (
+        '<p><a href="https://e.org" rel="nofollow noopener noreferrer" '
+        'target="_blank"> label</a></p>'
+    )
+    assert removed is True
+
+
+def test_nbsp_is_stripped_by_str_strip():
+    assert "\xa0 \xa0".strip() == ""
+
+
+def test_cache_key_uses_integer_microseconds():
+    ts = _dt.datetime(2026, 1, 2, 3, 4, 5, 123456, tzinfo=_dt.timezone.utc)
+    key = mr._cache_key("html", _sub("x", pk=3, updated_at=ts))
+    assert key == f"md:v{mr.RENDER_VERSION}:html:3:{int(ts.timestamp() * 1_000_000)}"
+    assert key.endswith("123456")
+    assert mr._cache_key("text", _sub("x", pk=3, updated_at=None)).endswith(":3:0")
+
+
+def test_render_submission_description_annotated_str():
+    import inspect
+
+    sig = inspect.signature(mr.render_submission_description)
+    assert sig.return_annotation is str
+    assert "SafeString" in mr.render_submission_description.__doc__
+
+
+def test_anchor_attribute_filter_drops_other_attributes():
+    assert mr._allowed_a_attr("a", "title", "t") is True
+    assert mr._allowed_a_attr("a", "class", "x") is False
+    assert mr._allowed_a_attr("a", "onclick", "x") is False

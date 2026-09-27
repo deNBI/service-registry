@@ -24,6 +24,7 @@ from django.template import loader
 from django.utils import timezone
 from django.utils.html import escape, format_html, format_html_join, mark_safe
 
+from .csv_utils import csv_safe
 from .diff_utils import build_diff, snapshot, snapshot_m2m
 from .markdown_render import markdown_enabled, render_submission_description
 from .models import (
@@ -42,20 +43,6 @@ from .tasks import send_submission_notification
 from .widgets import MarkdownTextareaWidget
 
 logger = logging.getLogger(__name__)
-
-_CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
-
-
-def _csv_safe(value):
-    """Neutralise spreadsheet formula injection in an exported CSV cell.
-
-    Strings starting with a formula trigger (``= + - @``, tab or CR) get a
-    leading ``'`` so spreadsheet apps treat them as text. Markdown bullet
-    lists (``- item``) are the common benign case. Non-strings pass through.
-    """
-    if isinstance(value, str) and value.startswith(_CSV_FORMULA_TRIGGERS):
-        return "'" + value
-    return value
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1667,7 +1654,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 s.updated_at.isoformat(),
             ]
             # Guard every data cell once; the header row is literal constants.
-            w.writerow([_csv_safe(v) for v in row])
+            w.writerow([csv_safe(v) for v in row])
         return resp
 
     @admin.action(description="📥 Export selected as JSON", permissions=["view"])

@@ -49,7 +49,7 @@ ALLOWED_ATTRS = {"a": _allowed_a_attr}
 # Bump whenever render/sanitize rules change so cached output from a previous
 # deploy is never served. Keys also carry a finite TTL so orphaned entries
 # (old versions, old updated_at values) expire from Redis on their own.
-RENDER_VERSION = 2
+RENDER_VERSION = 3
 MD_CACHE_TTL = 60 * 60 * 24
 
 # A whole anchor as serialized by bleach: every attribute value is
@@ -71,14 +71,24 @@ def markdown_enabled() -> bool:
     )
 
 
+_TAG_RE = re.compile(r"<[^>]*>")
+
+
+def _visible_text(fragment: str) -> str:
+    """Text a reader would see in sanitized inner HTML: tags stripped,
+    entities decoded and whitespace trimmed (str.strip() also trims U+00A0)."""
+    return _html.unescape(_TAG_RE.sub("", fragment)).strip()
+
+
 def _harden_anchors(html: str) -> str:
     """Finish anchors bleach has already filtered. No autolinking of bare text.
 
     An anchor whose href bleach dropped (blocked or scheme-less link) is
     unwrapped to its inner text rather than left as a dead <a>. An anchor
-    left with empty or whitespace-only content (e.g. a README badge whose
-    image was stripped) is unwrapped too, so no text-less link remains. Kept
-    anchors
+    with no VISIBLE text (tags stripped, entities decoded, whitespace
+    including U+00A0 trimmed; e.g. a README badge whose image was stripped,
+    even inside **...**, or a lone &nbsp;) is unwrapped too, so no text-less
+    link remains. Kept anchors
     get rel="nofollow noopener noreferrer"; only http(s) links also get
     target="_blank" (opening an empty tab for a mail client is bad UX).
     """
@@ -90,7 +100,7 @@ def _harden_anchors(html: str) -> str:
             if k not in ("rel", "target")
         ]
         href = dict(attrs).get("href")
-        if href is None or not m.group(2).strip():
+        if href is None or not _visible_text(m.group(2)):
             return m.group(2)
         extra = f' rel="{_REL}"'
         if not href.lower().startswith("mailto:"):
@@ -215,14 +225,20 @@ def markdown_to_text(text: str, limit: int = 300) -> str:
 
 
 def _cache_key(kind: str, submission) -> str:
-    ts = submission.updated_at.timestamp() if submission.updated_at else 0
+    # Integer microseconds: a stable, exact key part (no float repr).
+    ts = (
+        int(submission.updated_at.timestamp() * 1_000_000)
+        if submission.updated_at
+        else 0
+    )
     return f"md:v{RENDER_VERSION}:{kind}:{submission.pk}:{ts}"
 
 
-def render_submission_description(submission) -> SafeString:
+def render_submission_description(submission) -> str:
     """Flag-aware, cached rendering for a submission's description.
 
-    When the flag is off, returns the raw text (NOT mark_safe) so the template
+    Returns a SafeString only when the flag is on. When the flag is off,
+    returns the raw text (a plain str, NOT mark_safe) so the template
     auto-escapes it exactly as today.
     """
     raw = submission.service_description or ""

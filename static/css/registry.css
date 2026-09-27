@@ -1186,20 +1186,10 @@ select.edam-autocomplete { display: none !important; }
   overflow-wrap: anywhere;
 }
 .md-editor__preview:focus-visible { outline: 2px solid var(--g); outline-offset: -2px; }
-/* Dim stale content while busy, but never the "Loading preview..." placeholder
-   (a child cannot be more opaque than a dimmed parent, so target children). */
-.md-editor__preview[aria-busy="true"] > :not(.md-editor__empty) {
-  opacity: 0.55;
-  animation: md-editor-pulse 1.2s ease-in-out infinite;
-}
-@keyframes md-editor-pulse {
-  0%, 100% { opacity: 0.55; }
-  50% { opacity: 0.3; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .md-editor__preview[aria-busy="true"] > :not(.md-editor__empty) { animation: none; }
-}
-.md-editor__empty { margin: 0; color: var(--gray-400); font-style: italic; }
+/* Placeholder ("Nothing to preview." / "Loading preview…"): gray-600 on
+   white is 7.56:1 (WCAG AA). No busy pulse: at 0.75 opacity it would drop
+   to 4.00:1, below 4.5:1. */
+.md-editor__empty { margin: 0; color: var(--gray-600); font-style: italic; }
 .md-editor__alert {
   margin-bottom: 0.5rem;
   padding: 0.35rem 0.6rem;

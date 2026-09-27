@@ -76,19 +76,9 @@ form .aligned .md-editor__panel textarea,
   outline: none;
 }
 .md-editor__preview { min-height: 3rem; padding: 6px 10px; overflow-wrap: anywhere; }
-/* Dim stale content while busy, but never the "Loading preview..." placeholder
-   (a child cannot be more opaque than a dimmed parent, so target children). */
-.md-editor__preview[aria-busy="true"] > :not(.md-editor__empty) {
-  opacity: 0.55;
-  animation: md-editor-pulse 1.2s ease-in-out infinite;
-}
-@keyframes md-editor-pulse {
-  0%, 100% { opacity: 0.55; }
-  50% { opacity: 0.3; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .md-editor__preview[aria-busy="true"] > :not(.md-editor__empty) { animation: none; }
-}
+/* Placeholder ("Nothing to preview." / "Loading preview…"): quiet color on
+   --body-bg is 5.74:1 light, 12.15:1 dark (WCAG AA). No busy pulse: at 0.75
+   opacity the light theme would drop to 3.36:1, below 4.5:1. */
 .md-editor__empty { margin: 0; color: var(--body-quiet-color); font-style: italic; }
 .md-editor__alert {
   margin-bottom: 6px;

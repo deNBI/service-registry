@@ -12,6 +12,10 @@ from tests.factories import ServiceSubmissionFactory
 
 pytestmark = pytest.mark.django_db
 
+_FLAGGED_ERR = (
+    "Flagged rows found; fix them in the admin before enabling markdown_descriptions."
+)
+
 
 def _run(**kwargs):
     out = StringIO()
@@ -61,7 +65,7 @@ def test_flags_rows_whose_display_changes(desc, reason):
         assert "content_removed" not in out
     assert "today:" in out and "markdown:" in out
     assert "1 row(s) flagged." in out
-    assert err == "1 row(s) flagged."
+    assert err == _FLAGGED_ERR
 
 
 @pytest.mark.parametrize(
@@ -95,7 +99,8 @@ def test_only_flagged_rows_reported_and_counted():
     assert "Clean One" not in out
     assert "[submitted] Flagged One" in out
     assert "Flagged Two" in out
-    assert err == "2 row(s) flagged."
+    assert err == _FLAGGED_ERR
+    assert out.rstrip().endswith("2 row(s) flagged.")
 
 
 def test_csv_written_with_header_and_flagged_rows(tmp_path):
@@ -129,6 +134,51 @@ def test_long_text_is_truncated_in_output():
     for line in out.splitlines():
         if line.strip().startswith(("today:", "markdown:")):
             assert len(line) < 260
+
+
+def _preview_lines(out):
+    today = next(ln for ln in out.splitlines() if ln.strip().startswith("today:"))
+    rendered = next(ln for ln in out.splitlines() if ln.strip().startswith("markdown:"))
+    return today, rendered
+
+
+def test_preview_windows_around_first_difference():
+    head = "word " * 70  # 350 chars of unchanged prose
+    desc = head + "**x** " + "tail " * 10
+    assert desc.index("**x**") == 350
+    _make(desc)
+    out, _ = _run_flagged()
+    today, rendered = _preview_lines(out)
+    assert "**x**" in today
+    assert "word x tail" in rendered and "**" not in rendered
+    # Cut on the left (leading ellipsis) because the change is far in.
+    assert today.split("today:", 1)[1].strip().startswith("…")
+    assert rendered.split("markdown:", 1)[1].strip().startswith("…")
+
+
+def test_preview_window_helper():
+    from apps.submissions.management.commands.audit_markdown_descriptions import (
+        _PREVIEW_LEN,
+        _preview_pair,
+    )
+
+    # Short texts are shown whole.
+    assert _preview_pair("a *b*", "a b") == ("a *b*", "a b")
+    # Identical texts (content_removed only) fall back to the start.
+    same = "y" * 300
+    t, r = _preview_pair(same, same)
+    assert t == r and t.startswith("y") and t.endswith("…")
+    assert len(t) <= _PREVIEW_LEN
+    # Difference in the middle of long texts: cut on both sides.
+    a = "a" * 300 + "*b*" + "c" * 300
+    b = "a" * 300 + "b" + "c" * 300
+    t, r = _preview_pair(a, b)
+    assert t.startswith("…") and t.endswith("…") and "*b*" in t
+    assert r.startswith("…") and r.endswith("…") and "abc" in r
+    assert len(t) <= _PREVIEW_LEN and len(r) <= _PREVIEW_LEN
+    # Difference near the end: leading ellipsis only.
+    t, _ = _preview_pair("a" * 300 + "*b*", "a" * 300 + "b")
+    assert t.startswith("…") and t.endswith("*b*")
 
 
 def test_read_only_single_query(django_assert_num_queries):
