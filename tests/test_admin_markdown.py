@@ -1,7 +1,7 @@
-"""Tests for the Markdown Preview control and the rendered, read-only
+"""Tests for the Markdown Write/Preview editor and the rendered, read-only
 description in the ServiceSubmission admin change form.
 
-The Preview control (shared partial) and the ``description_rendered`` readonly
+The editor (shared markdown_editor_box.html partial) and the ``description_rendered`` readonly
 field appear only when the markdown_descriptions feature flag is on. Admin
 edits of the description must not reset an approved submission's status.
 """
@@ -41,9 +41,9 @@ def test_admin_change_shows_preview_control_and_rendered(superuser_client, setti
     )
     resp = superuser_client.get(_change_url(sub))
     assert resp.status_code == 200
-    assert b"data-md-preview" in resp.content
-    assert b'id="md-preview-id_service_description"' in resp.content
-    assert b"#id_service_description" in resp.content
+    assert b"data-md-editor" in resp.content
+    assert b'id="id_service_description-panel-preview"' in resp.content
+    assert b'id="id_service_description-panel-write"' in resp.content
     assert reverse("submissions:markdown-preview").encode() in resp.content
     # Readonly rendered preview.
     assert b"Description (rendered)" in resp.content
@@ -71,8 +71,8 @@ def test_admin_change_flag_off_has_no_preview(superuser_client, settings):
     )
     resp = superuser_client.get(_change_url(sub))
     assert resp.status_code == 200
-    assert b"data-md-preview" not in resp.content
-    assert b"md-preview-id_service_description" not in resp.content
+    assert b"data-md-editor" not in resp.content
+    assert b"id_service_description-panel-preview" not in resp.content
     assert b"Description (rendered)" not in resp.content
     assert b"<strong>bold</strong>" not in resp.content
     assert b'rows="5"' in _textarea(resp.content)
@@ -82,7 +82,7 @@ def test_admin_add_view_renders_with_flag_on(superuser_client, settings):
     _set_flag(settings, True)
     resp = superuser_client.get(reverse("admin:submissions_servicesubmission_add"))
     assert resp.status_code == 200
-    assert b"data-md-preview" in resp.content
+    assert b"data-md-editor" in resp.content
 
 
 def test_get_fieldsets_does_not_mutate_class_fieldsets(superuser_client, settings):

@@ -400,3 +400,4 @@ document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
   });
 })();
 </script>
+{% if SITE.features.markdown_descriptions %}<script src="{% static 'js/markdown-editor.js' %}" defer></script>{% endif %}

@@ -1,8 +1,9 @@
-"""Tests for the Markdown Preview control on the public register/edit forms.
+"""Tests for the GitHub-style Write | Preview editor on the public register/edit forms.
 
-The control (shared partial markdown_preview_controls.html) is rendered under
-the service_description field only when the markdown_descriptions feature flag
-is on. It is pure HTMX: no inline script is added by this feature.
+The editor (markdown_editor.html + shared markdown_editor_box.html) wraps the
+service_description textarea only when the markdown_descriptions feature flag
+is on. Enhancement controls ship hidden; static/js/markdown-editor.js drives
+them, so the editor markup itself carries no inline script.
 """
 
 import copy
@@ -11,12 +12,13 @@ import re
 import pytest
 from django.template.loader import render_to_string
 from django.urls import reverse
+from django.utils.safestring import mark_safe
 
+from apps.submissions.models import DESCRIPTION_MAX_LENGTH, DESCRIPTION_MIN_LENGTH
 from tests.factories import APIKeyFactory, ServiceSubmissionFactory
 
 pytestmark = pytest.mark.django_db
-
-PANE_ID = b'id="md-preview-id_service_description"'
+FID = "id_service_description"
 
 
 def _set_flag(settings, enabled: bool) -> None:
@@ -25,84 +27,157 @@ def _set_flag(settings, enabled: bool) -> None:
     settings.SITE_CONFIG = cfg
 
 
-def _preview_button(content: bytes) -> bytes:
-    match = re.search(rb"<button[^>]*data-md-preview[^>]*>", content)
-    assert match, "Preview button not rendered"
+@pytest.fixture
+def md_on(settings):
+    _set_flag(settings, True)
+
+
+@pytest.fixture
+def md_off(settings):
+    _set_flag(settings, False)
+
+
+@pytest.fixture
+def edit_url(client):
+    sub = ServiceSubmissionFactory(biotools_url="")
+    key_obj, _ = APIKeyFactory.create_with_plaintext(submission=sub)
+    session = client.session
+    session["edit_grants"] = {str(sub.pk): str(key_obj.pk)}
+    session.save()
+    return reverse("submissions:edit", args=[sub.pk])
+
+
+def _tag(html, id_):
+    match = re.search(rf'<[a-z]+[^>]*id="{re.escape(id_)}"[^>]*>', html)
+    assert match, f"#{id_} not rendered"
     return match.group(0)
 
 
-def test_register_form_has_preview_control(client, settings):
-    _set_flag(settings, True)
-    resp = client.get(reverse("submissions:register"))
+def _assert_editor(html):
+    assert "data-md-editor" in html
+    assert 'role="tablist"' in html
+    for tab in ("write", "preview"):
+        assert f'id="{FID}-tab-{tab}"' in html
+        assert f'aria-controls="{FID}-panel-{tab}"' in html
+        assert f'id="{FID}-panel-{tab}"' in html
+        assert f'aria-labelledby="{FID}-tab-{tab}"' in html
+    assert re.search(rf'id="{FID}-tab-write"[^>]*aria-selected="true"', html)
+    assert re.search(rf'id="{FID}-tab-preview"[^>]*tabindex="-1"', html)
+    preview = _tag(html, f"{FID}-panel-preview")
+    assert "hidden" in preview
+    assert 'tabindex="0"' in preview
+    assert "aria-live" not in preview
+    assert f'data-min="{DESCRIPTION_MIN_LENGTH}"' in html
+    assert f'data-max="{DESCRIPTION_MAX_LENGTH}"' in html
+    assert f'aria-controls="{FID}-help"' in html
+    assert f'id="{FID}-help"' in html and "Formatting help" in html
+    assert 'name="service_description"' in html
+    assert 'hx-target="#field-errors-service_description"' in html
+    assert 'id="field-errors-service_description"' in html
+    assert html.count("js/markdown-editor.js") == 1
+    assert "markdown_preview_controls" not in html and "data-md-preview " not in html
+    assert 'id="md-preview-' not in html
+
+
+def _assert_label(html):
+    label = re.search(rf'<label for="{FID}".*?</label>', html, re.S)
+    assert label, "service_description label not rendered"
+    assert "required-star" in label.group(0)
+    assert "tooltip-icon" in label.group(0)
+
+
+def test_register_has_editor(client, md_on):
+    html = client.get(reverse("submissions:register")).content.decode()
+    _assert_editor(html)
+    _assert_label(html)
+
+
+def test_edit_has_editor(client, md_on, edit_url):
+    resp = client.get(edit_url)
     assert resp.status_code == 200
-    assert b"markdown-preview" in resp.content
-    assert b"Preview" in resp.content
-    assert PANE_ID in resp.content
+    html = resp.content.decode()
+    _assert_editor(html)
+    _assert_label(html)
 
 
-def test_preview_button_attributes(client, settings):
-    _set_flag(settings, True)
-    resp = client.get(reverse("submissions:register"))
-    button = _preview_button(resp.content)
-    assert b'type="button"' in button
-    assert reverse("submissions:markdown-preview").encode() in button
-    assert b'hx-target="#md-preview-id_service_description"' in button
-    assert b"#id_service_description" in button
-    assert b"csrfmiddlewaretoken" in button
-    assert b'hx-trigger="click"' in button
-    assert b'hx-params="service_description,csrfmiddlewaretoken"' in button
+def test_enhancement_controls_ship_hidden(client, md_on):
+    html = client.get(reverse("submissions:register")).content.decode()
+    tablist = re.search(r'<div[^>]*role="tablist"[^>]*>', html).group(0)
+    assert "data-md-enhance" in tablist and "hidden" in tablist
+    footer = re.search(r'<div class="md-editor__footer"[^>]*>', html).group(0)
+    assert "data-md-enhance" in footer and "hidden" in footer
+    assert "hidden" in _tag(html, f"{FID}-help")
+    # The write panel (holding the textarea) is visible without JS.
+    assert "hidden" not in _tag(html, f"{FID}-panel-write")
 
 
-def test_preview_pane_is_live_region(client, settings):
-    _set_flag(settings, True)
-    resp = client.get(reverse("submissions:register"))
-    match = re.search(rb"<div[^>]*" + re.escape(PANE_ID) + rb"[^>]*>", resp.content)
-    assert match
-    assert b'aria-live="polite"' in match.group(0)
-    assert b"markdown-preview" in match.group(0)
+def test_flag_off_has_no_editor(client, md_off):
+    html = client.get(reverse("submissions:register")).content.decode()
+    assert "data-md-editor" not in html and "markdown-editor.js" not in html
+    assert 'name="service_description"' in html
 
 
-def test_controls_partial_renders_no_script():
+def test_edit_flag_off_has_no_editor(client, md_off, edit_url):
+    html = client.get(edit_url).content.decode()
+    assert 'name="service_description"' in html
+    assert "data-md-editor" not in html and "markdown-editor.js" not in html
+
+
+def test_help_lists_supported_syntax(client, md_on):
+    html = client.get(reverse("submissions:register")).content.decode()
+    for s in (
+        "**bold**",
+        "_italic_",
+        "# Heading",
+        "## Sub-heading",
+        "- item",
+        "1. item",
+        "[text](https://",
+        "&gt; quote",
+    ):
+        assert s in html
+
+
+def test_help_note_lists_limitations():
+    html = render_to_string("submissions/partials/markdown_help.html")
+    for s in (
+        "images",
+        "code blocks",
+        "tables",
+        "strikethrough",
+        "raw HTML",
+        "4 spaces",
+        r"<code>\#</code>",
+        r"<code>1990\.</code>",
+    ):
+        assert s in html
+
+
+def test_no_inline_script_in_editor(client, md_on):
+    html = client.get(reverse("submissions:register")).content.decode()
+    start = html.index("data-md-editor")
+    end = html.index(f'id="{FID}-help"')
+    assert "<script" not in html[start:end]
+
+
+def test_box_partial_accepts_prerendered_widget():
     html = render_to_string(
-        "submissions/partials/markdown_preview_controls.html",
-        {"field_id": "id_service_description"},
+        "submissions/partials/markdown_editor_box.html",
+        {
+            "field_id": "id_x",
+            "widget_html": mark_safe('<textarea id="id_x"></textarea>'),
+        },
     )
-    assert 'id="md-preview-id_service_description"' in html
-    assert "<script" not in html.lower()
+    assert 'id="id_x-panel-write"' in html
+    assert '<textarea id="id_x"></textarea>' in html
+    assert "hx-post" not in html  # no public validation wrapper in admin mode
+    assert "<script" not in html
 
 
-def test_no_preview_control_when_flag_off(client, settings):
-    _set_flag(settings, False)
-    resp = client.get(reverse("submissions:register"))
-    assert resp.status_code == 200
-    assert b"markdown-preview" not in resp.content
-    assert b"data-md-preview" not in resp.content
+def test_description_length_limits_tag():
+    from django.template import engines
 
-
-def test_edit_form_has_preview_control(client, settings):
-    _set_flag(settings, True)
-    sub = ServiceSubmissionFactory(biotools_url="")
-    key_obj, _ = APIKeyFactory.create_with_plaintext(submission=sub)
-    session = client.session
-    session["edit_grants"] = {str(sub.pk): str(key_obj.pk)}
-    session.save()
-    resp = client.get(reverse("submissions:edit", args=[sub.pk]))
-    assert resp.status_code == 200
-    assert PANE_ID in resp.content
-    assert b'type="button"' in _preview_button(resp.content)
-
-
-def test_edit_form_no_preview_control_when_flag_off(client, settings):
-    _set_flag(settings, False)
-    sub = ServiceSubmissionFactory(biotools_url="")
-    key_obj, _ = APIKeyFactory.create_with_plaintext(submission=sub)
-    session = client.session
-    session["edit_grants"] = {str(sub.pk): str(key_obj.pk)}
-    session.save()
-    resp = client.get(reverse("submissions:edit", args=[sub.pk]))
-    assert resp.status_code == 200
-    # Sanity: this is the real edit form, with the description field.
-    assert b'name="service_description"' in resp.content
-    assert b"markdown-preview" not in resp.content
-    assert b"data-md-preview" not in resp.content
-    assert PANE_ID not in resp.content
+    tpl = engines["django"].from_string(
+        "{% load registry_tags %}{% description_length_limits as l %}{{ l.min }}-{{ l.max }}"
+    )
+    assert tpl.render({}) == f"{DESCRIPTION_MIN_LENGTH}-{DESCRIPTION_MAX_LENGTH}"

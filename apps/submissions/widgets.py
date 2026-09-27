@@ -33,8 +33,8 @@ CompactSelectSingleWidget: Single-select variant of compact select.
   - Similar UX to CompactSelectWidget but only one item selectable
   - Used for fields like service_center
 
-MarkdownTextareaWidget: admin textarea followed by the shared Markdown
-Preview control (submissions/partials/markdown_preview_controls.html).
+MarkdownTextareaWidget: admin textarea wrapped in the shared Write | Preview
+editor (submissions/partials/markdown_editor_box.html).
 """
 
 import json
@@ -271,17 +271,18 @@ class CompactSelectSingleWidget(forms.Select):
 
 
 class MarkdownTextareaWidget(AdminTextareaWidget):
-    """Admin textarea plus the shared Markdown Preview control.
+    """Admin textarea wrapped in the shared Write | Preview editor.
 
-    The control is appended via render_to_string because the default form
+    The editor is rendered via render_to_string because the default form
     renderer does not search the project templates/ directory.
     """
 
     def render(self, name, value, attrs=None, renderer=None):
         textarea = super().render(name, value, attrs, renderer)
         field_id = (attrs or {}).get("id") or self.attrs.get("id") or f"id_{name}"
-        controls = render_to_string(
-            "submissions/partials/markdown_preview_controls.html",
-            {"field_id": field_id},
+        return mark_safe(
+            render_to_string(
+                "submissions/partials/markdown_editor_box.html",
+                {"field_id": field_id, "widget_html": textarea},
+            )
         )
-        return mark_safe(textarea + controls)

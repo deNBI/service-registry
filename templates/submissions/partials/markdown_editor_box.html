@@ -1,0 +1,36 @@
+{% comment %}
+  GitHub-style Write | Preview editor around the service_description textarea.
+  Shared by the public forms (pass `field`) and the admin widget (pass
+  `widget_html`). Enhancement controls ship with `hidden`; static/js/markdown-editor.js
+  reveals and drives them, so without JS the plain textarea still works.
+  The preview tabpanel is focusable (tabindex="0") and deliberately has no
+  aria-live, so switching tabs does not re-announce the whole description.
+{% endcomment %}
+{% load registry_tags %}{% description_length_limits as limits %}
+<div class="md-editor" data-md-editor data-md-preview-url="{% url 'submissions:markdown-preview' %}">
+  <div class="md-editor__box">
+    <div class="md-editor__tabs" role="tablist" aria-label="Description editor" data-md-enhance hidden>
+      <button type="button" role="tab" class="md-editor__tab" id="{{ field_id }}-tab-write"
+              aria-selected="true" aria-controls="{{ field_id }}-panel-write" tabindex="0"
+              data-md-tab="write">Write</button>
+      <button type="button" role="tab" class="md-editor__tab" id="{{ field_id }}-tab-preview"
+              aria-selected="false" aria-controls="{{ field_id }}-panel-preview" tabindex="-1"
+              data-md-tab="preview">Preview</button>
+    </div>
+    <div class="md-editor__panel" role="tabpanel" id="{{ field_id }}-panel-write"
+         aria-labelledby="{{ field_id }}-tab-write" data-md-panel="write">
+      {% if widget_html %}{{ widget_html }}{% else %}{% include "submissions/partials/field_widget.html" %}{% endif %}
+    </div>
+    <div class="md-editor__panel md-editor__preview" role="tabpanel" id="{{ field_id }}-panel-preview"
+         aria-labelledby="{{ field_id }}-tab-preview" data-md-panel="preview" tabindex="0" hidden></div>
+  </div>
+  <div class="md-editor__footer" data-md-enhance hidden>
+    <button type="button" class="md-editor__help-toggle" data-md-help-toggle
+            aria-expanded="false" aria-controls="{{ field_id }}-help">Markdown supported · Formatting help</button>
+    <span class="md-editor__count" id="{{ field_id }}-count" data-md-counter
+          data-min="{{ limits.min }}" data-max="{{ limits.max }}"></span>
+  </div>
+  <div class="md-editor__help" id="{{ field_id }}-help" hidden>
+    {% include "submissions/partials/markdown_help.html" %}
+  </div>
+</div>
