@@ -486,7 +486,10 @@ class SubmissionForm(forms.ModelForm):
         return value
 
     def clean_service_description(self) -> str:
-        value = _sanitise(self.cleaned_data.get("service_description", ""))
+        value = self.cleaned_data.get("service_description", "") or ""
+        # Do NOT HTML-escape: description stores raw Markdown; safety is enforced
+        # by the output sanitizer (render_markdown). Keep NFC + strip only.
+        value = unicodedata.normalize("NFC", value).strip()
         if len(value) < DESCRIPTION_MIN_LENGTH:
             raise ValidationError(
                 _(f"Description must be at least {DESCRIPTION_MIN_LENGTH} characters.")
