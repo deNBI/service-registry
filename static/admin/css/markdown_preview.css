@@ -58,21 +58,32 @@
   margin: 0 0 .5rem;
 }
 
-.markdown-preview-body ul,
-.markdown-preview-body ol,
-.field-description_rendered .readonly ul,
-.field-description_rendered .readonly ol {
+/*
+ * Lists: Django admin's forms.css has `form .aligned ul` (margin-left: 160px;
+ * padding-left: 10px) and `form .aligned ul li` (list-style: none), which
+ * out-specify plain `.markdown-preview-body ul` and strip the bullets. The
+ * `form .aligned` prefix raises specificity just enough to win.
+ */
+form .aligned .markdown-preview-body ul,
+form .aligned .markdown-preview-body ol,
+form .aligned .field-description_rendered .readonly ul,
+form .aligned .field-description_rendered .readonly ol {
+  margin-left: 0;
   padding-left: 1.5rem;
 }
 
-.markdown-preview-body ul li,
-.field-description_rendered .readonly ul li {
-  list-style-type: disc;
+form .aligned .markdown-preview-body ul li,
+form .aligned .field-description_rendered .readonly ul li {
+  margin-left: 0;
+  padding-left: 0;
+  list-style: disc;
 }
 
-.markdown-preview-body ol li,
-.field-description_rendered .readonly ol li {
-  list-style-type: decimal;
+form .aligned .markdown-preview-body ol li,
+form .aligned .field-description_rendered .readonly ol li {
+  margin-left: 0;
+  padding-left: 0;
+  list-style: decimal;
 }
 
 .markdown-preview-body blockquote,
