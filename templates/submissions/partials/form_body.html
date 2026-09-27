@@ -64,7 +64,11 @@ are defined in the parent template so each can have its own action/labels.
   <div class="card-body">
     {% with desc=form.section_texts.b.description %}{% if desc %}<div class="section-description">{{ desc|linkify_description }}</div>{% endif %}{% endwith %}
     {% include "submissions/partials/field.html" with field=form.service_name required=True %}
+    {% if SITE.features.markdown_descriptions %}
+    {% include "submissions/partials/markdown_editor.html" with field=form.service_description required=True %}
+    {% else %}
     {% include "submissions/partials/field.html" with field=form.service_description required=True %}
+    {% endif %}
     {% include "submissions/partials/field.html" with field=form.year_established required=True %}
     {% include "submissions/partials/field.html" with field=form.service_categories required=True %}
     {% include "submissions/partials/field.html" with field=form.is_toolbox required=True %}

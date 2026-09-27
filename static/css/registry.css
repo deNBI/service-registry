@@ -1102,3 +1102,8 @@ select.edam-autocomplete { display: none !important; }
   padding: 1.25rem;
   background: white;
 }
+
+/* Markdown description preview pane (public form + admin): hidden until a preview is swapped in. */
+.markdown-preview:empty {
+  display: none;
+}

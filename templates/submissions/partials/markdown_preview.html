@@ -2,7 +2,7 @@
   <div class="alert alert-warning py-1 px-2 small mb-0">{{ error }}</div>
 {% else %}
   {% if removed %}
-    <div class="alert alert-warning py-1 px-2 small">Some content was removed: unsupported link or tag.</div>
+    <div class="alert alert-warning py-1 px-2 small">Some formatting was removed: headings, code, images and non-http(s)/mailto links are not supported.</div>
   {% endif %}
   <div class="markdown-preview-body">{{ html }}</div>
 {% endif %}

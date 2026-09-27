@@ -1,0 +1,15 @@
+{% comment %}
+  Markdown Preview control for the field whose DOM id is ``field_id``: a
+  Preview button, a syntax hint and a live preview pane. Self-contained (needs
+  only field_id and the preview URL) so the admin can reuse it. No script: the
+  pane is hidden while empty via `.markdown-preview:empty` in registry.css.
+{% endcomment %}
+<div class="markdown-editor mt-1">
+  <button type="button" class="btn btn-sm btn-outline-secondary" data-md-preview
+          hx-post="{% url 'submissions:markdown-preview' %}"
+          hx-include="[name='csrfmiddlewaretoken'], #{{ field_id }}"
+          hx-target="#md-preview-{{ field_id }}"
+          hx-trigger="click">Preview</button>
+  <small class="form-text text-muted ms-2">Supports Markdown: **bold**, _italic_, lists, [links](https://example.com).</small>
+  <div id="md-preview-{{ field_id }}" class="markdown-preview border rounded p-2 mt-1" aria-live="polite"></div>
+</div>

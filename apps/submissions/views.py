@@ -655,21 +655,32 @@ def validate_field(request: HttpRequest) -> HttpResponse:
 # ---------------------------------------------------------------------------
 
 
-@ratelimit(key="ip", rate=settings.RATE_LIMIT_VALIDATE, method="POST", block=True)
+@ratelimit(key="ip", rate=settings.RATE_LIMIT_VALIDATE, method="POST", block=False)
 @require_POST
 def markdown_preview_view(request: HttpRequest) -> HttpResponse:
     """
     POST /markdown-preview/
 
-    HTMX endpoint: renders the posted description through the shared
-    render_markdown pipeline and returns the preview fragment, plus a
-    non-blocking notice when sanitization removed content. 404 when the
-    markdown_descriptions feature flag is off.
+    HTMX endpoint: renders the posted description (``service_description`` or
+    ``description``) through the shared render_markdown pipeline and returns
+    the preview fragment, plus a non-blocking notice when sanitization removed
+    content. 404 when the markdown_descriptions feature flag is off.
+
+    Rate limiting is non-blocking: htmx silently ignores 4xx responses, so a
+    throttled request gets a 200 fragment with an inline message instead.
     """
     if not markdown_enabled():
         raise Http404
     template = "submissions/partials/markdown_preview.html"
-    text = request.POST.get("description", "")
+    if getattr(request, "limited", False):
+        return render(
+            request,
+            template,
+            {"error": "Too many previews. Please wait a moment and try again."},
+        )
+    text = request.POST.get("service_description") or request.POST.get(
+        "description", ""
+    )
     if len(text) > DESCRIPTION_MAX_LENGTH:
         return render(
             request, template, {"error": "Description is too long to preview."}

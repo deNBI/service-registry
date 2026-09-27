@@ -2,7 +2,9 @@
 
 The endpoint renders through the shared render_markdown pipeline, is gated on
 the markdown_descriptions feature flag (404 when off) and is per-IP
-rate-limited exactly like validate_field (RATE_LIMIT_VALIDATE, block=True).
+rate-limited on RATE_LIMIT_VALIDATE like validate_field, but non-blocking: a
+throttled request gets a 200 with an inline message because htmx ignores 4xx
+responses.
 """
 
 import copy
@@ -84,14 +86,35 @@ def test_preview_get_is_405(client, md_on):
 
 
 @override_settings(RATELIMIT_ENABLE=True)
-def test_preview_is_rate_limited(client, md_on):
+def test_preview_is_rate_limited_with_friendly_message(client, md_on):
+    """A throttled preview returns 200 with an inline message (htmx drops 4xx
+    silently), and the bucket is keyed on the real client IP (X-Real-IP)."""
     cache.clear()
     try:
         limit = int(django_settings.RATE_LIMIT_VALIDATE.split("/")[0])
         payload = {"description": "**bold**"}
-        ip = "203.0.113.9"
+        ip_a, ip_b = "203.0.113.9", "203.0.113.10"
         for _ in range(limit):
-            assert client.post(URL, payload, HTTP_X_REAL_IP=ip).status_code == 200
-        assert client.post(URL, payload, HTTP_X_REAL_IP=ip).status_code == 403
+            resp = client.post(URL, payload, HTTP_X_REAL_IP=ip_a)
+            assert resp.status_code == 200
+            assert b"<strong>bold</strong>" in resp.content
+        resp = client.post(URL, payload, HTTP_X_REAL_IP=ip_a)
+        assert resp.status_code == 200
+        assert b"Too many previews" in resp.content
+        assert b"<strong>bold</strong>" not in resp.content
+        resp = client.post(URL, payload, HTTP_X_REAL_IP=ip_b)
+        assert resp.status_code == 200
+        assert b"<strong>bold</strong>" in resp.content
     finally:
         cache.clear()  # don't leak the counter into other tests
+
+
+def test_preview_accepts_service_description_field_name(client, md_on):
+    resp = client.post(URL, {"service_description": "**bold**"})
+    assert resp.status_code == 200
+    assert b"<strong>bold</strong>" in resp.content
+
+
+def test_preview_removed_notice_lists_unsupported_formatting(client, md_on):
+    resp = client.post(URL, {"description": "# Heading"})
+    assert b"Some formatting was removed" in resp.content
