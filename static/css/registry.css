@@ -1176,6 +1176,11 @@ select.edam-autocomplete { display: none !important; }
   box-shadow: none;
   outline: none;
 }
+/* The box shows the error state; drop Bootstrap's invalid icon and its padding. */
+.md-editor__panel .form-control.is-invalid {
+  background-image: none;
+  padding-right: 0.75rem;
+}
 .md-editor__preview {
   padding: 0.6rem 0.75rem;
   overflow-wrap: anywhere;
