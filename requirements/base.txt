@@ -28,6 +28,7 @@ altcha==1.0.0                 # CAPTCHA — self-hosted proof-of-work challenge 
 
 # HTML sanitisation (XSS prevention on free-text inputs)
 bleach==6.4.0
+Markdown==3.10.2
 
 # File upload processing
 Pillow==12.3.0        # JPEG/PNG re-encoding and EXIF stripping
