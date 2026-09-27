@@ -1,8 +1,10 @@
-{% if error %}
-  <div class="alert alert-warning py-1 px-2 small mb-0">{{ error }}</div>
+{% if empty %}
+  <p class="md-editor__empty">Nothing to preview.</p>
+{% elif error %}
+  <div class="md-editor__alert" role="alert">{{ error }}</div>
 {% else %}
   {% if removed %}
-    <div class="alert alert-warning py-1 px-2 small">Some formatting was removed: headings, code, images and unsafe links are not supported.</div>
+    <div class="md-editor__alert" role="status">Some formatting was removed: images, code, horizontal rules and unsafe links are not supported.</div>
   {% endif %}
-  <div class="markdown-preview-body">{{ html }}</div>
+  <div class="md-rendered">{{ html }}</div>
 {% endif %}

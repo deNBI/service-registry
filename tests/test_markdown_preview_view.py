@@ -144,17 +144,35 @@ def test_preview_accepts_service_description_field_name(client, md_on):
     assert b"<strong>bold</strong>" in resp.content
 
 
-def test_preview_removed_notice_lists_unsupported_formatting(client, md_on):
-    resp = client.post(URL, {"description": "![i](https://e.org/x.png)"})
-    assert (
-        b"Some formatting was removed: headings, code, images and unsafe links "
-        b"are not supported." in resp.content
-    )
-
-
-@pytest.mark.parametrize("text", ["", "   ", "\n\t \n"])
-def test_preview_empty_text_returns_empty_body(client, md_on, text):
-    """Empty input yields an empty body so the pane matches :empty and hides."""
+@pytest.mark.parametrize("text", ["", "   \n\t "])
+def test_preview_empty_input_shows_placeholder(client, md_on, text):
+    """Empty input always yields a fragment (never an empty body)."""
     resp = client.post(URL, {"service_description": text})
     assert resp.status_code == 200
-    assert resp.content == b""
+    body = resp.content.decode()
+    assert "Nothing to preview." in body
+    assert "md-rendered" not in body
+
+
+def test_preview_notice_wording(client, md_on):
+    resp = client.post(URL, {"service_description": "![i](https://e.org/x.png) text"})
+    assert (
+        "Some formatting was removed: images, code, horizontal rules and unsafe links "
+        "are not supported."
+    ) in resp.content.decode()
+
+
+def test_preview_notice_and_error_use_editor_alert_class(client, md_on):
+    resp = client.post(URL, {"service_description": "![i](https://e.org/x.png) text"})
+    assert b'class="md-editor__alert" role="status"' in resp.content
+    resp = client.post(URL, {"description": "x" * (DESCRIPTION_MAX_LENGTH + 1)})
+    assert b'class="md-editor__alert" role="alert"' in resp.content
+    assert b"alert-warning" not in resp.content
+
+
+def test_preview_body_wrapper_class(client, md_on):
+    resp = client.post(URL, {"service_description": "**b**"})
+    assert (
+        '<div class="md-rendered"><p><strong>b</strong></p></div>'
+        in resp.content.decode()
+    )
