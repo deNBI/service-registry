@@ -4,13 +4,13 @@ import pytest
 
 from apps.submissions.forms import SubmissionForm
 from tests.factories import ServiceSubmissionFactory
-from tests.test_forms import _base_form_data
+from tests.helpers import base_form_data
 
 pytestmark = pytest.mark.django_db
 
 
 def _data_with_desc(desc):
-    data = _base_form_data()
+    data = base_form_data()
     data["service_description"] = desc
     return data
 

@@ -18,7 +18,7 @@ from apps.submissions.markdown_render import (
     render_markdown,
 )
 from tests.factories import ServiceSubmissionFactory
-from tests.test_catalogue_markdown_render import _card_desc, _list_desc
+from tests.helpers import card_desc, list_desc
 
 pytestmark = pytest.mark.django_db
 
@@ -43,7 +43,8 @@ XSS_VECTORS = [
 
 _TAG_RE = re.compile(r"<\s*([a-zA-Z0-9]+)([^>]*)>")
 _QUOTED_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
-_HANDLER_RE = re.compile(r"\son\w+\s*=", re.IGNORECASE)
+# "/" is a valid attribute separator in HTML (e.g. <a/onclick=x>).
+_HANDLER_RE = re.compile(r"[\s/]on\w+\s*=", re.IGNORECASE)
 _HREF_RE = re.compile(r"\bhref\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", re.IGNORECASE)
 _SAFE_HREF_RE = re.compile(r"^(https?:|mailto:)", re.IGNORECASE)
 
@@ -59,6 +60,15 @@ def _assert_safe_html(out: str) -> None:
         for href in hrefs:
             value = href.strip("\"'").strip()
             assert _SAFE_HREF_RE.match(value), (href, out)
+
+
+def test_safe_html_checker_flags_live_handlers():
+    """Self-test: the checker must catch handlers after whitespace or "/",
+    and ignore handler-like text inside a quoted attribute value."""
+    for live in ("<a/onclick=x>", "<p onmouseover=x>"):
+        with pytest.raises(AssertionError):
+            _assert_safe_html(live)
+    _assert_safe_html('<a title="x onmouseover=y">')
 
 
 @pytest.mark.parametrize("vec", XSS_VECTORS)
@@ -128,10 +138,10 @@ def test_all_surfaces_render_identically(client, admin_client, md_on):
 
     list_resp = client.get(reverse("catalogue:index") + "?view=list")
     assert list_resp.status_code == 200
-    assert _list_desc(list_resp.content) == expected_html
+    assert list_desc(list_resp.content) == expected_html
 
     card_resp = client.get(reverse("catalogue:index"))
     assert card_resp.status_code == 200
-    assert _card_desc(card_resp.content) == escape(
+    assert card_desc(card_resp.content) == escape(
         markdown_to_text(sub.service_description)
     )

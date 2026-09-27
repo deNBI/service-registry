@@ -8,8 +8,7 @@ import pytest
 from django.urls import reverse
 
 from tests.factories import APIKeyFactory, ServiceSubmissionFactory
-from tests.test_forms import _base_form_data
-from tests.test_views import TestEditView as _EditViewTests
+from tests.helpers import base_form_data, edit_form_data
 
 pytestmark = pytest.mark.django_db
 
@@ -25,7 +24,7 @@ def test_cross_channel_identical_storage():
     # (model/form apply idempotent NFC + strip only; no HTML escaping).
     from apps.submissions.forms import SubmissionForm
 
-    data = _base_form_data({"service_description": RAW})
+    data = base_form_data({"service_description": RAW})
     form = SubmissionForm(data=data)
     assert form.is_valid(), form.errors
     obj = form.save()
@@ -36,11 +35,6 @@ def test_cross_channel_identical_storage():
 # ---------------------------------------------------------------------------
 # Web edit flow (submissions:edit): real POSTs through EditView.
 # ---------------------------------------------------------------------------
-
-
-def _edit_form_data(sub, **overrides):
-    # Reuse the complete edit payload builder from the existing edit-view tests.
-    return _EditViewTests._edit_form_data(None, sub, **overrides)
 
 
 def _grant_edit(client, sub):
@@ -59,7 +53,7 @@ def _approved(description):
 def test_web_edit_description_change_resets_to_submitted(client):
     sub = _approved("Old description text that is comfortably over fifty chars.")
     _grant_edit(client, sub)
-    data = _edit_form_data(
+    data = edit_form_data(
         sub,
         service_description="New **markdown** description, also well over fifty chars.",
     )
@@ -78,7 +72,7 @@ def test_web_edit_unchanged_description_stays_approved(client):
     sub = _approved(desc)
     _grant_edit(client, sub)
     resp = client.post(
-        reverse("submissions:edit", args=[sub.pk]), data=_edit_form_data(sub)
+        reverse("submissions:edit", args=[sub.pk]), data=edit_form_data(sub)
     )
     assert resp.status_code == 302, resp.content[:2000]
     sub.refresh_from_db()
@@ -105,7 +99,7 @@ def test_web_edit_resubmit_legacy_entity_stays_approved(client):
     submitted_value = html.unescape(m.group(1)).removeprefix("\n")
     assert submitted_value == desc
 
-    data = _edit_form_data(sub, service_description=submitted_value)
+    data = edit_form_data(sub, service_description=submitted_value)
     resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
     assert resp.status_code == 302, resp.content[:2000]
     sub.refresh_from_db()

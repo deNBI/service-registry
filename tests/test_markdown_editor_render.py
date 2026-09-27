@@ -90,3 +90,19 @@ def test_edit_form_has_preview_control(client, settings):
     assert resp.status_code == 200
     assert PANE_ID in resp.content
     assert b'type="button"' in _preview_button(resp.content)
+
+
+def test_edit_form_no_preview_control_when_flag_off(client, settings):
+    _set_flag(settings, False)
+    sub = ServiceSubmissionFactory(biotools_url="")
+    key_obj, _ = APIKeyFactory.create_with_plaintext(submission=sub)
+    session = client.session
+    session["edit_grants"] = {str(sub.pk): str(key_obj.pk)}
+    session.save()
+    resp = client.get(reverse("submissions:edit", args=[sub.pk]))
+    assert resp.status_code == 200
+    # Sanity: this is the real edit form, with the description field.
+    assert b'name="service_description"' in resp.content
+    assert b"markdown-preview" not in resp.content
+    assert b"data-md-preview" not in resp.content
+    assert PANE_ID not in resp.content

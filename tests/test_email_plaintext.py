@@ -125,28 +125,27 @@ def test_every_txt_email_template_renders_unescaped(template_name):
     from apps.submissions.tasks import render_plaintext
 
     sub = _submission(
-        service_name="Bob's Tool & Co",
+        service_name='Bob\'s <Tool> & "Co"',
         submitter_first_name="Zoë",
         submitter_last_name="O'Brien",
     )
     ctx = {
         "submission": sub,
         "event": "updated",
-        "event_label": "Bob's & event",
-        "status_message": "It's approved & live",
-        "categories": ["R&D"],
+        "event_label": 'Bob\'s & <event> "x"',
+        "status_message": 'It\'s approved & live > "now"',
+        "categories": ["R&D <core>"],
         "pis": [],
-        "changes": [{"label": "L&D", "old": "it's", "new": "a & b"}],
+        "changes": [{"label": "L&D", "old": 'it\'s < "a"', "new": "a & b > c"}],
         "status_reset": True,
         "admin_url": "https://example.com/?a=1&b=2",
-        "CONTACT_ORG": "O'Org & Co",
+        "CONTACT_ORG": 'O\'Org & Co <"hq">',
         "CONTACT_EMAIL": "c@example.com",
         "WEBSITE_URL": "https://example.com",
     }
     out = render_plaintext(template_name, ctx)
-    assert "Bob's Tool & Co" in out
-    assert "&#x27;" not in out
-    assert "&amp;" not in out
+    assert 'Bob\'s <Tool> & "Co"' in out
+    _assert_unescaped(out)
 
 
 # ---------------------------------------------------------------------------

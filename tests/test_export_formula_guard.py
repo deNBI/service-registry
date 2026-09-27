@@ -13,7 +13,7 @@ from tests.factories import ServiceSubmissionFactory
 
 def test_prefixes_formula_chars():
     for ch in "=+-@":
-        assert _csv_safe(ch + "cmd").startswith("'")
+        assert _csv_safe(ch + "cmd") == "'" + ch + "cmd"
 
 
 def test_prefixes_leading_tab_and_carriage_return():

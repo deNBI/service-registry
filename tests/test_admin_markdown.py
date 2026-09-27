@@ -13,7 +13,7 @@ import pytest
 from django.urls import reverse
 
 from tests.factories import ServiceSubmissionFactory
-from tests.test_admin import _edit_form_payload, admin_client  # noqa: F401
+from tests.helpers import edit_form_payload
 
 pytestmark = pytest.mark.django_db
 
@@ -34,12 +34,12 @@ def _textarea(content: bytes) -> bytes:
     return match.group(0)
 
 
-def test_admin_change_shows_preview_control_and_rendered(admin_client, settings):  # noqa: F811
+def test_admin_change_shows_preview_control_and_rendered(superuser_client, settings):
     _set_flag(settings, True)
     sub = ServiceSubmissionFactory(
         status="approved", biotools_url="", service_description="**bold**"
     )
-    resp = admin_client.get(_change_url(sub))
+    resp = superuser_client.get(_change_url(sub))
     assert resp.status_code == 200
     assert b"data-md-preview" in resp.content
     assert b'id="md-preview-id_service_description"' in resp.content
@@ -52,10 +52,10 @@ def test_admin_change_shows_preview_control_and_rendered(admin_client, settings)
     assert b'rows="5"' in _textarea(resp.content)
 
 
-def test_admin_change_loads_htmx_csrf_refresh_and_css(admin_client, settings):  # noqa: F811
+def test_admin_change_loads_htmx_csrf_refresh_and_css(superuser_client, settings):
     _set_flag(settings, True)
     sub = ServiceSubmissionFactory(status="approved", biotools_url="")
-    resp = admin_client.get(_change_url(sub))
+    resp = superuser_client.get(_change_url(sub))
     assert b"js/htmx.min.js" in resp.content
     assert b"js/htmx-csrf-refresh.js" in resp.content
     assert b"admin/css/markdown_preview.css" in resp.content
@@ -64,12 +64,12 @@ def test_admin_change_loads_htmx_csrf_refresh_and_css(admin_client, settings):  
     assert b"admin/css/submissions_filter_sidebar.css" in resp.content
 
 
-def test_admin_change_flag_off_has_no_preview(admin_client, settings):  # noqa: F811
+def test_admin_change_flag_off_has_no_preview(superuser_client, settings):
     _set_flag(settings, False)
     sub = ServiceSubmissionFactory(
         status="approved", biotools_url="", service_description="**bold**"
     )
-    resp = admin_client.get(_change_url(sub))
+    resp = superuser_client.get(_change_url(sub))
     assert resp.status_code == 200
     assert b"data-md-preview" not in resp.content
     assert b"md-preview-id_service_description" not in resp.content
@@ -78,31 +78,31 @@ def test_admin_change_flag_off_has_no_preview(admin_client, settings):  # noqa: 
     assert b'rows="5"' in _textarea(resp.content)
 
 
-def test_admin_add_view_renders_with_flag_on(admin_client, settings):  # noqa: F811
+def test_admin_add_view_renders_with_flag_on(superuser_client, settings):
     _set_flag(settings, True)
-    resp = admin_client.get(reverse("admin:submissions_servicesubmission_add"))
+    resp = superuser_client.get(reverse("admin:submissions_servicesubmission_add"))
     assert resp.status_code == 200
     assert b"data-md-preview" in resp.content
 
 
-def test_get_fieldsets_does_not_mutate_class_fieldsets(admin_client, settings):  # noqa: F811
+def test_get_fieldsets_does_not_mutate_class_fieldsets(superuser_client, settings):
     from apps.submissions.admin import ServiceSubmissionAdmin
 
     before = copy.deepcopy(ServiceSubmissionAdmin.fieldsets)
     _set_flag(settings, True)
     sub = ServiceSubmissionFactory(status="approved", biotools_url="")
-    admin_client.get(_change_url(sub))
+    superuser_client.get(_change_url(sub))
     assert ServiceSubmissionAdmin.fieldsets == before
 
 
-def test_admin_description_edit_does_not_reset_status(admin_client, settings):  # noqa: F811
+def test_admin_description_edit_does_not_reset_status(superuser_client, settings):
     _set_flag(settings, True)
     sub = ServiceSubmissionFactory(
         status="approved", biotools_url="", service_description="old text here"
     )
     new_text = "An updated description with **bold** text and a _short_ list."
-    payload = _edit_form_payload(sub, service_description=new_text)
-    resp = admin_client.post(_change_url(sub), data=payload)
+    payload = edit_form_payload(sub, service_description=new_text)
+    resp = superuser_client.post(_change_url(sub), data=payload)
     assert resp.status_code == 302, (
         resp.context["adminform"].form.errors if resp.context else resp
     )

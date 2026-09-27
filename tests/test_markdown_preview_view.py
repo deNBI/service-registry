@@ -75,6 +75,19 @@ def test_preview_rejects_overlong(client, md_on):
     assert b"too long" in resp.content.lower()
 
 
+def test_preview_length_boundary(client, md_on):
+    at_limit = "x" * DESCRIPTION_MAX_LENGTH
+    resp = client.post(URL, {"description": at_limit})
+    assert resp.status_code == 200
+    assert b"too long" not in resp.content.lower()
+    assert f"<p>{at_limit}</p>".encode() in resp.content
+
+    resp = client.post(URL, {"description": at_limit + "x"})
+    assert resp.status_code == 200
+    assert b"too long" in resp.content.lower()
+    assert at_limit.encode() not in resp.content
+
+
 def test_preview_is_404_when_flag_off(client, settings):
     _set_flag(settings, False)
     resp = client.post(URL, {"description": "**bold**"})

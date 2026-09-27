@@ -188,7 +188,7 @@ def test_snippet_preserves_identifiers():
 
 def test_snippet_truncates():
     out = markdown_to_text("x" * 500, limit=100)
-    assert len(out) <= 104  # 100 + ellipsis
+    assert out == "x" * 100 + "…"
 
 
 def test_snippet_empty():

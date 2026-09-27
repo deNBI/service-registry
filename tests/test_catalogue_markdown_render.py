@@ -1,12 +1,12 @@
 """Catalogue templates: rendered Markdown in list view, plain snippet on cards."""
 
-import re
-
 import pytest
 from django.core.cache import cache
 from django.urls import reverse
 
 from tests.factories import ServiceSubmissionFactory
+from tests.helpers import card_desc as _card_desc
+from tests.helpers import list_desc as _list_desc
 from tests.test_catalogue_views import CATALOGUE_ON
 
 pytestmark = pytest.mark.django_db
@@ -30,26 +30,6 @@ def _clear_cache():
 
 def _list_url():
     return reverse("catalogue:index") + "?view=list"
-
-
-def _list_desc(content: bytes) -> str:
-    m = re.search(
-        r'<div class="catalogue-list-desc-text">(.*?)</div>',
-        content.decode(),
-        re.DOTALL,
-    )
-    assert m, "list-view description container not found"
-    return m.group(1)
-
-
-def _card_desc(content: bytes) -> str:
-    m = re.search(
-        r'<p class="text-muted small catalogue-description mb-3">(.*?)</p>',
-        content.decode(),
-        re.DOTALL,
-    )
-    assert m, "card description not found"
-    return m.group(1)
 
 
 def test_list_view_renders_markdown(client, settings):
@@ -104,7 +84,7 @@ def test_legacy_escaped_entity_decoded_once_flag_on(client, settings):
     list_inner = _list_desc(client.get(_list_url()).content)
     # Browser shows "x > 5": the entity is present once, never double-escaped.
     assert "&amp;gt;" not in list_inner
-    assert "x &gt; 5" in list_inner
+    assert list_inner == "<p>x &gt; 5</p>"
 
     card = _card_desc(client.get(reverse("catalogue:index")).content)
     assert "&amp;gt;" not in card

@@ -1,10 +1,12 @@
 import hashlib
+import json
 import secrets
 
 import pytest
 from django.core.cache import cache
 from rest_framework.test import APIClient
 
+from apps.submissions.markdown_render import render_markdown
 from tests.factories import ServiceSubmissionFactory
 
 pytestmark = pytest.mark.django_db
@@ -91,7 +93,47 @@ def test_html_field_is_read_only_on_write_serializers():
         assert cls().fields["service_description_html"].read_only is True
 
 
-def test_schema_documents_html_field(admin_client):
-    resp = APIClient().get("/api/schema/")
+def test_schema_documents_html_field():
+    resp = APIClient().get("/api/schema/?format=json")
     assert resp.status_code == 200
-    assert b"service_description_html" in resp.content
+    schemas = json.loads(resp.content)["components"]["schemas"]
+    prop = schemas["SubmissionDetail"]["properties"]["service_description_html"]
+    assert prop["type"] == "string"
+    assert prop["readOnly"] is True
+    # Detail-only: list payloads stay small.
+    assert "service_description_html" not in schemas["SubmissionList"]["properties"]
+
+
+def test_patch_ignores_client_html_and_renders_new_raw(admin_client, settings):
+    """End to end: a client-supplied service_description_html is dropped; the
+    response carries the server rendering of the NEW raw text, which is what
+    gets stored."""
+    settings.SITE_CONFIG = {"features": {"markdown_descriptions": True}}
+    sub = ServiceSubmissionFactory(
+        status="approved",
+        biotools_url="",
+        service_description="Old description text that is comfortably long.",
+    )
+    # Warm the render cache with the old text so a stale entry would show up.
+    before = admin_client.get(f"/api/v1/submissions/{sub.id}/")
+    assert "Old description" in before.json()["service_description_html"]
+
+    new_raw = "Updated tool that handles **huge** genomes and x > 5 reads quickly."
+    resp = admin_client.patch(
+        f"/api/v1/submissions/{sub.id}/",
+        {
+            "service_description": new_raw,
+            "service_description_html": "<script>evil()</script>",
+        },
+        format="json",
+    )
+    assert resp.status_code == 200, resp.content
+    body = resp.json()
+    html = body["service_description_html"]
+    assert "evil()" not in html
+    assert "<script" not in html
+    assert html == str(render_markdown(new_raw))
+    assert "<strong>huge</strong>" in html
+    assert body["service_description"] == new_raw
+    sub.refresh_from_db()
+    assert sub.service_description == new_raw
