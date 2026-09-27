@@ -486,7 +486,7 @@ class SubmissionForm(forms.ModelForm):
         return value
 
     def clean_service_description(self) -> str:
-        value = self.cleaned_data.get("service_description", "") or ""
+        value = self.cleaned_data.get("service_description", "")
         # Do NOT HTML-escape: description stores raw Markdown; safety is enforced
         # by the output sanitizer (render_markdown). Keep NFC + strip only.
         value = unicodedata.normalize("NFC", value).strip()

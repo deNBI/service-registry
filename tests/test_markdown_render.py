@@ -260,7 +260,7 @@ def test_submission_description_key_and_ttl(md_on, monkeypatch):
     mr.render_submission_description(_sub("x", pk=7))
     assert calls == [(f"md:v{mr.RENDER_VERSION}:html:7:{_TS_US}", mr.MD_CACHE_TTL)]
     assert mr.MD_CACHE_TTL == 60 * 60 * 24
-    assert mr.RENDER_VERSION == 3
+    assert mr.RENDER_VERSION == 4
 
 
 def test_render_version_bump_forces_fresh_render(md_on, monkeypatch):
@@ -352,7 +352,7 @@ def test_snippet_word_boundary_after_scaled_heading():
 
 
 def test_render_version_bumped():
-    assert RENDER_VERSION == 3
+    assert RENDER_VERSION == 4
 
 
 @pytest.mark.parametrize(
@@ -435,6 +435,10 @@ def test_normal_link_unchanged():
     [
         "[**![i](https://e.org/x.png)**](https://e.org)",
         "[&nbsp;](https://e.org)",
+        "[\u200b](https://a.com)",
+        "[&#8203;](https://a.com)",
+        "[\u200c\u200d\u2060\ufeff](https://a.com)",
+        "[&zwj;&#xFEFF;](https://a.com)",
     ],
 )
 def test_link_with_no_visible_text_is_unwrapped(src):
@@ -461,6 +465,12 @@ def test_link_with_removed_image_and_label_keeps_label():
         'target="_blank"> label</a></p>'
     )
     assert removed is True
+
+
+def test_link_with_zero_width_and_real_text_is_kept():
+    html, removed = render_with_notice("[\u200bdocs](https://a.com)")
+    assert "<a" in str(html)
+    assert removed is False
 
 
 def test_nbsp_is_stripped_by_str_strip():

@@ -1,6 +1,6 @@
 """Shared Markdown rendering + sanitization for service_description.
 
-Single source of truth: every surface (catalogue, API, HTMX preview, admin)
+Single source of truth: every surface (catalogue, API, editor preview, admin)
 renders through render_markdown() so output is identical everywhere.
 """
 
@@ -49,7 +49,7 @@ ALLOWED_ATTRS = {"a": _allowed_a_attr}
 # Bump whenever render/sanitize rules change so cached output from a previous
 # deploy is never served. Keys also carry a finite TTL so orphaned entries
 # (old versions, old updated_at values) expire from Redis on their own.
-RENDER_VERSION = 3
+RENDER_VERSION = 4
 MD_CACHE_TTL = 60 * 60 * 24
 
 # A whole anchor as serialized by bleach: every attribute value is
@@ -72,12 +72,17 @@ def markdown_enabled() -> bool:
 
 
 _TAG_RE = re.compile(r"<[^>]*>")
+# Invisible format characters str.strip() keeps: zero-width space/non-joiner/
+# joiner, word joiner and BOM (zero-width no-break space).
+_ZERO_WIDTH_RE = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
 
 
 def _visible_text(fragment: str) -> str:
     """Text a reader would see in sanitized inner HTML: tags stripped,
-    entities decoded and whitespace trimmed (str.strip() also trims U+00A0)."""
-    return _html.unescape(_TAG_RE.sub("", fragment)).strip()
+    entities decoded, zero-width characters removed and whitespace trimmed
+    (str.strip() also trims U+00A0)."""
+    text = _html.unescape(_TAG_RE.sub("", fragment))
+    return _ZERO_WIDTH_RE.sub("", text).strip()
 
 
 def _harden_anchors(html: str) -> str:
@@ -86,7 +91,8 @@ def _harden_anchors(html: str) -> str:
     An anchor whose href bleach dropped (blocked or scheme-less link) is
     unwrapped to its inner text rather than left as a dead <a>. An anchor
     with no VISIBLE text (tags stripped, entities decoded, whitespace
-    including U+00A0 trimmed; e.g. a README badge whose image was stripped,
+    including U+00A0 trimmed, zero-width characters such as U+200B removed;
+    e.g. a README badge whose image was stripped,
     even inside **...**, or a lone &nbsp;) is unwrapped too, so no text-less
     link remains. Kept anchors
     get rel="nofollow noopener noreferrer"; only http(s) links also get
@@ -170,7 +176,7 @@ def render_markdown(text: str) -> SafeString:
 
 
 def render_with_notice(text: str) -> tuple[SafeString, bool]:
-    """Return (safe_html, removed) for the HTMX preview.
+    """Return (safe_html, removed) for the description editor's Preview tab.
 
     removed is True when sanitization dropped content the user wrote: a link
     lost its href (blocked javascript:/data: protocol or no explicit

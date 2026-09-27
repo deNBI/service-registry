@@ -21,7 +21,7 @@ def _clear_cache():
 
 
 @pytest.fixture
-def admin_client():
+def api_admin_client():
     from apps.api.models import AdminAPIKey
 
     plaintext = secrets.token_urlsafe(48)
@@ -36,22 +36,22 @@ def admin_client():
     return c
 
 
-def test_detail_has_html_field(admin_client, settings):
+def test_detail_has_html_field(api_admin_client, settings):
     settings.SITE_CONFIG = {"features": {"markdown_descriptions": True}}
     sub = ServiceSubmissionFactory(
         status="approved", biotools_url="", service_description="**bold**"
     )
-    resp = admin_client.get(f"/api/v1/submissions/{sub.id}/")
+    resp = api_admin_client.get(f"/api/v1/submissions/{sub.id}/")
     assert resp.status_code == 200, resp.content
     body = resp.json()
     assert body["service_description"] == "**bold**"  # raw kept
     assert "<strong>bold</strong>" in body["service_description_html"]
 
 
-def test_list_omits_html_field(admin_client, settings):
+def test_list_omits_html_field(api_admin_client, settings):
     settings.SITE_CONFIG = {"features": {"markdown_descriptions": True}}
     ServiceSubmissionFactory(status="approved", biotools_url="")
-    resp = admin_client.get("/api/v1/submissions/")
+    resp = api_admin_client.get("/api/v1/submissions/")
     assert resp.status_code == 200, resp.content
     payload = resp.json()
     rows = (
@@ -62,7 +62,7 @@ def test_list_omits_html_field(admin_client, settings):
     assert "service_description_html" not in rows[0]
 
 
-def test_detail_html_is_escaped_when_flag_off(admin_client, settings):
+def test_detail_html_is_escaped_when_flag_off(api_admin_client, settings):
     """A *_html field must always be safe to insert as HTML: with the flag
     off it carries the escaped raw text, never live markup."""
     settings.SITE_CONFIG = {"features": {"markdown_descriptions": False}}
@@ -70,7 +70,7 @@ def test_detail_html_is_escaped_when_flag_off(admin_client, settings):
     sub = ServiceSubmissionFactory(
         status="approved", biotools_url="", service_description=raw
     )
-    resp = admin_client.get(f"/api/v1/submissions/{sub.id}/")
+    resp = api_admin_client.get(f"/api/v1/submissions/{sub.id}/")
     assert resp.status_code == 200, resp.content
     body = resp.json()
     html = body["service_description_html"]
@@ -104,7 +104,7 @@ def test_schema_documents_html_field():
     assert "service_description_html" not in schemas["SubmissionList"]["properties"]
 
 
-def test_patch_ignores_client_html_and_renders_new_raw(admin_client, settings):
+def test_patch_ignores_client_html_and_renders_new_raw(api_admin_client, settings):
     """End to end: a client-supplied service_description_html is dropped; the
     response carries the server rendering of the NEW raw text, which is what
     gets stored."""
@@ -115,11 +115,11 @@ def test_patch_ignores_client_html_and_renders_new_raw(admin_client, settings):
         service_description="Old description text that is comfortably long.",
     )
     # Warm the render cache with the old text so a stale entry would show up.
-    before = admin_client.get(f"/api/v1/submissions/{sub.id}/")
+    before = api_admin_client.get(f"/api/v1/submissions/{sub.id}/")
     assert "Old description" in before.json()["service_description_html"]
 
     new_raw = "Updated tool that handles **huge** genomes and x > 5 reads quickly."
-    resp = admin_client.patch(
+    resp = api_admin_client.patch(
         f"/api/v1/submissions/{sub.id}/",
         {
             "service_description": new_raw,

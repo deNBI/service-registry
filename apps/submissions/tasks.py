@@ -111,9 +111,8 @@ def render_plaintext(template_name: str, context: dict) -> str:
     """
     template = get_template(template_name)
     # Requires the DjangoTemplates backend: only its Template wrapper exposes
-    # the underlying django.template.base.Template via the .template attribute.
-    # The backend Template wraps django.template.base.Template as .template;
-    # rendering that directly lets us pass a Context with autoescape=False.
+    # the underlying django.template.base.Template as .template, and rendering
+    # that directly lets us pass a Context with autoescape=False.
     return template.template.render(Context(context, autoescape=False))
 
 

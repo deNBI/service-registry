@@ -9,12 +9,15 @@ Views:
   - EditView       : GET/POST for editing an existing submission (after key lookup)
   - SuccessView    : Shows confirmation with one-time API key display
   - validate_field : HTMX endpoint for per-field inline validation
+  - markdown_preview_view : POST endpoint rendering the description editor's
+                            Preview tab (fetch from the Write/Preview editor)
 """
 
 import base64
 import datetime
 import json
 import logging
+import unicodedata
 
 from django.conf import settings
 from django.contrib import messages
@@ -651,7 +654,7 @@ def validate_field(request: HttpRequest) -> HttpResponse:
 
 
 # ---------------------------------------------------------------------------
-# HTMX Markdown preview
+# Markdown preview (description editor)
 # ---------------------------------------------------------------------------
 
 
@@ -661,14 +664,18 @@ def markdown_preview_view(request: HttpRequest) -> HttpResponse:
     """
     POST /markdown-preview/
 
-    HTMX endpoint: renders the posted description (``service_description`` or
-    ``description``) through the shared render_markdown pipeline and returns
-    the preview fragment, plus a non-blocking notice when sanitization removed
-    content. Empty/whitespace-only input returns a 'Nothing to preview'
-    placeholder. 404 when the markdown_descriptions feature flag is off.
+    Called via fetch() by the Write/Preview description editor: renders the
+    posted ``service_description`` through the shared render_markdown
+    pipeline and returns the preview fragment, plus a non-blocking notice
+    when sanitization removed content. The text is NFC-normalised and
+    stripped first, exactly as clean_service_description does, so the length
+    check and the preview match what the form will accept and store.
+    Empty/whitespace-only input returns a 'Nothing to preview' placeholder.
+    404 when the markdown_descriptions feature flag is off.
 
-    Rate limiting is non-blocking: htmx silently ignores 4xx responses, so a
-    throttled request gets a 200 fragment with an inline message instead.
+    Rate limiting is non-blocking: the editor JS shows any non-2xx response
+    as a generic "Preview unavailable", so a throttled request gets a 200
+    fragment with the specific inline message instead.
     """
     if not markdown_enabled():
         raise Http404
@@ -679,10 +686,10 @@ def markdown_preview_view(request: HttpRequest) -> HttpResponse:
             template,
             {"error": "Too many previews. Please wait a moment and try again."},
         )
-    text = request.POST.get("service_description") or request.POST.get(
-        "description", ""
-    )
-    if not text.strip():
+    text = unicodedata.normalize(
+        "NFC", request.POST.get("service_description", "")
+    ).strip()
+    if not text:
         return render(request, template, {"empty": True})
     if len(text) > DESCRIPTION_MAX_LENGTH:
         return render(

@@ -429,6 +429,8 @@ Markdown rendering of `service_description` is behind the `[features] markdown_d
 
 **Rollback:** set `markdown_descriptions = false` and restart the same services. Display returns to plain text immediately; no data changes are needed.
 
+**Note for API consumers:** rows saved before this release may contain HTML entities such as `&gt;` or `&amp;` in the raw `service_description`, because the old web form HTML-escaped its input. Rows saved from this release on hold the text exactly as typed. `service_description_html` renders both correctly, so consumers that display descriptions should prefer it over the raw field.
+
 Rendered HTML is cached per submission (keyed on its `updated_at`) for 24 hours. When a release changes the rendering or sanitization rules, bump `RENDER_VERSION` in `apps/submissions/markdown_render.py` so no stale output is served.
 
 ---
