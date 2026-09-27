@@ -119,6 +119,25 @@ def test_admin_add_view_renders_with_flag_on(superuser_client, md_on):
     assert b"Description (rendered)" not in resp.content
 
 
+def test_add_only_user_add_view_has_no_rendered_row(db, md_on):
+    """An add-only staff user lacks change permission, but the ADD form must
+    show the editor, not an empty read-only rendered row."""
+    from django.contrib.auth import get_user_model
+    from django.contrib.auth.models import Permission
+    from django.test import Client
+
+    user = get_user_model().objects.create_user(
+        username="mdadder", password="addpass123", is_staff=True
+    )
+    user.user_permissions.add(Permission.objects.get(codename="add_servicesubmission"))
+    c = Client()
+    c.force_login(user)
+    resp = c.get(reverse("admin:submissions_servicesubmission_add"))
+    assert resp.status_code == 200
+    assert b"data-md-editor" in resp.content
+    assert b"Description (rendered)" not in resp.content
+
+
 def test_admin_fieldsets_have_no_rendered_row(rf, superuser, md_on):
     from django.contrib.admin.sites import site
 

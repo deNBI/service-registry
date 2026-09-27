@@ -1186,7 +1186,9 @@ select.edam-autocomplete { display: none !important; }
   overflow-wrap: anywhere;
 }
 .md-editor__preview:focus-visible { outline: 2px solid var(--g); outline-offset: -2px; }
-.md-editor__preview[aria-busy="true"] {
+/* Dim stale content while busy, but never the "Loading preview..." placeholder
+   (a child cannot be more opaque than a dimmed parent, so target children). */
+.md-editor__preview[aria-busy="true"] > :not(.md-editor__empty) {
   opacity: 0.55;
   animation: md-editor-pulse 1.2s ease-in-out infinite;
 }
@@ -1195,7 +1197,7 @@ select.edam-autocomplete { display: none !important; }
   50% { opacity: 0.3; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .md-editor__preview[aria-busy="true"] { animation: none; }
+  .md-editor__preview[aria-busy="true"] > :not(.md-editor__empty) { animation: none; }
 }
 .md-editor__empty { margin: 0; color: var(--gray-400); font-style: italic; }
 .md-editor__alert {

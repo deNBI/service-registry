@@ -226,3 +226,12 @@ def test_server_counts_submitted_crlf_like_the_client_counter(typed, valid):
     server_len = len(unicodedata.normalize("NFC", submitted).strip())
     assert server_len == _client_count(typed)
     assert (server_len >= DESCRIPTION_MIN_LENGTH) is valid
+
+
+def test_help_table_has_explicit_aria_roles():
+    """Mobile CSS turns rows into grids, which drops implicit table semantics
+    in WebKit, so the roles are stated explicitly."""
+    html = render_to_string("submissions/partials/markdown_help.html")
+    assert 'role="table" aria-label="Markdown formatting help"' in html
+    assert html.count('role="row"') == html.count("<tr")
+    assert html.count('role="cell"') == html.count("<td")

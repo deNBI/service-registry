@@ -908,7 +908,11 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             excluded.add("key_management_panel")
 
         fieldsets = self.fieldsets
-        if markdown_enabled() and not self.has_change_permission(request, obj):
+        if (
+            markdown_enabled()
+            and obj is not None
+            and not self.has_change_permission(request, obj)
+        ):
             fieldsets = self._with_description_rendered(fieldsets)
 
         if not excluded:
