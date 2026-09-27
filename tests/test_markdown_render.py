@@ -48,6 +48,7 @@ def test_returns_safestring():
     [
         "<script>alert(1)</script>",
         "<img src=x onerror=alert(1)>",
+        "<svg onload=x>y",
     ],
 )
 def test_xss_tags_neutralised(payload):
@@ -63,6 +64,7 @@ def test_xss_tags_neutralised(payload):
 def test_javascript_protocol_link_dropped():
     out = render_markdown("[x](javascript:alert(1))")
     assert "javascript:" not in out
+    assert "x" in out  # link text survives
 
 
 def test_data_protocol_link_dropped():
@@ -75,6 +77,8 @@ def test_disallowed_tags_not_allowed():
     assert "<h1" not in out  # headings dropped
     assert "<pre" not in out  # code blocks dropped
     assert "<code" not in out
+    assert "Heading" in out  # inner text survives
+    assert "code" in out
 
 
 def test_empty_input():
@@ -90,8 +94,8 @@ def test_bare_url_not_autolinked():
 def test_tag_like_content_preserved_not_deleted():
     # Regression: strip=True silently deleted <tag>-like content. Must survive.
     out = str(render_markdown("Supports List<String> and <select> element"))
-    assert "List&lt;String&gt;" in out or "List<String>" in out
-    assert "select" in out  # not deleted
+    assert "List&lt;String&gt;" in out
+    assert "&lt;select&gt;" in out
 
 
 def test_tag_like_content_is_inert():
@@ -99,3 +103,27 @@ def test_tag_like_content_is_inert():
     assert "<script" not in out  # not a live tag
     assert "<svg" not in out
     assert "alert(1)" in out  # shown as escaped text, not executed
+
+
+def test_code_span_angle_bracket_not_double_escaped():
+    out = str(render_markdown("`code <x>`"))
+    assert "<p>code &lt;x&gt;</p>" in out
+    assert "&amp;lt;" not in out
+
+
+def test_fenced_code_block_angle_bracket_not_double_escaped():
+    out = str(render_markdown("```\nList<String>\n```"))
+    assert "List&lt;String&gt;" in out
+    assert "&amp;lt;" not in out
+
+
+def test_indented_code_block_angle_bracket_not_double_escaped():
+    out = str(render_markdown("    indented <x>"))
+    assert "indented &lt;x&gt;" in out
+    assert "&amp;lt;" not in out
+
+
+def test_autolink_url_not_linked():
+    out = str(render_markdown("<https://auto.example>"))
+    assert "<a" not in out
+    assert "&lt;https://auto.example&gt;" in out
