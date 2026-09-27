@@ -36,6 +36,11 @@ XSS_VECTORS = [
     "**<b onmouseover=alert(1)>x</b>**",
     "![i](javascript:alert(1))",
     "[x](vbscript:msgbox(1))",
+    # Headings are now allowed (h4-h6): their content must stay inert too.
+    "# <script>alert(1)</script>",
+    "## [x](javascript:alert(1))",
+    "### <img src=x onerror=alert(1)>",
+    "[x](//evil.example)",
     # Handler text inside a correctly quoted title value is inert and must
     # not be flagged.
     '[x](https://e.com "onmouseover=alert(1)")',

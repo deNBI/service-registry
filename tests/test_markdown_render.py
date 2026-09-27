@@ -7,9 +7,11 @@ from django.utils.safestring import SafeString
 
 from apps.submissions import markdown_render as mr
 from apps.submissions.markdown_render import (
+    RENDER_VERSION,
     markdown_enabled,
     markdown_to_text,
     render_markdown,
+    render_with_notice,
 )
 
 
@@ -81,13 +83,17 @@ def test_data_protocol_link_dropped():
     assert "data:text/html" not in out
 
 
-def test_disallowed_tags_not_allowed():
+def test_headings_rendered_scaled_not_stripped():
+    out = str(render_markdown("# Heading\n\nBody"))
+    assert "<h1" not in out  # never a page-level heading
+    assert "<h4>Heading</h4>" in out
+
+
+def test_code_blocks_still_stripped():
     out = render_markdown("# Heading\n\n```\ncode\n```")
-    assert "<h1" not in out  # headings dropped
     assert "<pre" not in out  # code blocks dropped
     assert "<code" not in out
-    assert "Heading" in out  # inner text survives
-    assert "code" in out
+    assert "code" in out  # inner text survives
 
 
 def test_empty_input():
@@ -255,7 +261,7 @@ def test_submission_description_key_and_ttl(md_on, monkeypatch):
         (f"md:v{mr.RENDER_VERSION}:html:7:{_TS.timestamp()}", mr.MD_CACHE_TTL)
     ]
     assert mr.MD_CACHE_TTL == 60 * 60 * 24
-    assert mr.RENDER_VERSION == 1
+    assert mr.RENDER_VERSION == 2
 
 
 def test_render_version_bump_forces_fresh_render(md_on, monkeypatch):
@@ -301,3 +307,91 @@ def test_snippet_render_version_bump_forces_fresh(md_on, monkeypatch):
     sub.service_description = "second"
     monkeypatch.setattr(mr, "RENDER_VERSION", mr.RENDER_VERSION + 1)
     assert mr.submission_description_snippet(sub) == "second"
+
+
+@pytest.mark.parametrize(
+    "src,expected",
+    [
+        ("# One", "<h4>One</h4>"),
+        ("## Two", "<h5>Two</h5>"),
+        ("### Three", "<h6>Three</h6>"),
+        ("#### Four", "<h6>Four</h6>"),
+        ("###### Six", "<h6>Six</h6>"),
+    ],
+)
+def test_headings_are_scaled_down(src, expected):
+    assert str(render_markdown(src)) == expected
+
+
+def test_headings_do_not_trigger_removed_notice():
+    _, removed = render_with_notice("# Overview\n\n## Features\n\nText.")
+    assert removed is False
+
+
+@pytest.mark.parametrize(
+    "src",
+    ["[r](/relative)", "[p](//evil.example)", "[f](#frag)", "[d](data:text/html,x)"],
+)
+def test_schemeless_and_blocked_hrefs_are_dropped(src):
+    out = str(render_markdown(src))
+    assert "href=" not in out
+    assert render_with_notice(src)[1] is True
+
+
+@pytest.mark.parametrize(
+    "src,href",
+    [
+        ("[ok](https://e.org)", "https://e.org"),
+        ("[ok](HTTPS://e.org)", "HTTPS://e.org"),
+        ("[m](mailto:a@b.c)", "mailto:a@b.c"),
+    ],
+)
+def test_allowed_schemes_keep_href(src, href):
+    assert f'href="{href}"' in str(render_markdown(src))
+
+
+def test_snippet_word_boundary_after_scaled_heading():
+    assert markdown_to_text("# Title\nBody") == "Title Body"
+
+
+def test_render_version_bumped():
+    assert RENDER_VERSION == 2
+
+
+@pytest.mark.parametrize(
+    "src,label",
+    [("[x](javascript:alert(1))", "x"), ("[x](/rel)", "x")],
+)
+def test_hrefless_anchor_unwrapped_to_text_and_flagged(src, label):
+    html, removed = render_with_notice(src)
+    assert str(html) == f"<p>{label}</p>"
+    assert removed is True
+
+
+def test_multiple_links_one_blocked_is_flagged():
+    src = "[a](https://a.org) and [b](/rel)"
+    html, removed = render_with_notice(src)
+    assert 'href="https://a.org"' in str(html)
+    assert "<a" in str(html) and str(html).count("<a") == 1
+    assert removed is True
+
+
+def test_all_links_allowed_not_flagged():
+    _, removed = render_with_notice("[a](https://a.org) and [m](mailto:a@b.c)")
+    assert removed is False
+
+
+def test_mailto_link_has_rel_but_no_target():
+    out = str(render_markdown("[m](mailto:a@b.c)"))
+    assert 'rel="nofollow noopener noreferrer"' in out
+    assert "target=" not in out
+
+
+def test_http_link_opens_in_new_tab():
+    out = str(render_markdown("[s](http://e.org)"))
+    assert 'rel="nofollow noopener noreferrer"' in out
+    assert 'target="_blank"' in out
+
+
+def test_snippet_of_unwrapped_link_keeps_text():
+    assert markdown_to_text("see [docs](/rel) now") == "see docs now"

@@ -47,10 +47,26 @@ def test_preview_flags_removed_content(client, md_on):
     assert b"removed" in resp.content.lower()
 
 
-def test_preview_flags_stripped_heading(client, md_on):
+def test_preview_renders_heading_scaled_without_notice(client, md_on):
     resp = client.post(URL, {"description": "# Heading"})
     assert resp.status_code == 200
     assert b"<h1" not in resp.content
+    assert b"<h4>Heading</h4>" in resp.content
+    assert b"removed" not in resp.content.lower()
+
+
+def test_preview_flags_stripped_image(client, md_on):
+    resp = client.post(URL, {"description": "Logo ![i](https://e.org/x.png)"})
+    assert resp.status_code == 200
+    assert b"<img" not in resp.content
+    assert b"removed" in resp.content.lower()
+
+
+def test_preview_flags_schemeless_link_and_unwraps_it(client, md_on):
+    resp = client.post(URL, {"description": "[x](/relative)"})
+    assert resp.status_code == 200
+    assert b"href=" not in resp.content
+    assert b"<a" not in resp.content
     assert b"removed" in resp.content.lower()
 
 
@@ -129,7 +145,7 @@ def test_preview_accepts_service_description_field_name(client, md_on):
 
 
 def test_preview_removed_notice_lists_unsupported_formatting(client, md_on):
-    resp = client.post(URL, {"description": "# Heading"})
+    resp = client.post(URL, {"description": "![i](https://e.org/x.png)"})
     assert (
         b"Some formatting was removed: headings, code, images and unsafe links "
         b"are not supported." in resp.content

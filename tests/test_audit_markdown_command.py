@@ -42,10 +42,14 @@ def _make(desc, name="Svc", status="approved"):
         ("Uses *emphasis* here", "text_changed"),
         ("See [site](https://example.org) now", "text_changed"),
         ("[bad](javascript:alert(1)) and more text", "content_removed"),
-        ("# Heading\n\nBody", "content_removed"),
+        # Headings are rendered (scaled down), so nothing is removed, but the
+        # '#' disappears and the display text changes.
+        ("# Heading\n\nBody", "text_changed"),
         # Python-Markdown needs no space after '#': this IS a heading and
         # the '#' disappears, so the display genuinely changes.
-        ("#1 tool for alignment", "content_removed"),
+        ("#1 tool for alignment", "text_changed"),
+        ("Logo ![i](https://e.org/x.png) here", "content_removed"),
+        ("Run `make build` first", "content_removed"),
     ],
 )
 def test_flags_rows_whose_display_changes(desc, reason):
@@ -53,6 +57,8 @@ def test_flags_rows_whose_display_changes(desc, reason):
     out, err = _run_flagged()
     assert f"[approved] Risky Tool (id={sub.pk}):" in out
     assert reason in out
+    if reason == "text_changed":
+        assert "content_removed" not in out
     assert "today:" in out and "markdown:" in out
     assert "1 row(s) flagged." in out
     assert err == "1 row(s) flagged."
@@ -94,7 +100,7 @@ def test_only_flagged_rows_reported_and_counted():
 
 def test_csv_written_with_header_and_flagged_rows(tmp_path):
     _make("Plain prose.", name="Clean One")
-    bad = _make("# Heading\n\nBody", name="Flagged, Two")
+    bad = _make("Logo ![i](https://e.org/x.png) here", name="Flagged, Two")
     path = tmp_path / "audit.csv"
     _run_flagged(csv=str(path))
     with open(path, newline="") as fh:
