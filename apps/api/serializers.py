@@ -16,6 +16,8 @@ Security notes:
 """
 
 from django.core.exceptions import ObjectDoesNotExist
+from django.utils.html import escape
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from apps.biotools.models import BioToolsFunction, BioToolsRecord
@@ -26,6 +28,10 @@ from apps.submissions.models import (
     DESCRIPTION_MAX_LENGTH,
     DESCRIPTION_MIN_LENGTH,
     ServiceSubmission,
+)
+from apps.submissions.markdown_render import (
+    markdown_enabled,
+    render_submission_description,
 )
 
 
@@ -186,6 +192,7 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
     )
 
     links = serializers.SerializerMethodField()
+    service_description_html = serializers.SerializerMethodField()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -214,6 +221,7 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
             # Section B
             "service_name",
             "service_description",
+            "service_description_html",
             "year_established",
             "service_categories",
             "service_category_ids",
@@ -322,6 +330,17 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
         from apps.api.serializers import BioToolsRecordSerializer
 
         return BioToolsRecordSerializer(record, context=self.context).data
+
+    @extend_schema_field(str)
+    def get_service_description_html(self, obj) -> str:
+        """Rendered description, always safe to insert as HTML.
+
+        Flag on: sanitized Markdown HTML. Flag off: the raw text HTML-escaped,
+        so consumers can treat this field as HTML regardless of the flag.
+        """
+        if not markdown_enabled():
+            return str(escape(obj.service_description or ""))
+        return str(render_submission_description(obj))
 
     def get_links(self, obj) -> dict:
         request = self.context.get("request")
@@ -485,8 +504,16 @@ class SubmissionListSerializer(SubmissionDetailSerializer):
     Returns all submission fields but embeds a compact bio.tools summary instead
     of the full nested record, keeping list payloads significantly smaller.
     Write-only fields (…_ids) are suppressed automatically since they are
-    declared write_only=True on the parent.
+    declared write_only=True on the parent. The rendered
+    service_description_html is detail-only to keep list payloads small.
     """
+
+    class Meta(SubmissionDetailSerializer.Meta):
+        fields = [
+            f
+            for f in SubmissionDetailSerializer.Meta.fields
+            if f != "service_description_html"
+        ]
 
     def get_biotoolsrecord(self, obj) -> dict | None:
         try:
