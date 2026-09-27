@@ -1,4 +1,7 @@
-from apps.submissions.markdown_render import markdown_enabled
+import pytest
+from django.utils.safestring import SafeString
+
+from apps.submissions.markdown_render import markdown_enabled, render_markdown
 
 
 def test_markdown_enabled_reads_flag(settings):
@@ -9,3 +12,90 @@ def test_markdown_enabled_reads_flag(settings):
 def test_markdown_enabled_defaults_false(settings):
     settings.SITE_CONFIG = {"features": {}}
     assert markdown_enabled() is False
+
+
+def test_bold_italic():
+    out = render_markdown("**bold** and _italic_")
+    assert "<strong>bold</strong>" in out
+    assert "<em>italic</em>" in out
+
+
+def test_link_gets_rel_and_target():
+    out = render_markdown("[site](https://example.com)")
+    assert 'href="https://example.com"' in out
+    assert 'rel="nofollow noopener noreferrer"' in out
+    assert 'target="_blank"' in out
+
+
+def test_bullet_and_numbered_lists():
+    out = render_markdown("- a\n- b")
+    assert "<ul>" in out and "<li>a</li>" in out
+    out2 = render_markdown("1. one\n2. two")
+    assert "<ol>" in out2 and "<li>one</li>" in out2
+
+
+def test_nl2br_preserves_single_newlines():
+    out = render_markdown("line one\nline two")
+    assert "<br>" in out
+
+
+def test_returns_safestring():
+    assert isinstance(render_markdown("hi"), SafeString)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "<script>alert(1)</script>",
+        "<img src=x onerror=alert(1)>",
+    ],
+)
+def test_xss_tags_neutralised(payload):
+    # Under the escape model the payload is shown as INERT escaped text, so the
+    # word "onerror" may appear harmlessly. The safety property is: no LIVE tag.
+    out = str(render_markdown(payload))
+    assert "<script" not in out
+    assert "<img" not in out
+    assert "<svg" not in out
+    assert "&lt;" in out  # dangerous markup is escaped, not live
+
+
+def test_javascript_protocol_link_dropped():
+    out = render_markdown("[x](javascript:alert(1))")
+    assert "javascript:" not in out
+
+
+def test_data_protocol_link_dropped():
+    out = render_markdown("[x](data:text/html,<script>1</script>)")
+    assert "data:text/html" not in out
+
+
+def test_disallowed_tags_not_allowed():
+    out = render_markdown("# Heading\n\n```\ncode\n```")
+    assert "<h1" not in out  # headings dropped
+    assert "<pre" not in out  # code blocks dropped
+    assert "<code" not in out
+
+
+def test_empty_input():
+    assert render_markdown("") == ""
+    assert render_markdown(None) == ""
+
+
+def test_bare_url_not_autolinked():
+    out = str(render_markdown("see https://bare.example.com here"))
+    assert "<a" not in out  # bare URLs stay plain text (spec §4.1)
+
+
+def test_tag_like_content_preserved_not_deleted():
+    # Regression: strip=True silently deleted <tag>-like content. Must survive.
+    out = str(render_markdown("Supports List<String> and <select> element"))
+    assert "List&lt;String&gt;" in out or "List<String>" in out
+    assert "select" in out  # not deleted
+
+
+def test_tag_like_content_is_inert():
+    out = str(render_markdown("<script>alert(1)</script> and <svg onload=x>y"))
+    assert "<script" not in out  # not a live tag
+    assert "<svg" not in out
+    assert "alert(1)" in out  # shown as escaped text, not executed
