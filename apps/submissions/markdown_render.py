@@ -90,13 +90,15 @@ def _harden_anchors(html: str) -> str:
 
     An anchor whose href bleach dropped (blocked or scheme-less link) is
     unwrapped to its inner text rather than left as a dead <a>. An anchor
-    with no VISIBLE text (tags stripped, entities decoded, whitespace
-    including U+00A0 trimmed, zero-width characters such as U+200B removed;
-    e.g. a README badge whose image was stripped,
-    even inside **...**, or a lone &nbsp;) is unwrapped too, so no text-less
-    link remains. Kept anchors
-    get rel="nofollow noopener noreferrer"; only http(s) links also get
-    target="_blank" (opening an empty tab for a mail client is bad UX).
+    with no VISIBLE text is unwrapped too, so no text-less link remains.
+    Visible text means tags stripped, entities decoded, whitespace including
+    U+00A0 trimmed and zero-width characters such as U+200B removed; e.g. a
+    README badge whose image was stripped, even inside **...**, or a lone
+    &nbsp;.
+
+    Kept anchors get rel="nofollow noopener noreferrer"; only http(s) links
+    also get target="_blank" (opening an empty tab for a mail client is bad
+    UX).
     """
 
     def repl(m):
@@ -160,8 +162,9 @@ def render_markdown(text: str) -> SafeString:
     """Convert stored Markdown to sanitized, safe HTML.
 
     Order: markdown.convert (raw HTML disabled) -> bleach.clean -> unwrap
-    href-less or empty anchors and add rel/target -> mark_safe. Sanitize on output. Markdown itself escapes
-    '<'/'>'/'&' in text content (see _NoRawHtml); we never pre-escape.
+    href-less or empty anchors and add rel/target -> mark_safe. Sanitize on
+    output. Markdown itself escapes '<'/'>'/'&' in text content (see
+    _NoRawHtml); we never pre-escape.
     """
     if not text:
         return mark_safe("")
@@ -182,10 +185,10 @@ def render_with_notice(text: str) -> tuple[SafeString, bool]:
     lost its href (blocked javascript:/data: protocol or no explicit
     http/https/mailto scheme; such anchors are unwrapped to text) or a
     Markdown-generated disallowed tag (code, image, horizontal rule) was
-    stripped. The baseline is
-    _md_to_html, whose output contains only Markdown-generated tags because
-    raw HTML is disabled, so literal tag-like text such as '<select>' is
-    escaped in both baseline and output and never triggers the notice.
+    stripped. The baseline is _md_to_html, whose output contains only
+    Markdown-generated tags because raw HTML is disabled, so literal tag-like
+    text such as '<select>' is escaped in both baseline and output and never
+    triggers the notice.
     """
     if not text:
         return mark_safe(""), False

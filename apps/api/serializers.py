@@ -15,6 +15,8 @@ Security notes:
     in the POST response and never again.
 """
 
+import html as html_lib
+
 from django.core.exceptions import ObjectDoesNotExist
 from django.utils.html import escape
 from drf_spectacular.utils import extend_schema_field
@@ -336,10 +338,14 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
         """Description rendered as sanitized HTML, safe to insert into a page.
 
         When Markdown rendering is disabled on the server, this is the plain
-        description HTML-escaped (no paragraph or line-break markup).
+        description text HTML-escaped once (no paragraph or line-break
+        markup). In both cases HTML entities stored by older versions of the
+        web form (for example `&gt;`) are decoded first, so they display as
+        the intended character rather than as a literal entity.
         """
         if not markdown_enabled():
-            return str(escape(obj.service_description or ""))
+            raw = html_lib.unescape(obj.service_description or "")
+            return str(escape(raw))
         return str(render_submission_description(obj))
 
     def get_links(self, obj) -> dict:

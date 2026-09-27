@@ -1,7 +1,9 @@
 """Spreadsheet formula-injection guard for the admin CSV export."""
 
+import ast
 import csv
 import io
+from pathlib import Path
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -38,17 +40,45 @@ def test_triggers_constant():
     assert CSV_FORMULA_TRIGGERS == ("=", "+", "-", "@", "\t", "\r")
 
 
-def test_admin_and_audit_command_share_csv_utils():
-    import inspect
+def _imported_modules(source: str) -> set[str]:
+    """Dotted module names imported anywhere in `source` (module level or
+    inside functions). `from pkg import name` yields both `pkg` and
+    `pkg.name`, since `name` may itself be a submodule."""
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            found.add(node.module)
+            found.update(f"{node.module}.{alias.name}" for alias in node.names)
+    return found
 
+
+def test_imported_modules_sees_every_import_form():
+    src = (
+        "import apps.submissions.admin\n"
+        "def f():\n"
+        "    from apps.submissions import admin\n"
+        "    from apps.submissions.admin import csv_safe\n"
+    )
+    assert _imported_modules(src) >= {
+        "apps.submissions.admin",
+        "apps.submissions",
+        "apps.submissions.admin.csv_safe",
+    }
+
+
+def test_admin_and_audit_command_share_csv_utils():
+    """The audit command gets csv_safe from csv_utils, not via the admin
+    module (importing the admin from a management command drags in the whole
+    admin site)."""
     from apps.submissions import admin
     from apps.submissions.management.commands import audit_markdown_descriptions
 
     assert admin.csv_safe is csv_safe
     assert audit_markdown_descriptions.csv_safe is csv_safe
-    assert "apps.submissions.admin" not in inspect.getsource(
-        audit_markdown_descriptions
-    )
+    source = Path(audit_markdown_descriptions.__file__).read_text(encoding="utf-8")
+    assert "apps.submissions.admin" not in _imported_modules(source)
 
 
 @pytest.mark.django_db

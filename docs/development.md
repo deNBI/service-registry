@@ -380,10 +380,12 @@ All rendering goes through one module, `apps/submissions/markdown_render.py`, us
 
 - **Headings** are shifted down three levels so they never compete with the page's own headings: `#` becomes `h4`, `##` `h5`, `###` and deeper `h6`. The allowlist is `p`, `br`, `strong`, `em`, `ul`, `ol`, `li`, `a`, `blockquote`, `h4`, `h5`, `h6`.
 - **Strict href filter:** `a` keeps only `title` and an `href` that starts with an explicit `http:`, `https:` or `mailto:` scheme (`_allowed_a_attr`). bleach's protocol check alone would let scheme-less values such as `/x`, `//host` or `#frag` through, so relative links are dropped too.
-- **Anchor hardening** (`_harden_anchors`): an anchor whose `href` was dropped is unwrapped to its text, and so is an anchor with no visible text (tags stripped, entities decoded, whitespace including U+00A0 trimmed; for example a README badge whose image was stripped). Kept anchors get `rel="nofollow noopener noreferrer"`; only `http`/`https` anchors also get `target="_blank"`, `mailto` anchors do not.
+- **Anchor hardening** (`_harden_anchors`): an anchor whose `href` was dropped is unwrapped to its text, and so is an anchor with no visible text (tags stripped, entities decoded, whitespace including U+00A0 trimmed, zero-width characters such as U+200B removed; for example a README badge whose image was stripped). Kept anchors get `rel="nofollow noopener noreferrer"`; only `http`/`https` anchors also get `target="_blank"`, `mailto` anchors do not.
 - `render_with_notice()` reports `removed` when a Markdown-generated anchor or tag did not survive sanitization (images, code, horizontal rules, dropped links). Headings are allowed, so they never trigger it.
 
-**Caching:** the flag-aware helpers cache per `(pk, updated_at)` for 24 hours (`MD_CACHE_TTL`) under a key that includes `RENDER_VERSION` (currently `3`). **Bump `RENDER_VERSION` whenever you change the render or sanitize rules**, otherwise stale HTML is served until entries expire.
+**Caching:** the flag-aware helpers cache per `(pk, updated_at)` for 24 hours (`MD_CACHE_TTL`) under a key that includes the module constant `RENDER_VERSION`. **Bump `RENDER_VERSION` whenever you change the render or sanitize rules**, otherwise stale HTML is served until entries expire.
+
+**API:** `SubmissionDetailSerializer.get_service_description_html` returns `render_submission_description()` output when the flag is on. When it is off it returns the plain text HTML-escaped once, after decoding HTML entities (`html.unescape`) so legacy rows stored by the old escaping web form (`&gt;`) are not double-escaped; Markdown decodes those entities itself when the flag is on.
 
 **Template filters** (`apps/catalogue/templatetags/markdown_tags.py`, `{% load markdown_tags %}`):
 

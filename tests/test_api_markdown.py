@@ -81,6 +81,54 @@ def test_detail_html_is_escaped_when_flag_off(api_admin_client, settings):
     assert body["service_description"] == raw  # raw unchanged
 
 
+def test_detail_html_decodes_legacy_entities_once_when_flag_off(
+    api_admin_client, settings
+):
+    """Legacy rows hold HTML entities (the old web form escaped input). With
+    the flag off the *_html field decodes them once before escaping, so a
+    consumer inserting it as HTML sees ``x > 5 & y``, not a literal ``&gt;``."""
+    settings.SITE_CONFIG = {"features": {"markdown_descriptions": False}}
+    raw = "x &gt; 5 &amp; y"
+    sub = ServiceSubmissionFactory(
+        status="approved", biotools_url="", service_description=raw
+    )
+    resp = api_admin_client.get(f"/api/v1/submissions/{sub.id}/")
+    assert resp.status_code == 200, resp.content
+    body = resp.json()
+    assert body["service_description_html"] == "x &gt; 5 &amp; y"
+    assert body["service_description"] == raw  # raw unchanged
+
+
+def test_detail_html_escapes_encoded_legacy_markup_when_flag_off(
+    api_admin_client, settings
+):
+    """Decoding entities must never turn a stored ``&lt;script&gt;`` into live
+    markup: the decoded text is escaped again."""
+    settings.SITE_CONFIG = {"features": {"markdown_descriptions": False}}
+    sub = ServiceSubmissionFactory(
+        status="approved",
+        biotools_url="",
+        service_description="&lt;script&gt;x&lt;/script&gt;",
+    )
+    resp = api_admin_client.get(f"/api/v1/submissions/{sub.id}/")
+    html = resp.json()["service_description_html"]
+    assert "<script" not in html
+    assert html == "&lt;script&gt;x&lt;/script&gt;"
+
+
+def test_detail_html_decodes_legacy_entities_once_when_flag_on(
+    api_admin_client, settings
+):
+    settings.SITE_CONFIG = {"features": {"markdown_descriptions": True}}
+    sub = ServiceSubmissionFactory(
+        status="approved", biotools_url="", service_description="x &gt; 5"
+    )
+    resp = api_admin_client.get(f"/api/v1/submissions/{sub.id}/")
+    html = resp.json()["service_description_html"]
+    assert "x &gt; 5" in html
+    assert "&amp;gt;" not in html
+
+
 def test_html_field_is_read_only_on_write_serializers():
     from apps.api.serializers import (
         SubmissionCreateSerializer,

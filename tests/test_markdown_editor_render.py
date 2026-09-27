@@ -237,6 +237,87 @@ def test_help_table_has_explicit_aria_roles():
     assert html.count('role="cell"') == html.count("<td")
 
 
+def _read_static(path: str) -> str:
+    with open(finders.find(path), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _css_decls(css: str, selector: str) -> dict[str, str]:
+    """Declarations of the rule(s) whose selector list contains `selector`,
+    tolerant of whitespace, declaration order and grouped selectors. Later
+    rules win, as in the cascade."""
+    decls: dict[str, str] = {}
+    body = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    for sel_list, block in re.findall(r"([^{}]+)\{([^{}]*)\}", body):
+        sels = {" ".join(x.split()) for x in sel_list.split(",")}
+        if selector in sels:
+            for decl in block.split(";"):
+                if ":" in decl:
+                    k, v = decl.split(":", 1)
+                    decls[k.strip()] = " ".join(v.split())
+    return decls
+
+
+def _root_vars(*paths: str) -> dict[str, str]:
+    """Custom properties from the light-theme `:root` blocks (first wins)."""
+    found: dict[str, str] = {}
+    for path in paths:
+        css = re.sub(r"/\*.*?\*/", "", _read_static(path), flags=re.DOTALL)
+        for sel_list, block in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+            # rsplit drops a preceding statement such as `@charset "UTF-8";`.
+            sel_list = sel_list.rsplit(";", 1)[-1]
+            if ":root" not in {x.strip() for x in sel_list.split(",")}:
+                continue
+            for k, v in re.findall(r"(--[\w-]+)\s*:\s*([^;]+)", block):
+                found.setdefault(k, v.strip())
+    return found
+
+
+def _resolve_rgb(value: str, variables: dict[str, str]) -> tuple[int, int, int]:
+    """Resolve var() references, then parse #hex, rgb()/rgba() or a bare
+    'r,g,b' triple (Bootstrap's *-rgb variables)."""
+    for _ in range(10):
+        m = re.search(r"var\(\s*(--[\w-]+)\s*(?:,([^()]*))?\)", value)
+        if not m:
+            break
+        sub = variables.get(m.group(1), m.group(2))
+        assert sub is not None, f"undefined custom property {m.group(1)}"
+        value = value[: m.start()] + sub.strip() + value[m.end() :]
+    value = value.strip()
+    hx = re.fullmatch(r"#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})", value)
+    if hx:
+        h = hx.group(1)
+        h = "".join(c * 2 for c in h) if len(h) == 3 else h
+        return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
+    nums = re.findall(r"[\d.]+", value)
+    return tuple(int(float(n)) for n in nums[:3])
+
+
+def _contrast(fg, bg) -> float:
+    def lum(rgb):
+        def f(v):
+            v /= 255
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+        r, g, b = (f(c) for c in rgb)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    a, b = lum(fg), lum(bg)
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+
+def test_css_decls_helper_tolerates_formatting():
+    css = """/* x */
+    .a,
+    .md-editor__empty   {
+        font-style : italic ;
+        color:   var(--gray-600)
+    }
+    .b { color: red; }"""
+    assert _css_decls(css, ".md-editor__empty")["color"] == "var(--gray-600)"
+    assert _css_decls(css, ".missing") == {}
+
+
 @pytest.mark.parametrize(
     "path,color",
     [
@@ -249,10 +330,38 @@ def test_preview_placeholder_contrast_and_no_dead_busy_rule(path, color):
     quiet colour 5.74:1 light, 12.15:1 dark). The JS swaps in the placeholder
     before setting aria-busy, so a busy rule on other children is dead, and
     any opacity pulse on the placeholder would drop it below 4.5:1."""
-    with open(finders.find(path), encoding="utf-8") as fh:
-        css = fh.read()
-    assert (
-        f".md-editor__empty {{ margin: 0; color: {color}; font-style: italic; }}" in css
-    )
+    css = _read_static(path)
+    decls = _css_decls(css, ".md-editor__empty")
+    assert decls.get("color") == color
+    assert "opacity" not in decls
+    assert "animation" not in decls
     assert "aria-busy" not in css
     assert "md-editor-pulse" not in css
+
+
+@pytest.mark.parametrize(
+    "selector,background",
+    [
+        # The counter and footer sit on the white form card.
+        (".md-editor__count.is-warn", "#fff"),
+        (".md-editor__count.is-error", "#fff"),
+        (".md-editor__footer", "#fff"),
+        (".md-editor__empty", "#fff"),
+        (".md-editor__tab", "var(--gray-50)"),  # tab strip
+        (".md-editor__help-toggle", "#fff"),
+        # Inside the formatting help panel (--gray-50).
+        (".md-editor__help-link", "var(--gray-50)"),
+        (".md-editor__help-note", "var(--gray-50)"),
+        (".md-editor__help-quote", "var(--gray-50)"),
+        (".md-editor__alert", "var(--amber-light)"),
+    ],
+)
+def test_public_editor_text_colours_meet_wcag_aa(selector, background):
+    """Every text colour the public editor sets reaches 4.5:1 (WCAG AA) on
+    the background it is actually drawn on."""
+    variables = _root_vars("css/registry.css", "css/bootstrap.min.css")
+    color = _css_decls(_read_static("css/registry.css"), selector)["color"]
+    ratio = _contrast(
+        _resolve_rgb(color, variables), _resolve_rgb(background, variables)
+    )
+    assert ratio >= 4.5, f"{selector}: {color} on {background} is {ratio:.2f}:1"

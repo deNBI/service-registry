@@ -1223,7 +1223,9 @@ select.edam-autocomplete { display: none !important; }
 .md-editor__help-toggle::after { content: " \25BE"; }
 .md-editor__help-toggle[aria-expanded="true"]::after { content: " \25B4"; }
 .md-editor__count { margin-left: auto; font-variant-numeric: tabular-nums; }
-.md-editor__count.is-warn { color: var(--amber); }
+/* Same dark amber as .md-editor__alert: --amber (#d97706) is only 3.19:1 on
+   the white form card; #92400e is 7.09:1 (WCAG AA). */
+.md-editor__count.is-warn { color: #92400e; }
 .md-editor__count.is-error { color: var(--red); font-weight: 600; }
 .md-editor__help {
   margin-top: 0.4rem;
@@ -1246,9 +1248,10 @@ select.edam-autocomplete { display: none !important; }
 }
 .md-editor__help-h4 { font-weight: 600; }
 .md-editor__help-h5 { font-weight: 600; font-size: 0.9em; }
-/* Same colour as links in the rendered preview (Bootstrap's `a` rule). */
+/* Bootstrap's link hover blue: the default link blue (used by the preview's
+   links on white) is only 4.31:1 on the --gray-50 help panel; this is 6.16:1. */
 .md-editor__help-link {
-  color: rgba(var(--bs-link-color-rgb), var(--bs-link-opacity, 1));
+  color: rgba(var(--bs-link-hover-color-rgb), var(--bs-link-opacity, 1));
   text-decoration: underline;
 }
 .md-editor__help-quote { padding-left: 0.4rem; border-left: 3px solid var(--gray-200); color: var(--gray-600); }

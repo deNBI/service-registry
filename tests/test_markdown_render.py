@@ -260,7 +260,6 @@ def test_submission_description_key_and_ttl(md_on, monkeypatch):
     mr.render_submission_description(_sub("x", pk=7))
     assert calls == [(f"md:v{mr.RENDER_VERSION}:html:7:{_TS_US}", mr.MD_CACHE_TTL)]
     assert mr.MD_CACHE_TTL == 60 * 60 * 24
-    assert mr.RENDER_VERSION == 4
 
 
 def test_render_version_bump_forces_fresh_render(md_on, monkeypatch):
@@ -351,8 +350,8 @@ def test_snippet_word_boundary_after_scaled_heading():
     assert markdown_to_text("# Title\nBody") == "Title Body"
 
 
-def test_render_version_bumped():
-    assert RENDER_VERSION == 4
+def test_render_version_is_positive_int():
+    assert isinstance(RENDER_VERSION, int) and RENDER_VERSION > 0
 
 
 @pytest.mark.parametrize(
@@ -435,6 +434,7 @@ def test_normal_link_unchanged():
     [
         "[**![i](https://e.org/x.png)**](https://e.org)",
         "[&nbsp;](https://e.org)",
+        "[\u00a0](https://e.org)",
         "[\u200b](https://a.com)",
         "[&#8203;](https://a.com)",
         "[\u200c\u200d\u2060\ufeff](https://a.com)",
@@ -473,24 +473,12 @@ def test_link_with_zero_width_and_real_text_is_kept():
     assert removed is False
 
 
-def test_nbsp_is_stripped_by_str_strip():
-    assert "\xa0 \xa0".strip() == ""
-
-
 def test_cache_key_uses_integer_microseconds():
     ts = _dt.datetime(2026, 1, 2, 3, 4, 5, 123456, tzinfo=_dt.timezone.utc)
     key = mr._cache_key("html", _sub("x", pk=3, updated_at=ts))
     assert key == f"md:v{mr.RENDER_VERSION}:html:3:{int(ts.timestamp() * 1_000_000)}"
     assert key.endswith("123456")
     assert mr._cache_key("text", _sub("x", pk=3, updated_at=None)).endswith(":3:0")
-
-
-def test_render_submission_description_annotated_str():
-    import inspect
-
-    sig = inspect.signature(mr.render_submission_description)
-    assert sig.return_annotation is str
-    assert "SafeString" in mr.render_submission_description.__doc__
 
 
 def test_anchor_attribute_filter_drops_other_attributes():

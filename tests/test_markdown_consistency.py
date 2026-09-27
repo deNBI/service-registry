@@ -110,7 +110,7 @@ def md_on(settings):
 
 
 @pytest.fixture
-def admin_client():
+def api_admin_client():
     from apps.api.models import AdminAPIKey
 
     plaintext = secrets.token_urlsafe(48)
@@ -125,7 +125,7 @@ def admin_client():
     return c
 
 
-def test_all_surfaces_render_identically(client, admin_client, md_on):
+def test_all_surfaces_render_identically(client, api_admin_client, md_on):
     sub = ServiceSubmissionFactory(
         status="approved",
         biotools_url="",
@@ -137,7 +137,7 @@ def test_all_surfaces_render_identically(client, admin_client, md_on):
     assert "<strong>first</strong>" in expected_html
     assert "&gt;" in expected_html and "&amp;" in expected_html
 
-    api = admin_client.get(f"/api/v1/submissions/{sub.id}/")
+    api = api_admin_client.get(f"/api/v1/submissions/{sub.id}/")
     assert api.status_code == 200, api.content
     assert api.json()["service_description_html"] == expected_html
 

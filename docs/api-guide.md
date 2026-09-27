@@ -198,9 +198,9 @@ Returns 403 if the key does not belong to this submission.
 
 - It is always safe HTML, ready to insert into a page.
 - When Markdown rendering is enabled on the server, it is the sanitized rendered HTML: paragraphs, line breaks, bold/italic, lists, blockquotes, headings and links. Headings are shifted down three levels, so it may contain `h4`, `h5` and `h6` (`#` becomes `h4`, `##` `h5`, `###` and deeper `h6`) but never `h1` to `h3`. Only links with an explicit `http`, `https` or `mailto` scheme are kept; other links (including relative ones) are reduced to their text, and so are links with no visible text. Kept links carry `rel="nofollow noopener noreferrer"`; `http`/`https` links also get `target="_blank"`, `mailto` links do not.
-- When it is disabled, it is the raw text HTML-escaped, with no paragraph or line-break markup.
+- When it is disabled, it is the plain text HTML-escaped once, with no paragraph or line-break markup.
 
-Descriptions saved before Markdown support was released may contain HTML entities such as `&gt;` in the raw `service_description` (the old web form escaped its input); newer rows are raw. `service_description_html` renders both correctly.
+Descriptions saved before Markdown support was released may contain HTML entities such as `&gt;` in the raw `service_description` (the old web form escaped its input); newer rows are raw. `service_description_html` decodes those entities in both cases, so a legacy `x &gt; 5` displays as `x > 5`, never as a literal `&gt;`: with Markdown enabled it is rendered as above, and with Markdown disabled the decoded plain text is escaped exactly once. Consumers that display descriptions should prefer `service_description_html` over the raw field.
 
 `service_description_html` is not included in the list endpoint (`GET /api/v1/submissions/`) and is ignored if sent in a `POST` or `PATCH`. Length validation applies to the raw `service_description`.
 
