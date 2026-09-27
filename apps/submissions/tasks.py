@@ -31,7 +31,8 @@ import yaml
 from celery import shared_task
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
-from django.template.loader import render_to_string
+from django.template import Context
+from django.template.loader import get_template, render_to_string
 from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
@@ -96,6 +97,22 @@ def _site_email_context() -> dict:
         ),
         "WEBSITE_URL": links.get("website", "https://www.denbi.de"),
     }
+
+
+def render_plaintext(template_name: str, context: dict) -> str:
+    """Render a plain-text template with HTML autoescaping disabled.
+
+    Plain-text email bodies are never interpreted as HTML, so escaping would
+    only corrupt them (x > 5 -> x &gt; 5, Bob's -> Bob&#x27;s). Use this for
+    every .txt email body; HTML bodies keep using render_to_string().
+
+    Equivalent to render_to_string(template_name, context) without a request:
+    no context processors run in either case (see _site_email_context).
+    """
+    template = get_template(template_name)
+    # The backend Template wraps django.template.base.Template as .template;
+    # rendering that directly lets us pass a Context with autoescape=False.
+    return template.template.render(Context(context, autoescape=False))
 
 
 def _build_admin_url(submission_id) -> str:
@@ -204,7 +221,7 @@ def send_submission_notification(
         "admin_url": admin_url,
     }
 
-    text_body = render_to_string("submissions/email/notification.txt", context)
+    text_body = render_plaintext("submissions/email/notification.txt", context)
     html_body = render_to_string("submissions/email/notification.html", context)
 
     msg = EmailMultiAlternatives(
@@ -282,7 +299,7 @@ def _send_submitter_email(
         "submission": submission,
         **(extra_context or {}),
     }
-    text_body = render_to_string(txt_template, context)
+    text_body = render_plaintext(txt_template, context)
     html_body = render_to_string(html_template, context)
 
     msg = EmailMultiAlternatives(

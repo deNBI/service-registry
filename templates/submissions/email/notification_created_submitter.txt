@@ -1,4 +1,4 @@
-{% autoescape off %}de.NBI Service Registration Platform — Submission Received
+de.NBI Service Registration Platform — Submission Received
 ===============================================
 
 Dear {{ submission.submitter_first_name }} {{ submission.submitter_last_name }},
@@ -17,4 +17,4 @@ This is an automated email — please do not reply directly.
 
 {{ CONTACT_ORG }}
 {{ CONTACT_EMAIL }}
-{{ WEBSITE_URL }}{% endautoescape %}
+{{ WEBSITE_URL }}

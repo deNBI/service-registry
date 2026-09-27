@@ -1,4 +1,4 @@
-{% autoescape off %}de.NBI Service Registration Platform — Notification
+de.NBI Service Registration Platform — Notification
 ========================================
 
 Event: {{ event_label|upper }}
@@ -49,4 +49,4 @@ Internal Contact: {{ submission.internal_contact_name }} <{{ submission.internal
 
 {{ CONTACT_ORG }}
 {{ CONTACT_EMAIL }}
-{{ WEBSITE_URL }}{% endautoescape %}
+{{ WEBSITE_URL }}
