@@ -277,6 +277,10 @@ class MarkdownTextareaWidget(AdminTextareaWidget):
     renderer does not search the project templates/ directory.
     """
 
+    class Media:
+        css = {"all": ("admin/css/markdown_preview.css",)}
+        js = ("js/markdown-editor.js",)
+
     def render(self, name, value, attrs=None, renderer=None):
         textarea = super().render(name, value, attrs, renderer)
         field_id = (attrs or {}).get("id") or self.attrs.get("id") or f"id_{name}"

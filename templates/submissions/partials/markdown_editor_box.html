@@ -1,7 +1,8 @@
 {% comment %}
   GitHub-style Write | Preview editor around the service_description textarea.
   Shared by the public forms (pass `field`) and the admin widget (pass
-  `widget_html`). Enhancement controls ship with `hidden`; static/js/markdown-editor.js
+  `widget_html`; it must be a non-empty rendered widget, since an empty value
+  falls back to the `field` include). Enhancement controls ship with `hidden`; static/js/markdown-editor.js
   reveals and drives them, so without JS the plain textarea still works.
   The preview tabpanel is focusable (tabindex="0") and deliberately has no
   aria-live, so switching tabs does not re-announce the whole description.

@@ -1,99 +1,197 @@
 /*
- * Markdown Preview control and rendered description in the
- * ServiceSubmission admin change form. The admin does not load Bootstrap or
- * registry.css, so the shared partial's utility classes are no-ops here;
- * these rules cover the essentials using Django admin CSS variables so both
- * light and dark themes work.
+ * Markdown description editor (Write | Preview) in the ServiceSubmission
+ * admin change form, plus the read-only rendered description shown to
+ * view-only staff (.field-description_rendered .md-rendered).
+ *
+ * The admin loads neither Bootstrap nor registry.css; Django admin CSS
+ * variables keep light and dark themes working. `form .aligned` prefixes
+ * beat Django's `form .aligned ul/li` list resets from forms.css.
  */
 
-/* ── Preview control (below the service_description textarea) ────────────── */
-.markdown-editor {
-  margin-top: .5rem;
+/* Amber counter warning. --message-warning-bg is a background colour (#ffc
+ * in light mode), unreadable as text, so define a readable pair here and
+ * follow the admin's theme switch (OS preference or the theme toggle). */
+:root,
+html[data-theme="light"] { --md-editor-warn-fg: #8a5300; }
+@media (prefers-color-scheme: dark) {
+  :root { --md-editor-warn-fg: #f0b35a; }
+  html[data-theme="light"] { --md-editor-warn-fg: #8a5300; }
 }
+html[data-theme="dark"] { --md-editor-warn-fg: #f0b35a; }
 
-.markdown-editor [data-md-preview] {
-  padding: .25rem .75rem;
-  font-size: .8125rem;
-  cursor: pointer;
-}
+/* No Bootstrap here: make `hidden` win over the display rules below until
+ * static/js/markdown-editor.js reveals the enhancement controls. */
+.md-editor[hidden],
+.md-editor [hidden] { display: none !important; }
 
-.markdown-editor .form-text {
-  display: inline-block;
-  margin-left: .5rem;
-  color: var(--body-quiet-color);
-  font-size: .75rem;
-}
-
-/* Pane stays hidden until a preview is swapped in (empty body hides it again). */
-.markdown-preview:empty {
-  display: none;
-}
-
-.markdown-preview {
-  margin-top: .5rem;
-  padding: .5rem .75rem;
+.md-editor { flex: 1 1 auto; min-width: 0; max-width: 60rem; }
+.md-editor__box {
   border: 1px solid var(--border-color);
   border-radius: 4px;
-  max-width: 50rem;
+  background: var(--body-bg);
+  overflow: hidden;
 }
+.md-editor__box:focus-within { border-color: var(--link-fg); }
+.md-editor__tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px 0;
+  background: var(--darkened-bg);
+  border-bottom: 1px solid var(--hairline-color);
+}
+.md-editor__tab {
+  margin: 0;
+  padding: 4px 12px;
+  font-size: 0.8125rem;
+  color: var(--link-fg);
+  background: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+}
+.md-editor__tab:hover { color: var(--body-fg); }
+.md-editor__tab[aria-selected="true"] {
+  margin-bottom: -1px;
+  color: var(--body-fg);
+  font-weight: 600;
+  background: var(--body-bg);
+  border-color: var(--hairline-color);
+  box-shadow: inset 0 2px 0 var(--link-fg);
+}
+.md-editor__tab:focus-visible,
+.md-editor__preview:focus-visible { outline: 2px solid var(--link-fg); outline-offset: -2px; }
 
-.markdown-preview .alert {
-  margin-bottom: .5rem;
-  padding: .25rem .5rem;
+/* The box carries the border; the textarea inside reads as one control. */
+form .aligned .md-editor__panel textarea,
+.md-editor__panel textarea {
+  display: block;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  outline: none;
+}
+.md-editor__preview { min-height: 3rem; padding: 6px 10px; overflow-wrap: anywhere; }
+.md-editor__preview[aria-busy="true"] {
+  opacity: 0.55;
+  animation: md-editor-pulse 1.2s ease-in-out infinite;
+}
+@keyframes md-editor-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.3; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .md-editor__preview[aria-busy="true"] { animation: none; }
+}
+.md-editor__empty { margin: 0; color: var(--body-quiet-color); font-style: italic; }
+.md-editor__alert {
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  color: var(--body-fg);
   border: 1px solid var(--border-color);
   border-radius: 4px;
   background: var(--darkened-bg);
-  font-size: .75rem;
 }
 
-/* ── Rendered Markdown (preview pane body + readonly description_rendered) ── */
-.markdown-preview-body p,
-.markdown-preview-body ul,
-.markdown-preview-body ol,
-.markdown-preview-body blockquote,
-.field-description_rendered .readonly p,
-.field-description_rendered .readonly ul,
-.field-description_rendered .readonly ol,
-.field-description_rendered .readonly blockquote {
-  margin: 0 0 .5rem;
-}
-
-/*
- * Lists: Django admin's forms.css has `form .aligned ul` (margin-left: 160px;
- * padding-left: 10px) and `form .aligned ul li` (list-style: none), which
- * out-specify plain `.markdown-preview-body ul` and strip the bullets. The
- * `form .aligned` prefix raises specificity just enough to win.
- */
-form .aligned .markdown-preview-body ul,
-form .aligned .markdown-preview-body ol,
-form .aligned .field-description_rendered .readonly ul,
-form .aligned .field-description_rendered .readonly ol {
-  margin-left: 0;
-  padding-left: 1.5rem;
-}
-
-form .aligned .markdown-preview-body ul li,
-form .aligned .field-description_rendered .readonly ul li {
-  margin-left: 0;
-  padding-left: 0;
-  list-style: disc;
-}
-
-form .aligned .markdown-preview-body ol li,
-form .aligned .field-description_rendered .readonly ol li {
-  margin-left: 0;
-  padding-left: 0;
-  list-style: decimal;
-}
-
-.markdown-preview-body blockquote,
-.field-description_rendered .readonly blockquote {
-  padding-left: .75rem;
-  border-left: 3px solid var(--border-color);
+/* Rendered Markdown: editor preview and the view-only readonly row. */
+.md-rendered { overflow-wrap: anywhere; }
+.md-rendered p,
+.md-rendered blockquote { margin: 0 0 6px; padding: 0; }
+form .aligned .md-rendered ul,
+form .aligned .md-rendered ol,
+.md-rendered ul,
+.md-rendered ol { margin: 0 0 6px; padding-left: 1.5rem; }
+form .aligned .md-rendered ul li,
+.md-rendered ul li { list-style: disc; margin: 0; padding: 0; }
+form .aligned .md-rendered ol li,
+.md-rendered ol li { list-style: decimal; margin: 0; padding: 0; }
+.md-rendered blockquote {
+  padding-left: 8px;
+  border-left: 3px solid var(--body-quiet-color);
   color: var(--body-quiet-color);
 }
+.md-rendered h4,
+.md-rendered h5,
+.md-rendered h6 {
+  margin: 8px 0 4px;
+  padding: 0;
+  font-weight: 600;
+  color: var(--body-fg);
+  background: none;
+  text-transform: none;
+}
+.md-rendered h4 { font-size: 0.95rem; }
+.md-rendered h5 { font-size: 0.875rem; }
+.md-rendered h6 { font-size: 0.8125rem; color: var(--body-quiet-color); }
+.md-rendered > :first-child { margin-top: 0; }
+.md-rendered > :last-child { margin-bottom: 0; }
 
-.markdown-preview-body > :last-child,
-.field-description_rendered .readonly > :last-child {
-  margin-bottom: 0;
+.md-editor__footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--body-quiet-color);
+}
+.md-editor__help-toggle {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--link-fg);
+  cursor: pointer;
+  font-size: inherit;
+}
+.md-editor__help-toggle:hover { text-decoration: underline; }
+.md-editor__help-toggle:focus-visible { outline: 2px solid var(--link-fg); outline-offset: 2px; }
+.md-editor__help-toggle::after { content: " \25BE"; }
+.md-editor__help-toggle[aria-expanded="true"]::after { content: " \25B4"; }
+.md-editor__count { margin-left: auto; font-variant-numeric: tabular-nums; }
+.md-editor__count.is-warn { color: var(--md-editor-warn-fg); }
+.md-editor__count.is-error { color: var(--error-fg); font-weight: 600; }
+.md-editor__help {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--body-fg);
+  border: 1px solid var(--hairline-color);
+  border-radius: 4px;
+  background: var(--darkened-bg);
+}
+.md-editor__help-table { width: 100%; border-collapse: collapse; border: 0; }
+/* Drop the admin's zebra striping (base.css `tr:nth-child(odd/even)`). */
+.md-editor__help-table tr { background: none; }
+.md-editor__help-table td {
+  padding: 3px 8px;
+  font-size: inherit;
+  vertical-align: middle;
+  border-top: 1px solid var(--hairline-color);
+  border-bottom: 0;
+}
+.md-editor__help-table tr:first-child td { border-top: 0; }
+.md-editor__help-table code,
+.md-editor__help-note code {
+  padding: 0 3px;
+  color: var(--body-fg);
+  background: var(--body-bg);
+  border: 1px solid var(--hairline-color);
+  border-radius: 3px;
+}
+.md-editor__help-h4,
+.md-editor__help-h5 { font-weight: 600; }
+.md-editor__help-link { color: var(--link-fg); text-decoration: underline; }
+.md-editor__help-quote { padding-left: 6px; border-left: 3px solid var(--body-quiet-color); }
+.md-editor__help-note {
+  margin: 0;
+  padding: 4px 8px;
+  font-size: inherit;
+  border-top: 1px solid var(--hairline-color);
+  color: var(--body-quiet-color);
 }

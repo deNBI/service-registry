@@ -255,7 +255,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         for field_name, rows in textarea_rows.items():
             if field_name in form.base_fields:
                 form.base_fields[field_name].widget.attrs.update({"rows": rows})
-        # Markdown Preview control: swap the widget per request (flag-gated),
+        # Markdown Write | Preview editor: swap the widget per request (flag-gated),
         # carrying over the existing attrs (admin classes + rows override).
         field = form.base_fields.get("service_description")
         if field is not None and markdown_enabled():
@@ -294,6 +294,9 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
     class Media:
         # Enhanced filter sidebar assets are loaded on the changelist only
         # (the JS guards on `#changelist-filter.changelist-filter--enhanced`).
+        # markdown_preview.css also styles the read-only description_rendered
+        # row shown to view-only staff (no widget Media there); editors get it
+        # via MarkdownTextareaWidget too, and Django's Media merge dedupes it.
         css = {
             "all": (
                 "admin/css/submissions_filter_sidebar.css",
@@ -301,9 +304,6 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             )
         }
         js = (
-            # htmx + CSRF refresh power the Markdown Preview control.
-            "js/htmx.min.js",
-            "js/htmx-csrf-refresh.js",
             "js/admin_submission_change.js",
             "admin/js/submissions_filter_sidebar.js",
         )
@@ -327,10 +327,14 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
 
     @admin.display(description="Description (rendered)")
     def description_rendered(self, obj):
-        # Only placed in the fieldsets when markdown_descriptions is on.
+        # Only in the fieldsets for users who cannot change the submission
+        # (flag on): they see the raw Markdown read-only. Editors use the
+        # Write | Preview editor instead.
         if obj is None or not obj.pk:
             return "—"
-        return render_submission_description(obj)
+        return format_html(
+            '<div class="md-rendered">{}</div>', render_submission_description(obj)
+        )
 
     @admin.display(description="Logo preview")
     def logo_preview(self, obj):
@@ -885,6 +889,9 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
           status_actions        — requires change_servicesubmission OR
                                   approve_servicesubmission
           key_management_panel  — requires manage_apikeys
+
+        description_rendered is added (markdown_descriptions on) only for
+        users without change permission, who see the raw text read-only.
         """
         excluded = set()
 
@@ -901,7 +908,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             excluded.add("key_management_panel")
 
         fieldsets = self.fieldsets
-        if markdown_enabled():
+        if markdown_enabled() and not self.has_change_permission(request, obj):
             fieldsets = self._with_description_rendered(fieldsets)
 
         if not excluded:
