@@ -1,4 +1,4 @@
-{% load static catalogue_tags %}
+{% load static catalogue_tags markdown_tags %}
 {% catalogue_service_url service as service_url %}
 
 <div class="catalogue-list-item">
@@ -93,7 +93,7 @@
       {% if service.service_description %}
       <details class="catalogue-list-desc-toggle">
         <summary>Description</summary>
-        <p class="catalogue-list-desc-text">{{ service.service_description }}</p>
+        <div class="catalogue-list-desc-text">{{ service|md_description }}</div>
       </details>
       {% endif %}
 
