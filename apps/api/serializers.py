@@ -54,7 +54,7 @@ class PrincipalInvestigatorSerializer(serializers.ModelSerializer):
         fields = ["id", "last_name", "first_name", "display_name", "institute", "orcid"]
 
     def get_display_name(self, obj) -> str:
-        return obj.display_name
+        return obj.public_name
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +102,7 @@ class PrincipalInvestigatorAdminSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "display_name"]
 
     def get_display_name(self, obj) -> str:
-        return obj.display_name
+        return obj.public_name
 
 
 # ---------------------------------------------------------------------------

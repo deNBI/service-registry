@@ -182,3 +182,11 @@ class PrincipalInvestigator(models.Model):
     def display_name(self) -> str:
         """Full name for display in form dropdowns."""
         return str(self)
+
+    @property
+    def public_name(self) -> str:
+        """Name for public display (catalogue). Drops the form-only
+        '[please state below]' prompt from the generic associated-partner entry."""
+        if self.is_associated_partner:
+            return "Associated partner"
+        return str(self)
