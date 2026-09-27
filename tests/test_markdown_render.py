@@ -1,7 +1,11 @@
 import pytest
 from django.utils.safestring import SafeString
 
-from apps.submissions.markdown_render import markdown_enabled, render_markdown
+from apps.submissions.markdown_render import (
+    markdown_enabled,
+    markdown_to_text,
+    render_markdown,
+)
 
 
 def test_markdown_enabled_reads_flag(settings):
@@ -127,3 +131,32 @@ def test_autolink_url_not_linked():
     out = str(render_markdown("<https://auto.example>"))
     assert "<a" not in out
     assert "&lt;https://auto.example&gt;" in out
+
+
+def test_snippet_strips_list_markers():
+    out = markdown_to_text("Our tool does:\n- alignment\n- assembly")
+    assert "-" not in out
+    assert "alignment" in out and "assembly" in out
+
+
+def test_snippet_strips_emphasis_and_unescapes():
+    out = markdown_to_text("**bold** & <fast>")
+    assert "*" not in out
+    assert "bold" in out
+    assert "&amp;" not in out and "&" in out  # unescaped
+
+
+def test_snippet_preserves_identifiers():
+    # Regression: blanket * _ ` stripping corrupted domain identifiers.
+    out = markdown_to_text("Supports gene_name and length*width in the grid step")
+    assert "gene_name" in out
+    assert "length*width" in out
+
+
+def test_snippet_truncates():
+    out = markdown_to_text("x" * 500, limit=100)
+    assert len(out) <= 104  # 100 + ellipsis
+
+
+def test_snippet_empty():
+    assert markdown_to_text("") == ""

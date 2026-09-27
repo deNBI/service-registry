@@ -4,6 +4,7 @@ Single source of truth: every surface (catalogue, API, HTMX preview, admin)
 renders through render_markdown() so output is identical everywhere.
 """
 
+import html as _html
 import re
 
 import bleach
@@ -85,3 +86,31 @@ def render_markdown(text: str) -> SafeString:
         strip=True,
     )
     return mark_safe(_harden_anchors(clean))
+
+
+_LEADING_MARKER_RE = re.compile(
+    r"^\s{0,3}(?:#{1,6}\s+|[-*+]\s+|\d+\.\s+|>\s?)", re.MULTILINE
+)
+_BLOCK_TAG_RE = re.compile(r"(</(?:p|li|ul|ol|blockquote)>|<br\s*/?>)")
+_WS_RE = re.compile(r"\s+")
+
+
+def markdown_to_text(text: str, limit: int = 300) -> str:
+    """Plain-text snippet of Markdown for compact card display.
+
+    Renders via the real Markdown engine (so emphasis/links/identifiers are
+    handled correctly), replaces block boundaries with spaces, then strips all
+    tags to plain text. Leading block markers are removed first so an unspaced
+    list does not leak '-'/'1.' markers.
+    """
+    if not text:
+        return ""
+    s = _LEADING_MARKER_RE.sub("", text)
+    html = str(render_markdown(s))
+    html = _BLOCK_TAG_RE.sub(" ", html)  # keep word boundaries
+    plain = bleach.clean(html, tags=[], strip=True)
+    plain = _html.unescape(plain)
+    plain = _WS_RE.sub(" ", plain).strip()
+    if len(plain) > limit:
+        plain = plain[:limit].rstrip() + "…"  # ellipsis
+    return plain
