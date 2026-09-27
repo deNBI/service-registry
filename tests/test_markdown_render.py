@@ -1,6 +1,11 @@
+import datetime as _dt
+from types import SimpleNamespace
+
 import pytest
+from django.core.cache import cache
 from django.utils.safestring import SafeString
 
+from apps.submissions import markdown_render as mr
 from apps.submissions.markdown_render import (
     markdown_enabled,
     markdown_to_text,
@@ -188,3 +193,111 @@ def test_snippet_truncates():
 
 def test_snippet_empty():
     assert markdown_to_text("") == ""
+
+
+# --- render_submission_description / submission_description_snippet ---------
+
+_TS = _dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=_dt.timezone.utc)
+
+
+def _sub(desc, pk=1, updated_at=_TS):
+    return SimpleNamespace(pk=pk, updated_at=updated_at, service_description=desc)
+
+
+@pytest.fixture
+def md_on(settings):
+    settings.SITE_CONFIG = {"features": {"markdown_descriptions": True}}
+    cache.clear()
+    yield
+    cache.clear()
+
+
+def test_submission_description_flag_off_returns_raw_unmarked(settings):
+    settings.SITE_CONFIG = {"features": {"markdown_descriptions": False}}
+    out = mr.render_submission_description(_sub("**b** <x>"))
+    assert out == "**b** <x>"
+    assert not isinstance(out, SafeString)
+
+
+def test_submission_description_flag_on_renders_safe(md_on):
+    out = mr.render_submission_description(_sub("**b**"))
+    assert isinstance(out, SafeString)
+    assert "<strong>b</strong>" in out
+
+
+def test_submission_description_empty(md_on):
+    assert mr.render_submission_description(_sub(None)) == ""
+
+
+def test_submission_description_is_cached(md_on):
+    sub = _sub("**one**")
+    assert "<strong>one</strong>" in mr.render_submission_description(sub)
+    sub.service_description = "**two**"
+    out = mr.render_submission_description(sub)
+    assert isinstance(out, SafeString)
+    assert "<strong>one</strong>" in out
+
+
+def test_submission_description_updated_at_busts_cache(md_on):
+    mr.render_submission_description(_sub("**one**"))
+    later = _TS + _dt.timedelta(seconds=1)
+    out = mr.render_submission_description(_sub("**two**", updated_at=later))
+    assert "<strong>two</strong>" in out
+
+
+def test_submission_description_key_and_ttl(md_on, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        mr.cache, "set", lambda k, v, timeout: calls.append((k, timeout))
+    )
+    mr.render_submission_description(_sub("x", pk=7))
+    assert calls == [
+        (f"md:v{mr.RENDER_VERSION}:html:7:{_TS.timestamp()}", mr.MD_CACHE_TTL)
+    ]
+    assert mr.MD_CACHE_TTL == 60 * 60 * 24
+    assert mr.RENDER_VERSION == 1
+
+
+def test_render_version_bump_forces_fresh_render(md_on, monkeypatch):
+    sub = _sub("**one**")
+    mr.render_submission_description(sub)
+    sub.service_description = "**two**"
+    monkeypatch.setattr(mr, "RENDER_VERSION", mr.RENDER_VERSION + 1)
+    assert "<strong>two</strong>" in mr.render_submission_description(sub)
+
+
+def test_snippet_flag_off_returns_raw(settings):
+    settings.SITE_CONFIG = {"features": {"markdown_descriptions": False}}
+    assert mr.submission_description_snippet(_sub("**b**")) == "**b**"
+
+
+def test_snippet_flag_on_plain_text(md_on):
+    out = mr.submission_description_snippet(_sub("**b** & _i_"))
+    assert out == "b & i"
+    assert not isinstance(out, SafeString)
+
+
+def test_snippet_is_cached(md_on):
+    sub = _sub("first")
+    assert mr.submission_description_snippet(sub) == "first"
+    sub.service_description = "second"
+    assert mr.submission_description_snippet(sub) == "first"
+
+
+def test_snippet_key_and_ttl(md_on, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        mr.cache, "set", lambda k, v, timeout: calls.append((k, timeout))
+    )
+    mr.submission_description_snippet(_sub("x", pk=7))
+    assert calls == [
+        (f"md:v{mr.RENDER_VERSION}:text:7:{_TS.timestamp()}", mr.MD_CACHE_TTL)
+    ]
+
+
+def test_snippet_render_version_bump_forces_fresh(md_on, monkeypatch):
+    sub = _sub("first")
+    mr.submission_description_snippet(sub)
+    sub.service_description = "second"
+    monkeypatch.setattr(mr, "RENDER_VERSION", mr.RENDER_VERSION + 1)
+    assert mr.submission_description_snippet(sub) == "second"

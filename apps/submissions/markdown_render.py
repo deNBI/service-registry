@@ -10,12 +10,19 @@ import re
 import bleach
 import markdown as md
 from django.conf import settings
+from django.core.cache import cache
 from django.utils.safestring import SafeString, mark_safe
 from markdown.extensions import Extension
 
 ALLOWED_TAGS = ["p", "br", "strong", "em", "ul", "ol", "li", "a", "blockquote"]
 ALLOWED_ATTRS = {"a": ["href", "title"]}
 ALLOWED_PROTOCOLS = ["http", "https", "mailto"]
+
+# Bump whenever render/sanitize rules change so cached output from a previous
+# deploy is never served. Keys also carry a finite TTL so orphaned entries
+# (old versions, old updated_at values) expire from Redis on their own.
+RENDER_VERSION = 1
+MD_CACHE_TTL = 60 * 60 * 24
 
 # Matches an opening <a ...> tag (bleach has already validated href/protocol).
 _ANCHOR_OPEN_RE = re.compile(r"<a\b([^>]*)>")
@@ -114,3 +121,44 @@ def markdown_to_text(text: str, limit: int = 300) -> str:
     if len(plain) > limit:
         plain = plain[:limit].rstrip() + "…"  # ellipsis
     return plain
+
+
+def _cache_key(kind: str, submission) -> str:
+    ts = submission.updated_at.timestamp() if submission.updated_at else 0
+    return f"md:v{RENDER_VERSION}:{kind}:{submission.pk}:{ts}"
+
+
+def render_submission_description(submission) -> SafeString:
+    """Flag-aware, cached rendering for a submission's description.
+
+    When the flag is off, returns the raw text (NOT mark_safe) so the template
+    auto-escapes it exactly as today.
+    """
+    raw = submission.service_description or ""
+    if not markdown_enabled():
+        return raw
+    key = _cache_key("html", submission)
+    cached = cache.get(key)
+    if cached is not None:
+        return mark_safe(cached)
+    html = render_markdown(raw)
+    cache.set(key, str(html), timeout=MD_CACHE_TTL)
+    return html
+
+
+def submission_description_snippet(submission) -> str:
+    """Flag-aware, cached plain-text card snippet for a submission.
+
+    Flag off: raw text. Flag on: markdown_to_text(raw). Always a plain str
+    for the template to autoescape.
+    """
+    raw = submission.service_description or ""
+    if not markdown_enabled():
+        return raw
+    key = _cache_key("text", submission)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    text = markdown_to_text(raw)
+    cache.set(key, text, timeout=MD_CACHE_TTL)
+    return text
