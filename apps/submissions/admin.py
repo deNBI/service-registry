@@ -43,6 +43,20 @@ from .widgets import MarkdownTextareaWidget
 
 logger = logging.getLogger(__name__)
 
+_CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value):
+    """Neutralise spreadsheet formula injection in an exported CSV cell.
+
+    Strings starting with a formula trigger (``= + - @``, tab or CR) get a
+    leading ``'`` so spreadsheet apps treat them as text. Markdown bullet
+    lists (``- item``) are the common benign case. Non-strings pass through.
+    """
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_TRIGGERS):
+        return "'" + value
+    return value
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # API Key inline
@@ -1571,78 +1585,78 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         )
         for s in self._export_queryset(queryset):
             bt = self._biotools_data(s)
-            w.writerow(
-                [
-                    str(s.id),
-                    s.status,
-                    str(s.get_primary_maturity_tag_display())
-                    if s.primary_maturity_tag
-                    else "",
-                    "; ".join(s.get_secondary_maturity_tag_display_list())
-                    if s.secondary_maturity_tags
-                    else "",
-                    s.date_of_entry.isoformat() if s.date_of_entry else "",
-                    s.service_name,
-                    s.service_description,
-                    s.year_established,
-                    s.submitter_first_name,
-                    s.submitter_last_name,
-                    s.submitter_affiliation,
-                    s.host_institute,
-                    str(s.service_center),
-                    s.public_contact_email,
-                    s.internal_contact_name,
-                    s.internal_contact_email,
-                    "; ".join(c.name for c in s.service_categories.all()),
-                    "; ".join(
-                        f"{pi.first_name} {pi.last_name}".strip()
-                        for pi in s.responsible_pis.all()
-                    ),
-                    "; ".join(f"{t.label} ({t.uri})" for t in s.edam_topics.all()),
-                    "; ".join(f"{t.label} ({t.uri})" for t in s.edam_operations.all()),
-                    s.is_toolbox,
-                    s.toolbox_name,
-                    s.user_knowledge_required,
-                    s.publications_pmids,
-                    s.website_url,
-                    s.terms_of_use_url,
-                    "; ".join(lic.license_id for lic in s.licenses.all()),
-                    s.license_note,
-                    s.github_url,
-                    s.biotools_url,
-                    s.fairsharing_url,
-                    s.other_registry_url,
-                    s.kpi_monitoring,
-                    s.kpi_start_year,
-                    s.associated_partner_note,
-                    s.keywords_uncited,
-                    s.keywords_seo,
-                    s.register_as_elixir,
-                    s.survey_participation,
-                    s.comments,
-                    self._logo_url(request, s),
-                    bt["biotools_id"],
-                    bt["biotools_name"],
-                    bt["biotools_description"],
-                    bt["biotools_homepage"],
-                    bt["biotools_version"],
-                    bt["biotools_license"],
-                    bt["biotools_maturity"],
-                    bt["biotools_cost"],
-                    "; ".join(bt["biotools_tool_type"]),
-                    "; ".join(bt["biotools_operating_system"]),
-                    "; ".join(bt["biotools_edam_topic_uris"]),
-                    "; ".join(bt["biotools_edam_operation_uris"]),
-                    json.dumps(bt["biotools_functions"]),
-                    json.dumps(bt["biotools_publications"]),
-                    json.dumps(bt["biotools_documentation"]),
-                    json.dumps(bt["biotools_download"]),
-                    json.dumps(bt["biotools_links"]),
-                    bt["biotools_last_synced_at"],
-                    s.submitted_at.isoformat(),
-                    s.updated_at.isoformat(),
-                ]
-            )
+            row = [
+                str(s.id),
+                s.status,
+                str(s.get_primary_maturity_tag_display())
+                if s.primary_maturity_tag
+                else "",
+                "; ".join(s.get_secondary_maturity_tag_display_list())
+                if s.secondary_maturity_tags
+                else "",
+                s.date_of_entry.isoformat() if s.date_of_entry else "",
+                s.service_name,
+                s.service_description,
+                s.year_established,
+                s.submitter_first_name,
+                s.submitter_last_name,
+                s.submitter_affiliation,
+                s.host_institute,
+                str(s.service_center),
+                s.public_contact_email,
+                s.internal_contact_name,
+                s.internal_contact_email,
+                "; ".join(c.name for c in s.service_categories.all()),
+                "; ".join(
+                    f"{pi.first_name} {pi.last_name}".strip()
+                    for pi in s.responsible_pis.all()
+                ),
+                "; ".join(f"{t.label} ({t.uri})" for t in s.edam_topics.all()),
+                "; ".join(f"{t.label} ({t.uri})" for t in s.edam_operations.all()),
+                s.is_toolbox,
+                s.toolbox_name,
+                s.user_knowledge_required,
+                s.publications_pmids,
+                s.website_url,
+                s.terms_of_use_url,
+                "; ".join(lic.license_id for lic in s.licenses.all()),
+                s.license_note,
+                s.github_url,
+                s.biotools_url,
+                s.fairsharing_url,
+                s.other_registry_url,
+                s.kpi_monitoring,
+                s.kpi_start_year,
+                s.associated_partner_note,
+                s.keywords_uncited,
+                s.keywords_seo,
+                s.register_as_elixir,
+                s.survey_participation,
+                s.comments,
+                self._logo_url(request, s),
+                bt["biotools_id"],
+                bt["biotools_name"],
+                bt["biotools_description"],
+                bt["biotools_homepage"],
+                bt["biotools_version"],
+                bt["biotools_license"],
+                bt["biotools_maturity"],
+                bt["biotools_cost"],
+                "; ".join(bt["biotools_tool_type"]),
+                "; ".join(bt["biotools_operating_system"]),
+                "; ".join(bt["biotools_edam_topic_uris"]),
+                "; ".join(bt["biotools_edam_operation_uris"]),
+                json.dumps(bt["biotools_functions"]),
+                json.dumps(bt["biotools_publications"]),
+                json.dumps(bt["biotools_documentation"]),
+                json.dumps(bt["biotools_download"]),
+                json.dumps(bt["biotools_links"]),
+                bt["biotools_last_synced_at"],
+                s.submitted_at.isoformat(),
+                s.updated_at.isoformat(),
+            ]
+            # Guard every data cell once; the header row is literal constants.
+            w.writerow([_csv_safe(v) for v in row])
         return resp
 
     @admin.action(description="📥 Export selected as JSON", permissions=["view"])
