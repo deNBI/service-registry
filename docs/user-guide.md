@@ -32,17 +32,31 @@ bioinformatics service for inclusion in the [de.NBI services catalogue](https://
    | F — Discoverability  | Keywords for search, citation tracking, and survey participation               |
    | G — Consent          | Data protection consent (required to submit)                                   |
 
-   **Formatting the description.** When Markdown descriptions are enabled on the site, the service description supports a small subset of Markdown, and a **Preview** button under the field shows how it will look:
+   **Formatting the description.** When Markdown descriptions are enabled on the site, the service description supports a small subset of Markdown and the field becomes a small editor with two tabs, **Write** and **Preview** (the same editor is used on the edit form):
 
-   | Supported                                            | Not supported                                                                   |
-   | ---------------------------------------------------- | ------------------------------------------------------------------------------- |
-   | `**bold**`, `_italic_`                               | Headings, code and code blocks, horizontal rules (the text is kept, formatting removed) |
-   | Bullet (`- item`) and numbered (`1. item`) lists     | Images (removed entirely)                                                       |
-   | Links written as `[label](https://example.com)`      | Bare URLs and `<https://...>` (shown as plain text, not turned into links)      |
-   | Blockquotes (`> quoted text`)                        | Raw HTML (shown as literal text, never executed)                                |
-   | Line breaks (a single newline starts a new line)     | Links other than `http`, `https` and `mailto` (the link is removed, the label kept) |
+   - **Write** is the normal text box.
+   - **Preview** replaces the text box, in place, with the description as it will appear in the catalogue. It shows "Loading preview…" while the server renders it and "Nothing to preview." when the box is empty. The preview is rendered again whenever you have changed the text since the last preview; switching back and forth without editing reuses the last result. Switch back to **Write** to keep editing.
+   - With the keyboard, focus a tab and use the Left/Right arrow keys (or Home/End) to switch between **Write** and **Preview**.
+   - **Markdown supported · Formatting help** under the box opens a short cheat-sheet of the supported syntax.
+   - The counter next to it shows the length against the 5,000-character limit. It stays neutral while the box is empty, turns red with "at least 50 characters" for 1 to 49 characters, turns amber from 4,500 characters and red above 5,000. Line breaks count as 2 characters, as they do when the server checks the length, and Markdown characters count too.
+   - Without JavaScript the tabs, help and counter are not shown and the plain text box works as usual.
 
-   The preview warns you when some formatting was removed. A line that starts with `#` (even `#1`) is treated as a heading and loses the `#`, so reword such lines. Length limits apply to the text as you type it, including the Markdown characters.
+   | Supported                                                                    | Not supported                                                                       |
+   | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+   | `**bold**`, `_italic_`                                                       | Code and code blocks, horizontal rules (the text is kept, formatting removed)       |
+   | Headings: `# Heading`, `## Sub-heading`, `### ...` (shown as small headings) | Images (removed entirely)                                                           |
+   | Bullet (`- item`) and numbered (`1. item`) lists                             | Tables and strikethrough (`~~text~~`) (shown as plain text)                         |
+   | Links written as `[label](https://example.com)` or `[label](mailto:...)`     | Bare URLs and `<https://...>` (shown as plain text, not turned into links)          |
+   | Blockquotes (`> quoted text`)                                                | Raw HTML (shown as literal text, never executed)                                    |
+   | Line breaks (a single newline starts a new line)                             | Links other than `http`, `https` and `mailto`, including relative links such as `/about` (the link is removed, the label kept) |
+
+   A few details:
+
+   - Headings are scaled down so they fit inside the page: `#` is the largest description heading, `##` the next size and `###` or more the smallest.
+   - Web links open in a new tab. `mailto:` links open your mail client instead, without a new tab. A link with no visible text (for example a badge whose image is removed) is dropped.
+   - To nest a list, indent the nested items with 4 spaces.
+   - A line that starts with `#` (even `#1`) becomes a heading, and a line that starts with a number and a full stop (such as `1990. We started`) becomes a numbered list. Put a backslash in front to keep the text as written: `\#1`, `1990\. We started`.
+   - The preview shows a notice when content was removed: images, code, horizontal rules, or links other than `http`, `https` and `mailto` (including relative links).
 
 3. Click **Submit Registration**.
 
@@ -64,7 +78,7 @@ Each submission gets a **write-scope** API key by default, which allows full edi
 1. Go to **/update/**.
 2. Paste your API key into the text field and click **Retrieve My Registration**.
 3. Your form will be pre-populated with all existing values.
-4. Make your changes and click **Save Changes**. The description **Preview** button is available here too (see [Registering a New Service](#registering-a-new-service)).
+4. Make your changes and click **Save Changes**. The description uses the same **Write** | **Preview** editor here too (see [Registering a New Service](#registering-a-new-service)).
 5. Two emails are sent automatically:
    - **Administration office** — notified of your changes with a summary of what was updated.
    - **You** — a confirmation email is sent to your internal contact address listing exactly which fields changed (previous value → new value).

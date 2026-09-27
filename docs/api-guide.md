@@ -197,7 +197,7 @@ Returns 403 if the key does not belong to this submission.
 **Description fields.** `service_description` is always the raw text exactly as submitted (it may contain Markdown). The detail response (this endpoint, and the create and update responses) also includes a read-only `service_description_html`:
 
 - It is always safe HTML, ready to insert into a page.
-- When Markdown rendering is enabled on the server, it is the sanitized rendered HTML (paragraphs, line breaks, bold/italic, lists, blockquotes and `http`/`https`/`mailto` links with `rel="nofollow noopener noreferrer" target="_blank"`).
+- When Markdown rendering is enabled on the server, it is the sanitized rendered HTML: paragraphs, line breaks, bold/italic, lists, blockquotes, headings and links. Headings are shifted down three levels, so it may contain `h4`, `h5` and `h6` (`#` becomes `h4`, `##` `h5`, `###` and deeper `h6`) but never `h1` to `h3`. Only links with an explicit `http`, `https` or `mailto` scheme are kept; other links (including relative ones) are reduced to their text, and so are links with no visible text. Kept links carry `rel="nofollow noopener noreferrer"`; `http`/`https` links also get `target="_blank"`, `mailto` links do not.
 - When it is disabled, it is the raw text HTML-escaped, with no paragraph or line-break markup.
 
 `service_description_html` is not included in the list endpoint (`GET /api/v1/submissions/`) and is ignored if sent in a `POST` or `PATCH`. Length validation applies to the raw `service_description`.

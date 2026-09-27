@@ -63,9 +63,10 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_management_commands.py` | `sync_edam`, `sync_biotools` management commands, template tags, context processor |
 | `test_logo_utils.py` | `validate_and_process_logo()` — magic bytes, size limits, EXIF stripping, SVG sanitisation, XML attack prevention (XXE/billion-laughs), path traversal |
 | `test_template_tags.py` | `linkify_description` filter — named links, bare URLs, paragraph/line breaks, XSS escaping |
-| `test_markdown_*.py`, `test_catalogue_markdown_render.py`, `test_api_markdown.py`, `test_admin_markdown.py` | Markdown descriptions: render/sanitize pipeline, XSS, cross-surface consistency, template filters, preview endpoint, API `service_description_html`, admin preview and rendered field |
-| `test_audit_markdown_command.py` | `audit_markdown_descriptions` flagging, CSV output and exit status |
-| `test_export_formula_guard.py` | CSV export formula-injection guard (`_csv_safe`) |
+| `test_markdown_*.py`, `test_catalogue_markdown_render.py`, `test_api_markdown.py`, `test_admin_markdown.py` | Markdown descriptions: render/sanitize pipeline (heading shift, link filtering), XSS, cross-surface consistency, template filters, preview endpoint, Write/Preview editor markup and counter limits (`test_markdown_editor_render.py`), API `service_description_html`, admin editor widget and the view-only rendered row |
+| `test_field_partials.py` | `field.html` composed of `field_label.html` / `field_widget.html` / `field_feedback.html`: label, inline-validation wrapper and error markup, with and without errors |
+| `test_audit_markdown_command.py` | `audit_markdown_descriptions` flagging, diff-centred previews, CSV output and exit status |
+| `test_export_formula_guard.py` | CSV formula-injection guard (`csv_safe` in `apps/submissions/csv_utils.py`) |
 | `test_email_plaintext.py` | `render_plaintext()`: plain-text email bodies rendered without HTML escaping |
 
 Total: **~450 tests** (enforced ≥ 80% coverage threshold).

@@ -425,7 +425,7 @@ Markdown rendering of `service_description` is behind the `[features] markdown_d
    ```bash
    docker compose restart web worker beat
    ```
-6. **Spot-check**: the catalogue list view shows formatted descriptions, cards show plain-text excerpts, the form **Preview** button works, and `GET /api/v1/submissions/{id}/` returns rendered HTML in `service_description_html`.
+6. **Spot-check**: the catalogue list view shows formatted descriptions, cards show plain-text excerpts, the **Write** | **Preview** editor on the forms renders a preview, and `GET /api/v1/submissions/{id}/` returns rendered HTML in `service_description_html`.
 
 **Rollback:** set `markdown_descriptions = false` and restart the same services. Display returns to plain text immediately; no data changes are needed.
 

@@ -117,7 +117,7 @@ catalogue         = false  # Enable the public Registry Catalogue at /catalogue/
 markdown_descriptions = false  # Render service descriptions as Markdown
 ```
 
-`markdown_descriptions` (default `false`) renders `service_description` as sanitized Markdown in the catalogue, the admin and the API `service_description_html` field, and enables the **Preview** button on the forms. With the flag off every surface shows today's plain, autoescaped text. Run `python manage.py audit_markdown_descriptions` before enabling it in production (see [Markdown descriptions rollout](rollout.md#markdown-descriptions-rollout)). Like all `site.toml` changes, it takes effect after `docker compose restart web worker beat`.
+`markdown_descriptions` (default `false`) renders `service_description` as sanitized Markdown in the catalogue, the admin and the API `service_description_html` field, and turns the description field on the forms and in the admin into the **Write** | **Preview** editor. With the flag off every surface shows the plain, autoescaped text shown before this feature. Run `python manage.py audit_markdown_descriptions` before enabling it in production (see [Markdown descriptions rollout](rollout.md#markdown-descriptions-rollout)). Like all `site.toml` changes, it takes effect after `docker compose restart web worker beat`.
 
 ### Registry Catalogue
 
