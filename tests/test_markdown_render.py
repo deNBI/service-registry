@@ -134,9 +134,37 @@ def test_autolink_url_not_linked():
 
 
 def test_snippet_strips_list_markers():
-    out = markdown_to_text("Our tool does:\n- alignment\n- assembly")
+    # A real Markdown list (blank line before it) renders as <ul>; no markers.
+    out = markdown_to_text("Our tool does:\n\n- alignment\n- assembly")
     assert "-" not in out
-    assert "alignment" in out and "assembly" in out
+    assert out == "Our tool does: alignment assembly"
+
+
+def test_snippet_unspaced_list_matches_list_view():
+    # Without a blank line Markdown keeps it as paragraph text, so the list
+    # view shows the dash; the card snippet must agree.
+    text = "Our tool does:\n- alignment"
+    assert "- alignment" in str(render_markdown(text))
+    assert markdown_to_text(text) == "Our tool does: - alignment"
+
+
+def test_snippet_keeps_prose_that_looks_like_markers():
+    assert "2024." in markdown_to_text("Founded in\n2024. This project began")
+    assert "- 5 degrees" in markdown_to_text(
+        "Temperatures of\n- 5 degrees were recorded"
+    )
+    assert ">90% accuracy" in markdown_to_text("&gt;90% accuracy on the benchmark")
+
+
+def test_snippet_word_boundary_between_heading_and_paragraph():
+    assert markdown_to_text("# Title\n\nBody text") == "Title Body text"
+
+
+def test_snippet_is_plain_text_not_escaped():
+    text = "<script>alert(1)</script> & <config>"
+    out = markdown_to_text(text)
+    assert out == text
+    assert "&lt;" not in out and "&amp;" not in out
 
 
 def test_snippet_strips_emphasis_and_unescapes():

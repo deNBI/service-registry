@@ -88,9 +88,6 @@ def render_markdown(text: str) -> SafeString:
     return mark_safe(_harden_anchors(clean))
 
 
-_LEADING_MARKER_RE = re.compile(
-    r"^\s{0,3}(?:#{1,6}\s+|[-*+]\s+|\d+\.\s+|>\s?)", re.MULTILINE
-)
 _BLOCK_TAG_RE = re.compile(r"(</(?:p|li|ul|ol|blockquote)>|<br\s*/?>)")
 _WS_RE = re.compile(r"\s+")
 
@@ -98,15 +95,18 @@ _WS_RE = re.compile(r"\s+")
 def markdown_to_text(text: str, limit: int = 300) -> str:
     """Plain-text snippet of Markdown for compact card display.
 
-    Renders via the real Markdown engine (so emphasis/links/identifiers are
-    handled correctly), replaces block boundaries with spaces, then strips all
-    tags to plain text. Leading block markers are removed first so an unspaced
-    list does not leak '-'/'1.' markers.
+    Derived from render_markdown() output so the card shows exactly the text
+    the list view shows: block boundaries become spaces, all tags are
+    stripped, entities are unescaped and whitespace is collapsed. List,
+    quote and heading markers only disappear where Markdown itself treats
+    them as block syntax (rendered <li>/<blockquote>/headings carry no
+    marker characters); prose such as "2024. This..." or "- 5 degrees" on a
+    continuation line is kept verbatim, as in the list view. Returns a plain
+    str (not SafeString) for the template to autoescape.
     """
     if not text:
         return ""
-    s = _LEADING_MARKER_RE.sub("", text)
-    html = str(render_markdown(s))
+    html = str(render_markdown(text))
     html = _BLOCK_TAG_RE.sub(" ", html)  # keep word boundaries
     plain = bleach.clean(html, tags=[], strip=True)
     plain = _html.unescape(plain)
