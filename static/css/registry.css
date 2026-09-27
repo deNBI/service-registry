@@ -1186,7 +1186,17 @@ select.edam-autocomplete { display: none !important; }
   overflow-wrap: anywhere;
 }
 .md-editor__preview:focus-visible { outline: 2px solid var(--g); outline-offset: -2px; }
-.md-editor__preview[aria-busy="true"] { opacity: 0.55; }
+.md-editor__preview[aria-busy="true"] {
+  opacity: 0.55;
+  animation: md-editor-pulse 1.2s ease-in-out infinite;
+}
+@keyframes md-editor-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.3; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .md-editor__preview[aria-busy="true"] { animation: none; }
+}
 .md-editor__empty { margin: 0; color: var(--gray-400); font-style: italic; }
 .md-editor__alert {
   margin-bottom: 0.5rem;
@@ -1244,10 +1254,25 @@ select.edam-autocomplete { display: none !important; }
 }
 .md-editor__help-h4 { font-weight: 600; }
 .md-editor__help-h5 { font-weight: 600; font-size: 0.9em; }
-.md-editor__help-link { color: var(--g-dark); text-decoration: underline; }
+/* Same colour as links in the rendered preview (Bootstrap's `a` rule). */
+.md-editor__help-link {
+  color: rgba(var(--bs-link-color-rgb), var(--bs-link-opacity, 1));
+  text-decoration: underline;
+}
 .md-editor__help-quote { padding-left: 0.4rem; border-left: 3px solid var(--gray-200); color: var(--gray-600); }
 .md-editor__help-note { margin: 0; padding: 0.35rem 0.6rem; color: var(--gray-600); border-top: 1px solid var(--gray-100); }
 @media (max-width: 575.98px) {
   .md-editor__footer { flex-wrap: wrap; }
+  /* Each row's four cells (syntax | result | syntax | result) become two
+     lines of syntax | result pairs. */
+  .md-editor__help-table,
+  .md-editor__help-table tbody { display: block; }
+  .md-editor__help-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    border-top: 1px solid var(--gray-100);
+  }
+  .md-editor__help-table tr:first-child { border-top: 0; }
   .md-editor__help-table td { display: block; border-top: 0; }
+  .md-editor__help-table code { overflow-wrap: anywhere; }
 }

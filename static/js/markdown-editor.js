@@ -19,10 +19,15 @@
     return f ? f.value : "";
   }
 
-  // Same length the server validates: NFC, trimmed, in code points. Browsers
-  // submit textarea line breaks as CRLF, so each one counts as 2.
+  // Python's str.strip() whitespace set: JS \s minus U+FEFF (BOM), plus the
+  // separators U+001C-U+001F and NEL U+0085. String.trim() differs on those.
+  var PY_WS = "\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
+  var PY_STRIP = new RegExp("^[" + PY_WS + "]+|[" + PY_WS + "]+$", "g");
+
+  // Same length the server validates: NFC, str.strip(), in code points.
+  // Browsers submit textarea line breaks as CRLF, so each one counts as 2.
   function serverLength(s) {
-    return Array.from(s.normalize("NFC").trim().replace(/\r?\n/g, "\r\n")).length;
+    return Array.from(s.normalize("NFC").replace(PY_STRIP, "").replace(/\r?\n/g, "\r\n")).length;
   }
 
   // Error fragments (rate limit, too long, unavailable) must not be reused.
@@ -64,6 +69,8 @@
         return;
       }
       var seq = ++requestSeq;
+      // Never leave an outdated render readable while the new one loads.
+      previewPanel.innerHTML = '<p class="md-editor__empty">Loading preview…</p>';
       previewPanel.setAttribute("aria-busy", "true");
       var body = new FormData();
       body.append("service_description", value);
@@ -117,12 +124,16 @@
         writePanel.hidden = false;
         if (!opts.keyboard) textarea.focus();
       }
-      if (opts.keyboard) tab.focus();
+      // Preview by mouse: Safari/Firefox on macOS do not focus a clicked
+      // button, so focus would fall to <body> once the textarea is hidden.
+      if (opts.keyboard || tab.dataset.mdTab === "preview") tab.focus();
     }
 
     tabs.forEach(function (tab, i) {
       tab.addEventListener("click", function () { select(tab); });
       tab.addEventListener("keydown", function (e) {
+        // Leave modified keys (e.g. Alt+Arrow history navigation) to the browser.
+        if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
         var j = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
         if (j === undefined) return;
         e.preventDefault();
