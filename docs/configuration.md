@@ -298,9 +298,9 @@ It has no effect on the IP that Django views or django-axes record.
     per-client rate limiting**) is resolved from the `X-Real-IP` header, which the
     upstream proxy sets to `$remote_addr` — the real client IP. django-axes reads
     it via `django-ipware`; `submission_ip` and django-ratelimit read it via
-    `get_client_ip` (`apps/submissions/http_utils.py`, wired up as
+    `get_client_ip` (`apps/submissions/http_utils.py`; the limiter uses its wrapper `get_ratelimit_ip`, wired up as
     `RATELIMIT_IP_META_KEY`), which tries `X-Real-IP` → `X-Forwarded-For` →
-    `REMOTE_ADDR`. This path is independent of `FORWARDED_ALLOW_IPS`.
+    `REMOTE_ADDR` and uses the first syntactically valid address (a malformed header falls through to the next source; with none valid, `submission_ip` stays empty and the limiter uses one shared placeholder bucket). This path is independent of `FORWARDED_ALLOW_IPS`.
 
     For the application IP to be correct, two things must be true:
 
@@ -370,9 +370,9 @@ RATE_LIMIT_VALIDATE=120/h       # Inline field validation (POST /register/valida
 ```
 
 !!! warning "Limits are bucketed per real client IP"
-    Every limit is keyed on the real client IP, not `REMOTE_ADDR`
-    (`RATELIMIT_IP_META_KEY = apps.submissions.http_utils.get_client_ip`, which
-    reads `X-Real-IP` → `X-Forwarded-For` → `REMOTE_ADDR`). Behind a reverse
+    The django-ratelimit limits (all of the above except `RATE_LIMIT_API`, which DRF applies per authenticated user or API key) are keyed on the real client IP, not `REMOTE_ADDR`
+    (`RATELIMIT_IP_META_KEY = apps.submissions.http_utils.get_ratelimit_ip`, which
+    reads the first valid address from `X-Real-IP` → `X-Forwarded-For` → `REMOTE_ADDR`). Behind a reverse
     proxy the proxy **must** set `X-Real-IP` to the client address (see the
     `X-Real-IP` note above); otherwise all users share one global bucket and the
     limits become effectively site-wide.

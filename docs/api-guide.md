@@ -200,7 +200,7 @@ Returns 403 if the key does not belong to this submission.
 
 `PATCH /api/v1/submissions/{id}/` — requires `ApiKey` with `write` scope. Partial update — include only changed fields.
 
-Updating an approved submission resets its status to `submitted` for re-review **unless every submitted field is listed in `no_reset_fields`** (configured in `site.toml [submission]`). The default exempt set is the list of external links, EDAM annotations, keywords, publications, contact fields, KPI fields, and `comments` — see `no_reset_fields` in `site.toml` for the authoritative list. Patching only exempt fields on an approved submission preserves its status and maturity tags.
+Updating an approved submission resets its status to `submitted` for re-review **when a field that is not listed in `no_reset_fields` actually changes** (configured in `site.toml [submission]`), the same rule as the web edit form. Sending a field with the value it already has is not a change, so a GET, modify, PATCH round-trip that echoes unchanged fields keeps the service approved; values are compared as stored, so differences only in surrounding whitespace or Unicode normalisation (NFC) do not count either. If no `no_reset_fields` are configured, any actual change resets the status. The default exempt set is the list of external links, EDAM annotations, keywords, publications, contact fields, KPI fields, and `comments` — see `no_reset_fields` in `site.toml` for the authoritative list. Changing only exempt fields on an approved submission preserves its status and maturity tags. The content change and the reset are saved in one transaction.
 
 When a reset does occur, `primary_maturity_tag` and `secondary_maturity_tags` are also cleared (they are only valid on approved services). The submitter update email includes a lifecycle notice.
 
@@ -227,7 +227,7 @@ Full `PUT` is not supported — use `PATCH`.
 ```
 
 !!! info "Email notifications on PATCH"
-Every successful `PATCH` triggers the same notification flow as a submitter web-form edit: an admin email with the full submission report, a field-level **what changed** diff table, and a direct link to the admin change view. If any fields actually changed, the submitter also receives a separate confirmation email with the same diff table. If the edit resets the status (non-exempt field change on an approved service), the submitter email includes a lifecycle notice explaining the reset. No notification is sent when the request body contains no actual changes.
+Every successful `PATCH` triggers the same notification flow as a submitter web-form edit: an admin email with the full submission report, a field-level **what changed** diff table, and a direct link to the admin change view. If any fields actually changed, the submitter also receives a separate confirmation email with the same diff table. If the edit resets the status (non-exempt field change on an approved service), the submitter email includes a lifecycle notice explaining the reset. When the request contains no actual changes, the submitter gets no email and the admin email has no diff table (as for a web-form save without changes).
 
 ---
 
