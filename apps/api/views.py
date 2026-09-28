@@ -17,6 +17,7 @@ Authentication strategy
 
 import logging
 
+from django.db import transaction
 from django.utils.timezone import now
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from rest_framework import filters, mixins, status, viewsets
@@ -109,6 +110,7 @@ class SubmissionViewSet(
             "edam_topics",
             "edam_operations",
             "biotoolsrecord__functions",
+            "licenses",
         )
         .order_by("-submitted_at")
     )
@@ -257,7 +259,7 @@ class SubmissionViewSet(
 
         submission = serializer.save(
             status="submitted",
-            submission_ip=get_client_ip(request),
+            submission_ip=get_client_ip(request) or None,
             user_agent_hash=hash_user_agent(request),
         )
 
@@ -377,67 +379,52 @@ class SubmissionViewSet(
 
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        was_approved = instance.status == "approved"
+        before = {**before_scalar, **before_m2m}
 
-        # Apply the same no_reset_fields exemption as the web form (EditView).
-        # Only consider fields that the diff system tracks (DIFFABLE_FIELDS /
-        # DIFFABLE_M2M); metadata-only fields like data_protection_consent are
-        # excluded from the reset decision.
-        status_reset = False
-        if instance.status == "approved":
-            from apps.submissions.lifecycle import get_no_reset_fields
-            from apps.submissions.diff_utils import DIFFABLE_FIELDS, DIFFABLE_M2M
-
-            exempt = get_no_reset_fields()
-            all_diffable = frozenset(f for f, _ in DIFFABLE_FIELDS + DIFFABLE_M2M)
-            # validated_data uses source names (model field names), so the
-            # comparison against no_reset_fields (model field names) is direct.
-            content_fields_submitted = (
-                set(serializer.validated_data.keys()) & all_diffable
-            )
-            non_exempt = content_fields_submitted - exempt
-
-            if exempt and not non_exempt:
-                # All submitted content fields are exempt → preserve approved status.
-                serializer.save()
-            else:
-                # At least one non-exempt content field changed (or no exempt list
-                # configured) → reset to submitted and clear maturity tags to maintain
-                # the model invariant (tags are only valid on approved services).
-                serializer.save(
-                    status="submitted",
-                    primary_maturity_tag=None,
-                    secondary_maturity_tags=[],
-                )
-                status_reset = True
-        else:
+        # One transaction: the content change, the status reset it may require
+        # and the audit entry are stored together or not at all, so an approved
+        # service can never keep changed content without going back to review.
+        with transaction.atomic():
             serializer.save()
-
-        # Compute field-level diff and persist it on the submission.
-        after_scalar = snapshot(instance)
-        after_m2m = snapshot_m2m(instance)
-        changes = build_diff(
-            {**before_scalar, **before_m2m},
-            {**after_scalar, **after_m2m},
-        )
-
-        if changes:
-            # Identify who made the change via the API key label (request.auth
-            # is the SubmissionAPIKey instance set by SubmissionAPIKeyAuthentication).
-            key_label = getattr(request.auth, "label", "api")
-            changed_by = f"{CHANGELOG_ACTOR_API_PREFIX}{key_label}"
-            changed_at = now()
-            instance.last_change_summary = {
-                "changed_by": changed_by,
-                "changed_at": changed_at.isoformat(),
-                "changes": changes,
-            }
-            instance.save(update_fields=["last_change_summary"])
-            SubmissionChangeLog.objects.create(
-                submission=instance,
-                changed_by=changed_by,
-                changed_at=changed_at,
-                changes=changes,
+            # Field-level diff of what the save ACTUALLY changed. snapshot()
+            # reads the saved (sanitised: stripped, NFC, LF) values, so
+            # re-sending a stored value in another byte form is not a change.
+            changes = build_diff(
+                before, {**snapshot(instance), **snapshot_m2m(instance)}
             )
+
+            # Same rule as the web form (EditView): an approved submission goes
+            # back to review only when a non-exempt field really changed, or
+            # when no no_reset_fields are configured and anything changed.
+            status_reset = False
+            if was_approved and changes:
+                from apps.submissions.lifecycle import get_no_reset_fields
+
+                exempt = get_no_reset_fields()
+                changed = {c["field"] for c in changes}
+                if (changed - exempt) or not exempt:
+                    # Clear maturity tags too: they are only valid on approved
+                    # services (model invariant).
+                    instance.status = "submitted"
+                    instance.primary_maturity_tag = None
+                    instance.secondary_maturity_tags = []
+                    instance.save(
+                        update_fields=[
+                            "status",
+                            "primary_maturity_tag",
+                            "secondary_maturity_tags",
+                            "updated_at",
+                        ]
+                    )
+                    status_reset = True
+                    # Include the reset (status, tags) in the recorded diff.
+                    changes = build_diff(
+                        before, {**snapshot(instance), **snapshot_m2m(instance)}
+                    )
+
+            if changes:
+                self._record_api_change(request, instance, changes)
 
         send_update_notification.delay(
             str(instance.id), changes=changes, status_reset=status_reset
@@ -458,6 +445,27 @@ class SubmissionViewSet(
                 ],
             }
         return Response(data)
+
+    @staticmethod
+    def _record_api_change(request, instance, changes) -> None:
+        """Persist the diff on the submission and in the append-only change log."""
+        # Identify who made the change via the API key label (request.auth
+        # is the SubmissionAPIKey instance set by SubmissionAPIKeyAuthentication).
+        key_label = getattr(request.auth, "label", "api")
+        changed_by = f"{CHANGELOG_ACTOR_API_PREFIX}{key_label}"
+        changed_at = now()
+        instance.last_change_summary = {
+            "changed_by": changed_by,
+            "changed_at": changed_at.isoformat(),
+            "changes": changes,
+        }
+        instance.save(update_fields=["last_change_summary"])
+        SubmissionChangeLog.objects.create(
+            submission=instance,
+            changed_by=changed_by,
+            changed_at=changed_at,
+            changes=changes,
+        )
 
     def update(self, request, *args, **kwargs):
         """Full PUT is disabled — use PATCH."""

@@ -530,7 +530,10 @@ RATELIMIT_FAIL_OPEN = False
 # $remote_addr) → X-Forwarded-For → REMOTE_ADDR — the same real-client-IP path
 # already used for django-axes and the submission_ip field. Falls back to
 # REMOTE_ADDR when unproxied (dev / direct access), so it is safe everywhere.
-RATELIMIT_IP_META_KEY = "apps.submissions.http_utils.get_client_ip"
+# get_ratelimit_ip wraps it: only valid IPs are used (a malformed header falls
+# through to the next source) and it never returns "" (which would crash the
+# limiter with a 500).
+RATELIMIT_IP_META_KEY = "apps.submissions.http_utils.get_ratelimit_ip"
 
 API_KEY_ENTROPY_BYTES = env_int("API_KEY_ENTROPY_BYTES", 48)
 API_KEY_HASH_ALGORITHM = env("API_KEY_HASH_ALGORITHM", "sha256")

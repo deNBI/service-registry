@@ -24,7 +24,9 @@ from django.template import loader
 from django.utils import timezone
 from django.utils.html import escape, format_html, format_html_join, mark_safe
 
+from .csv_utils import csv_safe
 from .diff_utils import build_diff, snapshot, snapshot_m2m
+from .markdown_render import markdown_enabled, render_submission_description
 from .models import (
     CHANGELOG_ACTOR_ADMIN_PREFIX,
     CHANGELOG_ACTOR_API_PREFIX,
@@ -38,6 +40,7 @@ from .models import (
     SubmissionStatus,
 )
 from .tasks import send_submission_notification
+from .widgets import MarkdownTextareaWidget
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +242,11 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         for field_name, rows in textarea_rows.items():
             if field_name in form.base_fields:
                 form.base_fields[field_name].widget.attrs.update({"rows": rows})
+        # Markdown Write | Preview editor: swap the widget per request (flag-gated),
+        # carrying over the existing attrs (admin classes + rows override).
+        field = form.base_fields.get("service_description")
+        if field is not None and markdown_enabled():
+            field.widget = MarkdownTextareaWidget(attrs=dict(field.widget.attrs))
         return form
 
     def formfield_for_manytomanyfield(self, db_field, request, **kwargs):
@@ -273,7 +281,15 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
     class Media:
         # Enhanced filter sidebar assets are loaded on the changelist only
         # (the JS guards on `#changelist-filter.changelist-filter--enhanced`).
-        css = {"all": ("admin/css/submissions_filter_sidebar.css",)}
+        # markdown_preview.css also styles the read-only description_rendered
+        # row shown to view-only staff (no widget Media there); editors get it
+        # via MarkdownTextareaWidget too, and Django's Media merge dedupes it.
+        css = {
+            "all": (
+                "admin/css/submissions_filter_sidebar.css",
+                "admin/css/markdown_preview.css",
+            )
+        }
         js = (
             "js/admin_submission_change.js",
             "admin/js/submissions_filter_sidebar.js",
@@ -293,7 +309,19 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         "last_change_summary_display",
         "data_protection_consent",
         "change_history_display",
+        "description_rendered",
     )
+
+    @admin.display(description="Description (rendered)")
+    def description_rendered(self, obj):
+        # Only in the fieldsets for users who cannot change the submission
+        # (flag on): they see the raw Markdown read-only. Editors use the
+        # Write | Preview editor instead.
+        if obj is None or not obj.pk:
+            return "—"
+        return format_html(
+            '<div class="md-rendered">{}</div>', render_submission_description(obj)
+        )
 
     @admin.display(description="Logo preview")
     def logo_preview(self, obj):
@@ -329,7 +357,9 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
 
     @admin.display(description="License(s)")
     def licenses_summary(self, obj):
-        ids = list(obj.licenses.values_list("license_id", flat=True))
+        # .all() reads the prefetch from get_queryset (values_list() would issue
+        # one query per changelist row).
+        ids = [lic.license_id for lic in obj.licenses.all()]
         if ids:
             shown = ", ".join(ids[:3])
             if len(ids) > 3:
@@ -848,6 +878,9 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
           status_actions        — requires change_servicesubmission OR
                                   approve_servicesubmission
           key_management_panel  — requires manage_apikeys
+
+        description_rendered is added (markdown_descriptions on) only for
+        users without change permission, who see the raw text read-only.
         """
         excluded = set()
 
@@ -863,18 +896,40 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         if not request.user.has_perm("submissions.manage_apikeys"):
             excluded.add("key_management_panel")
 
+        fieldsets = self.fieldsets
+        if (
+            markdown_enabled()
+            and obj is not None
+            and not self.has_change_permission(request, obj)
+        ):
+            fieldsets = self._with_description_rendered(fieldsets)
+
         if not excluded:
-            return self.fieldsets
+            return fieldsets
 
         frozen = frozenset(excluded)
         result = []
-        for title, options in self.fieldsets:
+        for title, options in fieldsets:
             filtered = self._strip_fields(options["fields"], frozen)
             if filtered:
                 result.append((title, {**options, "fields": filtered}))
             # If filtered is empty the entire fieldset is dropped — this only
             # happens to "🔑 API Key Management" when manage_apikeys is absent.
         return result
+
+    @staticmethod
+    def _with_description_rendered(fieldsets):
+        """Return a copy of fieldsets with description_rendered inserted right
+        after service_description (class-level fieldsets are not mutated)."""
+        result = []
+        for title, options in fieldsets:
+            fields = options["fields"]
+            if "service_description" in fields:
+                idx = fields.index("service_description") + 1
+                fields = (*fields[:idx], "description_rendered", *fields[idx:])
+                options = {**options, "fields": fields}
+            result.append((title, options))
+        return tuple(result)
 
     @admin.action(
         description="Assign maturity tags to selected submissions",
@@ -1530,78 +1585,78 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         )
         for s in self._export_queryset(queryset):
             bt = self._biotools_data(s)
-            w.writerow(
-                [
-                    str(s.id),
-                    s.status,
-                    str(s.get_primary_maturity_tag_display())
-                    if s.primary_maturity_tag
-                    else "",
-                    "; ".join(s.get_secondary_maturity_tag_display_list())
-                    if s.secondary_maturity_tags
-                    else "",
-                    s.date_of_entry.isoformat() if s.date_of_entry else "",
-                    s.service_name,
-                    s.service_description,
-                    s.year_established,
-                    s.submitter_first_name,
-                    s.submitter_last_name,
-                    s.submitter_affiliation,
-                    s.host_institute,
-                    str(s.service_center),
-                    s.public_contact_email,
-                    s.internal_contact_name,
-                    s.internal_contact_email,
-                    "; ".join(c.name for c in s.service_categories.all()),
-                    "; ".join(
-                        f"{pi.first_name} {pi.last_name}".strip()
-                        for pi in s.responsible_pis.all()
-                    ),
-                    "; ".join(f"{t.label} ({t.uri})" for t in s.edam_topics.all()),
-                    "; ".join(f"{t.label} ({t.uri})" for t in s.edam_operations.all()),
-                    s.is_toolbox,
-                    s.toolbox_name,
-                    s.user_knowledge_required,
-                    s.publications_pmids,
-                    s.website_url,
-                    s.terms_of_use_url,
-                    "; ".join(lic.license_id for lic in s.licenses.all()),
-                    s.license_note,
-                    s.github_url,
-                    s.biotools_url,
-                    s.fairsharing_url,
-                    s.other_registry_url,
-                    s.kpi_monitoring,
-                    s.kpi_start_year,
-                    s.associated_partner_note,
-                    s.keywords_uncited,
-                    s.keywords_seo,
-                    s.register_as_elixir,
-                    s.survey_participation,
-                    s.comments,
-                    self._logo_url(request, s),
-                    bt["biotools_id"],
-                    bt["biotools_name"],
-                    bt["biotools_description"],
-                    bt["biotools_homepage"],
-                    bt["biotools_version"],
-                    bt["biotools_license"],
-                    bt["biotools_maturity"],
-                    bt["biotools_cost"],
-                    "; ".join(bt["biotools_tool_type"]),
-                    "; ".join(bt["biotools_operating_system"]),
-                    "; ".join(bt["biotools_edam_topic_uris"]),
-                    "; ".join(bt["biotools_edam_operation_uris"]),
-                    json.dumps(bt["biotools_functions"]),
-                    json.dumps(bt["biotools_publications"]),
-                    json.dumps(bt["biotools_documentation"]),
-                    json.dumps(bt["biotools_download"]),
-                    json.dumps(bt["biotools_links"]),
-                    bt["biotools_last_synced_at"],
-                    s.submitted_at.isoformat(),
-                    s.updated_at.isoformat(),
-                ]
-            )
+            row = [
+                str(s.id),
+                s.status,
+                str(s.get_primary_maturity_tag_display())
+                if s.primary_maturity_tag
+                else "",
+                "; ".join(s.get_secondary_maturity_tag_display_list())
+                if s.secondary_maturity_tags
+                else "",
+                s.date_of_entry.isoformat() if s.date_of_entry else "",
+                s.service_name,
+                s.service_description,
+                s.year_established,
+                s.submitter_first_name,
+                s.submitter_last_name,
+                s.submitter_affiliation,
+                s.host_institute,
+                str(s.service_center),
+                s.public_contact_email,
+                s.internal_contact_name,
+                s.internal_contact_email,
+                "; ".join(c.name for c in s.service_categories.all()),
+                "; ".join(
+                    f"{pi.first_name} {pi.last_name}".strip()
+                    for pi in s.responsible_pis.all()
+                ),
+                "; ".join(f"{t.label} ({t.uri})" for t in s.edam_topics.all()),
+                "; ".join(f"{t.label} ({t.uri})" for t in s.edam_operations.all()),
+                s.is_toolbox,
+                s.toolbox_name,
+                s.user_knowledge_required,
+                s.publications_pmids,
+                s.website_url,
+                s.terms_of_use_url,
+                "; ".join(lic.license_id for lic in s.licenses.all()),
+                s.license_note,
+                s.github_url,
+                s.biotools_url,
+                s.fairsharing_url,
+                s.other_registry_url,
+                s.kpi_monitoring,
+                s.kpi_start_year,
+                s.associated_partner_note,
+                s.keywords_uncited,
+                s.keywords_seo,
+                s.register_as_elixir,
+                s.survey_participation,
+                s.comments,
+                self._logo_url(request, s),
+                bt["biotools_id"],
+                bt["biotools_name"],
+                bt["biotools_description"],
+                bt["biotools_homepage"],
+                bt["biotools_version"],
+                bt["biotools_license"],
+                bt["biotools_maturity"],
+                bt["biotools_cost"],
+                "; ".join(bt["biotools_tool_type"]),
+                "; ".join(bt["biotools_operating_system"]),
+                "; ".join(bt["biotools_edam_topic_uris"]),
+                "; ".join(bt["biotools_edam_operation_uris"]),
+                json.dumps(bt["biotools_functions"]),
+                json.dumps(bt["biotools_publications"]),
+                json.dumps(bt["biotools_documentation"]),
+                json.dumps(bt["biotools_download"]),
+                json.dumps(bt["biotools_links"]),
+                bt["biotools_last_synced_at"],
+                s.submitted_at.isoformat(),
+                s.updated_at.isoformat(),
+            ]
+            # Guard every data cell once; the header row is literal constants.
+            w.writerow([csv_safe(v) for v in row])
         return resp
 
     @admin.action(description="📥 Export selected as JSON", permissions=["view"])

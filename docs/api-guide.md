@@ -194,13 +194,30 @@ curl https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
 `GET /api/v1/submissions/{id}/` — requires `ApiKey`. Returns your own submission in full detail.
 Returns 403 if the key does not belong to this submission.
 
+**Description fields.** `service_description` is always the raw text exactly as submitted (it may contain Markdown). The detail response (this endpoint, and the create and update responses) also includes a read-only `service_description_html`:
+
+- It is always safe HTML, ready to insert into a page.
+- When Markdown rendering is enabled on the server, it is the sanitized rendered HTML (CommonMark): paragraphs, line breaks, bold/italic, lists (an ordered list may carry a numeric `start` attribute), blockquotes, headings and links. Headings are shifted down three levels, so it may contain `h4`, `h5` and `h6` (`#` becomes `h4`, `##` `h5`, `###` and deeper `h6`) but never `h1` to `h3`. Only links with an explicit `http`, `https` or `mailto` scheme are kept; other links (including relative ones) are reduced to their text, and so are links with no visible text. Kept links carry `rel="nofollow noopener noreferrer"`; `http`/`https` links also get `target="_blank"`, `mailto` links do not.
+- When it is disabled, it is the plain text HTML-escaped once, with no paragraph or line-break markup.
+
+Descriptions saved before Markdown support was released may contain HTML entities such as `&gt;` in the raw `service_description` (the old web form escaped its input); newer rows are raw. `service_description_html` decodes those entities in both cases, so a legacy `x &gt; 5` displays as `x > 5`, never as a literal `&gt;`: with Markdown enabled it is rendered as above, and with Markdown disabled the decoded plain text is escaped exactly once. Consumers that display descriptions should prefer `service_description_html` over the raw field.
+
+`service_description_html` is not included in the list endpoint (`GET /api/v1/submissions/`) and is ignored if sent in a `POST` or `PATCH`. Length validation applies to the raw `service_description`.
+
+```json
+{
+  "service_description": "Aligns **short reads**.\n\n- fast\n- accurate",
+  "service_description_html": "<p>Aligns <strong>short reads</strong>.</p>\n<ul>\n<li>fast</li>\n<li>accurate</li>\n</ul>"
+}
+```
+
 ---
 
 ### Update a submission
 
 `PATCH /api/v1/submissions/{id}/` — requires `ApiKey` with `write` scope. Partial update — include only changed fields.
 
-Updating an approved submission resets its status to `submitted` for re-review **unless every submitted field is listed in `no_reset_fields`** (configured in `site.toml [submission]`). The default exempt set is the list of external links, EDAM annotations, keywords, publications, contact fields, KPI fields, and `comments` — see `no_reset_fields` in `site.toml` for the authoritative list. Patching only exempt fields on an approved submission preserves its status and maturity tags.
+Updating an approved submission resets its status to `submitted` for re-review **when a field that is not listed in `no_reset_fields` actually changes** (configured in `site.toml [submission]`), the same rule as the web edit form. Sending a field with the value it already has is not a change, so a GET, modify, PATCH round-trip that echoes unchanged fields keeps the service approved; values are compared as stored, so differences only in surrounding whitespace, Unicode normalisation (NFC) or line endings (CRLF vs LF) do not count either. If no `no_reset_fields` are configured, any actual change resets the status. The default exempt set is the list of external links, EDAM annotations, keywords, publications, contact fields, KPI fields, and `comments` — see `no_reset_fields` in `site.toml` for the authoritative list. Changing only exempt fields on an approved submission preserves its status and maturity tags. The content change and the reset are saved in one transaction.
 
 When a reset does occur, `primary_maturity_tag` and `secondary_maturity_tags` are also cleared (they are only valid on approved services). The submitter update email includes a lifecycle notice.
 
@@ -227,7 +244,7 @@ Full `PUT` is not supported — use `PATCH`.
 ```
 
 !!! info "Email notifications on PATCH"
-Every successful `PATCH` triggers the same notification flow as a submitter web-form edit: an admin email with the full submission report, a field-level **what changed** diff table, and a direct link to the admin change view. If any fields actually changed, the submitter also receives a separate confirmation email with the same diff table. If the edit resets the status (non-exempt field change on an approved service), the submitter email includes a lifecycle notice explaining the reset. No notification is sent when the request body contains no actual changes.
+Every successful `PATCH` triggers the same notification flow as a submitter web-form edit: an admin email with the full submission report, a field-level **what changed** diff table, and a direct link to the admin change view. If any fields actually changed, the submitter also receives a separate confirmation email with the same diff table. If the edit resets the status (non-exempt field change on an approved service), the submitter email includes a lifecycle notice explaining the reset. When the request contains no actual changes, the submitter gets no email and the admin email has no diff table (as for a web-form save without changes).
 
 ---
 
@@ -470,6 +487,7 @@ header and in error bodies. Use it when reporting issues.
 | `internal_contact_email`  | required   | never        | Write-only; stored for admin use only                                            |
 | `primary_maturity_tag`    | ignored    | yes          | Read-only in API; set by admins via backend. See [Maturity Tags](#maturity-tags) |
 | `secondary_maturity_tags` | ignored    | yes          | Read-only in API; set by admins via backend. See [Maturity Tags](#maturity-tags) |
+| `service_description_html` | ignored   | detail only  | Read-only; safe HTML rendering of `service_description`. See [Retrieve a submission](#retrieve-a-submission) |
 | `submission_ip`           | —          | never        | Server-generated; not exposed via API                                            |
 | `user_agent_hash`         | —          | never        | Server-generated; not exposed via API                                            |
 

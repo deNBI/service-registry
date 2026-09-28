@@ -9,21 +9,25 @@ Views:
   - EditView       : GET/POST for editing an existing submission (after key lookup)
   - SuccessView    : Shows confirmation with one-time API key display
   - validate_field : HTMX endpoint for per-field inline validation
+  - markdown_preview_view : POST endpoint rendering the description editor's
+                            Preview tab (fetch from the Write/Preview editor)
 """
 
 import base64
 import datetime
 import json
 import logging
+import unicodedata
 
 from django.conf import settings
 from django.contrib import messages
-from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.http import Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils.decorators import method_decorator
 from django.utils.timezone import now
 from django.views import View
 from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_POST
 from django_ratelimit.decorators import ratelimit
 
 from .diff_utils import (
@@ -34,8 +38,11 @@ from .diff_utils import (
 )
 from .forms import SubmissionForm, UpdateKeyForm
 from .http_utils import get_client_ip, hash_user_agent
+from .markdown_render import markdown_enabled, render_with_notice
+from .validation import normalize_newlines
 from .models import (
     CHANGELOG_ACTOR_SUBMITTER,
+    DESCRIPTION_MAX_LENGTH,
     PRIMARY_MATURITY_TAG_CHOICES,
     SECONDARY_MATURITY_TAG_CHOICES,
     ServiceSubmission,
@@ -158,7 +165,7 @@ class RegisterView(View):
         # Save submission
         submission: ServiceSubmission = form.save(commit=False)
         submission.status = "submitted"
-        submission.submission_ip = get_client_ip(request)
+        submission.submission_ip = get_client_ip(request) or None
         submission.user_agent_hash = hash_user_agent(request)
         submission.save()
         form.save_m2m()  # Save ManyToMany fields
@@ -645,6 +652,52 @@ def validate_field(request: HttpRequest) -> HttpResponse:
             "field": bound_field,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Markdown preview (description editor)
+# ---------------------------------------------------------------------------
+
+
+@ratelimit(key="ip", rate=settings.RATE_LIMIT_VALIDATE, method="POST", block=False)
+@require_POST
+def markdown_preview_view(request: HttpRequest) -> HttpResponse:
+    """
+    POST /markdown-preview/
+
+    Called via fetch() by the Write/Preview description editor: renders the
+    posted ``service_description`` through the shared render_markdown
+    pipeline and returns the preview fragment, plus a non-blocking notice
+    when sanitization removed content. The text gets LF line endings, NFC and
+    stripping first, exactly as clean_service_description does, so the length
+    check and the preview match what the form will accept and store.
+    Empty/whitespace-only input returns a 'Nothing to preview' placeholder.
+    404 when the markdown_descriptions feature flag is off.
+
+    Rate limiting is non-blocking: the editor JS shows any non-2xx response
+    as a generic "Preview unavailable", so a throttled request gets a 200
+    fragment with the specific inline message instead.
+    """
+    if not markdown_enabled():
+        raise Http404
+    template = "submissions/partials/markdown_preview.html"
+    if getattr(request, "limited", False):
+        return render(
+            request,
+            template,
+            {"error": "Too many previews. Please wait a moment and try again."},
+        )
+    text = unicodedata.normalize(
+        "NFC", normalize_newlines(request.POST.get("service_description", ""))
+    ).strip()
+    if not text:
+        return render(request, template, {"empty": True})
+    if len(text) > DESCRIPTION_MAX_LENGTH:
+        return render(
+            request, template, {"error": "Description is too long to preview."}
+        )
+    html, removed = render_with_notice(text)
+    return render(request, template, {"html": html, "removed": removed})
 
 
 # ---------------------------------------------------------------------------

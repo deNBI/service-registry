@@ -314,6 +314,9 @@ document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
         // For text inputs, only count if value is non-empty
         if (value) {
           el.value = value;
+          // Let per-field listeners (e.g. the description counter) catch up.
+          // Safe: the draft is saved on `change`, not `input`.
+          el.dispatchEvent(new Event('input', { bubbles: true }));
           restoredCount++;
         }
       }
@@ -400,3 +403,4 @@ document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
   });
 })();
 </script>
+{% if SITE.features.markdown_descriptions %}<script src="{% static 'js/markdown-editor.js' %}" defer></script>{% endif %}

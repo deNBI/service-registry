@@ -138,6 +138,10 @@ edam_annotations = true
 # Enable the public Registry Catalogue page.
 catalogue = true
 
+# Render service_description as Markdown (links, emphasis, lists). Keep OFF in
+# prod until the audit_markdown_descriptions command reports a clean flag list.
+markdown_descriptions = false
+
 #-----------------------------------------------------------------------------
 # [edam] — EDAM Ontology sync settings
 # -----------------------------------------------------------------------------

@@ -198,13 +198,17 @@ select[name=action] option { font-size: .875rem; }
 
 /* ── Form field sizing ─────────────────────────────────────────────────────── */
 /* Django's default .vLargeTextField CSS sets height:26em — makes empty
-   textareas enormous. Switch to rows-driven height instead, with resize. */
+   textareas enormous. Switch to rows-driven height instead, with resize.
+   No !important: the resize handle sets an inline height, which must win. */
 #content-main textarea.vLargeTextField,
 #content-main textarea.vTextField {
-  height: auto !important;
+  height: auto;
   min-height: 3rem;
   resize: vertical;
 }
+/* Django's responsive.css caps textareas at 120px below 1024px wide, which
+   also stops the resize handle there. */
+#content-main textarea { max-height: none; }
 /* URL fields — long enough for a real URL, but don't fill the whole row */
 #content-main input.vURLField {
   max-width: 560px;
@@ -224,6 +228,40 @@ select[name=action] option { font-size: .875rem; }
 .selector {
   max-width: 760px;
 }
+/* Django's flex rows keep min-width:auto, so between 768px and ~1280px a
+   wide control (long option text, the 610px textarea) pushes past its row
+   and .form-row's overflow:hidden clips it. Let them shrink to the row. */
+.form-multiline > div,
+.related-widget-wrapper { min-width: 0; }
+.aligned .form-row select,
+.aligned .form-row textarea,
+.aligned .form-row input[type=file] { min-width: 0; max-width: 100%; }
+/* Django's own <=1024px filter-input rule: without a percentage width the
+   input keeps each picker column >= 228px and clips the chosen column. */
+@media (min-width: 1025px) {
+  .selector .selector-filter input { width: 100%; flex: 1 1; }
+}
+/* Too narrow for side-by-side pickers next to the nav sidebar: stack them
+   as Django does below 768px (its <=767px rules, minus the list height).
+   #content-main: widgets.css loads after this block and would win a tie. */
+@media (min-width: 768px) and (max-width: 1024px) {
+  #content-main .selector { flex-direction: column; gap: 10px 0; }
+  #content-main .selector-available,
+  #content-main .selector-chosen { flex: 1 1 auto; }
+  #content-main .selector ul.selector-chooser { display: flex; width: 60px; height: 30px; padding: 0 2px; transform: none; }
+  #content-main .selector ul.selector-chooser li { float: left; }
+  #content-main .selector-remove { background-position: 0 0; }
+  #content-main :enabled.selector-remove:focus,
+  #content-main :enabled.selector-remove:hover { background-position: 0 -24px; }
+  #content-main .selector-add { background-position: 0 -48px; }
+  #content-main :enabled.selector-add:focus,
+  #content-main :enabled.selector-add:hover { background-position: 0 -72px; }
+}
+/* API key panels: the key table scrolls and the label input fits the row */
+.field-key_management_panel div.readonly,
+.field-sibling_key_panel div.readonly { min-width: 0; overflow-x: auto; }
+.field-key_management_panel input,
+.field-sibling_key_panel input { max-width: 100%; }
 /* Consistent min-height for ordinary <select> widgets (dropdowns) */
 #content-main select {
   min-height: 2rem;

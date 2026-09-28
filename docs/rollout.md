@@ -409,6 +409,34 @@ Tools: Uptime Kuma (self-hosted), Healthchecks.io, or your institution's monitor
 
 ---
 
+## Markdown Descriptions Rollout
+
+Markdown rendering of `service_description` is behind the `[features] markdown_descriptions` flag in `config/site.toml`. It involves no data migration: descriptions are stored as raw text either way, and the flag only changes how they are displayed. Enable it in production in this order:
+
+1. **Deploy with the flag off** (`markdown_descriptions = false`, the default). Every surface keeps showing the plain, autoescaped description; the only visible change is that legacy rows no longer show literal entities such as `&gt;` (see the note below).
+2. **Run the audit** against production:
+   ```bash
+   docker compose exec web python manage.py audit_markdown_descriptions --csv /tmp/md-audit.csv
+   ```
+   It is read-only and exits non-zero while any row is flagged. See [Auditing existing descriptions](admin-guide.md#markdown-descriptions) for what `text_changed` and `content_removed` mean.
+3. **Fix flagged rows in the admin** change form. Admin edits do not reset the submission status. Re-run the audit until it reports `0 row(s) flagged.`, or until the remaining rows are acceptable as rendered.
+4. **Enable the flag**: set `markdown_descriptions = true` in the bind-mounted `site.toml`.
+5. **Restart** so the web, worker and beat processes reload it:
+   ```bash
+   docker compose restart web worker beat
+   ```
+6. **Spot-check**: the catalogue list view shows formatted descriptions, cards show plain-text excerpts, the **Write** | **Preview** editor on the forms renders a preview, and `GET /api/v1/submissions/{id}/` returns rendered HTML in `service_description_html`.
+
+**Rollback:** set `markdown_descriptions = false` and restart the same services. Display returns to plain text immediately; no data changes are needed.
+
+**Legacy entities and API consumers:** rows saved before this release may contain HTML entities such as `&gt;` or `&amp;` in the raw `service_description`, because the old web form HTML-escaped its input. Rows saved from this release on hold the text exactly as typed. Stored values are never rewritten; instead every display surface (catalogue list and cards, `service_description_html`, notification emails) decodes those entities exactly once in both flag states, so both kinds of row display correctly. Source views (the admin textarea and change history, the raw API field and the CSV/JSON exports) show the stored value. API consumers that display descriptions should therefore prefer `service_description_html` over the raw field.
+
+**Parser:** descriptions are parsed as CommonMark (`markdown-it-py`), which renders any input up to the length limit in linear time and caps nesting depth, so no description can stall a worker. Compared with plain text, a line starting with `# ` (hash and space) becomes a heading, a `- ` or `1. ` line becomes a list even directly under a line of text, and a list may start at another number (`2024. Launched` keeps `2024`). The audit reports every row whose display changes.
+
+Rendered HTML is cached per submission (keyed on its `updated_at`) for 24 hours. The key also contains an automatic fingerprint of the rendering code and of the installed markdown-it-py, mdurl and bleach versions, so a release that changes the rules or upgrades those libraries never serves HTML cached under the old ones; no manual step is needed.
+
+---
+
 ## EDAM Ontology Releases
 
 EDAM publishes new releases several times a year. When a new release is out:

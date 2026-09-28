@@ -24,7 +24,12 @@ def as_query_string(params) -> str:
 
 @register.filter(name="highlight")
 def highlight(text: str, search_term: str) -> str:
-    """Wrap occurrences of search_term in <mark> tags (case-insensitive)."""
+    """Wrap occurrences of search_term in <mark> tags (case-insensitive).
+
+    Only pass PLAIN text. Never apply this to rendered Markdown (e.g. the
+    output of ``md_description``): the input is ``escape()``d, so chaining it
+    after rendered HTML would double-escape and break the output.
+    """
     if not search_term or not text:
         return text
     # Escape both inputs before building regex so user content can never

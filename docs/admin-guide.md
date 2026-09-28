@@ -229,6 +229,34 @@ The service name lock applies only to the submitter-facing edit form and the RES
 !!! note "Status is read-only"
 The `Status` field is displayed for information only — it cannot be edited directly. All status transitions are made via the **Status action buttons** panel in the same fieldset (see below).
 
+### Markdown descriptions
+
+When `[features] markdown_descriptions = true` (see [Configuration](configuration.md#feature-flags)), **Service description** in fieldset **B** of the change form uses the same **Write** | **Preview** editor as the public forms (see the [user guide](user-guide.md#registering-a-new-service) for the tabs, formatting help and counter). **Preview** renders the current text through the same sanitizer used by the catalogue and the API, and shows a notice when content was removed (images, code, horizontal rules, lists nested more than nine levels deep (or quotes about twenty), or links other than `http`, `https` and `mailto`, including relative links).
+
+Staff who can view a submission but not change it see the description read-only, with an extra **Description (rendered)** row below it that shows the saved description as the catalogue list view displays it. Staff who can change the submission get the editor instead and do not see that row.
+
+With the flag off, the editor and the rendered row are not shown and the description is edited as a plain text box. Descriptions are always stored as the raw text that was typed; rendering happens on output.
+
+Notification emails never render Markdown: plain-text bodies show the description source without HTML escaping, and HTML bodies (such as the change table) escape it once. In both, HTML entities stored by older versions of the web form, such as `&gt;`, are decoded once, so they read as `>`, as they do in the catalogue and the API. The change form's text box, the change history and the CSV/JSON exports show the stored value unchanged.
+
+**Auditing existing descriptions.** Before enabling the flag, list the descriptions whose display would change:
+
+```bash
+docker compose exec web python manage.py audit_markdown_descriptions
+docker compose exec web python manage.py audit_markdown_descriptions --csv /tmp/md-audit.csv
+```
+
+The command is read-only (a single query, no database or cache writes). Each flagged row is printed with its reasons and a `today:` / `markdown:` preview of the visible text. For long descriptions both previews are cut to about 200 characters around the first place where the two texts differ, with `…` marking the cut, so the change is visible even deep inside the text:
+
+| Reason            | Meaning                                                                                                         |
+| ----------------- | --------------------------------------------------------------------------------------------------------------- |
+| `text_changed`    | The visible text would differ once rendered (e.g. `*` or `_` pairs become emphasis, a line starting with `# ` (hash and space) becomes a heading and loses the `#`, a line starting with `- ` becomes a list item even directly under a line of text). A paragraph starting `1990.` becomes a list numbered from 1990, but its visible text is unchanged, so it is not flagged |
+| `content_removed` | Sanitization would drop content: code, an image, a horizontal rule, lists nested more than nine levels deep (or quotes about twenty), or a link other than `http`, `https` or `mailto` (a blocked scheme such as `javascript:`, or a relative link such as `/about`) |
+
+Legacy rows containing HTML entities such as `&gt;` are not flagged, because every surface already displays them as the intended characters. Headings are supported, so a `#` heading is reported only as `text_changed`. The command ends with `N row(s) flagged.` and, when any row is flagged, exits non-zero with `Flagged rows found; fix them in the admin before enabling markdown_descriptions.`, so it can gate a deployment script. `--csv PATH` also writes `id,service_name,status,reasons` for the flagged rows, with the same spreadsheet formula guard as the CSV export (see below).
+
+Fix flagged rows by editing the description in this change form. **Admin edits do not reset the submission status**, so approved services stay approved. See the [Markdown descriptions rollout](rollout.md#markdown-descriptions-rollout) for the full sequence.
+
 ### Changing Submission Status
 
 **On new submission:** When a submitter registers a new service, two emails are sent automatically:
@@ -417,6 +445,9 @@ Both formats include all submission fields:
 | bio.tools (EDAM)       | `biotools_edam_topic_uris`, `biotools_edam_operation_uris` — semicolons in CSV, arrays in JSON                                                                                                   |
 | bio.tools (structured) | `biotools_functions`, `biotools_publications`, `biotools_documentation`, `biotools_download`, `biotools_links` — JSON strings in CSV, arrays of objects in JSON                                  |
 | bio.tools (sync)       | `biotools_last_synced_at` — ISO datetime of last successful sync, or empty                                                                                                                       |
+
+!!! note "CSV formula-injection guard"
+In the CSV export, any text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'` so spreadsheet applications treat it as text instead of a formula. A description that starts with a Markdown bullet therefore appears as `'- item`. The JSON export and the API return the raw values unchanged.
 
 !!! note "JSON export uses a nested submitter object"
 In the JSON export, submitter fields are grouped under a `"submitter"` key:

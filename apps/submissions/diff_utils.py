@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from apps.submissions.validation import normalize_newlines
+
 if TYPE_CHECKING:
     from apps.submissions.models import ServiceSubmission
 
@@ -135,7 +137,9 @@ def snapshot(instance: "ServiceSubmission") -> dict:
                 value = sorted(str(v) for v in raw) if raw else []
         else:
             raw = getattr(instance, field, None)
-            value = str(raw).strip() if raw is not None else ""
+            # LF line endings: a CRLF-vs-LF difference (browser textarea vs
+            # API/stored text) is never a change.
+            value = normalize_newlines(str(raw)).strip() if raw is not None else ""
         data[field] = value
     return data
 

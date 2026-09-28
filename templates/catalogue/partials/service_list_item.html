@@ -1,4 +1,4 @@
-{% load static catalogue_tags %}
+{% load static catalogue_tags markdown_tags %}
 {% catalogue_service_url service as service_url %}
 
 <div class="catalogue-list-item">
@@ -89,13 +89,15 @@
       </div>
       {% endif %}
 
-      {# Foldable description #}
-      {% if service.service_description %}
+      {# Foldable description (hidden when nothing renders, e.g. image only) #}
+      {% with description=service|md_description %}
+      {% if description %}
       <details class="catalogue-list-desc-toggle">
         <summary>Description</summary>
-        <p class="catalogue-list-desc-text">{{ service.service_description }}</p>
+        <div class="catalogue-list-desc-text md-rendered">{{ description }}</div>
       </details>
       {% endif %}
+      {% endwith %}
 
     </div>
   </div>
