@@ -165,7 +165,7 @@ class RegisterView(View):
         # Save submission
         submission: ServiceSubmission = form.save(commit=False)
         submission.status = "submitted"
-        submission.submission_ip = get_client_ip(request)
+        submission.submission_ip = get_client_ip(request) or None
         submission.user_agent_hash = hash_user_agent(request)
         submission.save()
         form.save_m2m()  # Save ManyToMany fields
