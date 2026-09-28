@@ -67,6 +67,7 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_markdown_robustness.py` | Markdown engine under hostile input: every pathological max-length description renders in linear time (4x input must cost under 10x, a load- and coverage-independent check; the old engine measured 14-29x) and without hanging, nesting cap reported as removed, ordered-list `start` filter |
 | `test_api_patch_reset.py` | API `PATCH` on an approved submission resets it only on a real non-exempt change (re-sent, re-padded, NFD or CRLF values keep approval), content + reset in one transaction, no-change notification contract |
 | `test_http_utils.py` | `get_client_ip()` returns only valid IPs (malformed `X-Real-IP`/`X-Forwarded-For` fall through), `get_ratelimit_ip()` never crashes django-ratelimit |
+| `test_query_counts.py` | List endpoints (API list, admin changelist) issue the same number of queries for 3 and 12 rows: no per-row (N+1) queries |
 | `test_markdown_output_matrix.py` | Exact output of every description surface (catalogue, API, admin, preview, emails, exports, audit) for both flag states and each input class |
 | `test_field_partials.py` | `field.html` composed of `field_label.html` / `field_widget.html` / `field_feedback.html` (the fieldset branch reuses the widget and feedback partials): label or legend, inline-validation wrapper and error markup, with and without errors |
 | `test_audit_markdown_command.py` | `audit_markdown_descriptions` flagging, diff-centred previews, CSV output and exit status |

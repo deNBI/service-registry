@@ -110,6 +110,7 @@ class SubmissionViewSet(
             "edam_topics",
             "edam_operations",
             "biotoolsrecord__functions",
+            "licenses",
         )
         .order_by("-submitted_at")
     )
