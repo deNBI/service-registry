@@ -198,10 +198,11 @@ select[name=action] option { font-size: .875rem; }
 
 /* ── Form field sizing ─────────────────────────────────────────────────────── */
 /* Django's default .vLargeTextField CSS sets height:26em — makes empty
-   textareas enormous. Switch to rows-driven height instead, with resize. */
+   textareas enormous. Switch to rows-driven height instead, with resize.
+   No !important: the resize handle sets an inline height, which must win. */
 #content-main textarea.vLargeTextField,
 #content-main textarea.vTextField {
-  height: auto !important;
+  height: auto;
   min-height: 3rem;
   resize: vertical;
 }

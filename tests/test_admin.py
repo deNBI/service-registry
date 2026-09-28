@@ -1524,3 +1524,29 @@ class TestAdminServiceNameChangePersists:
 
         sub.refresh_from_db()
         assert sub.service_name == "Admin Renamed Service"
+
+
+@pytest.mark.django_db
+class TestAdminTextareaResize:
+    """The native resize handle works by writing an inline ``height``. An
+    ``!important`` height in a stylesheet beats that inline style, so the
+    handle shows but dragging it does nothing."""
+
+    def test_admin_styles_do_not_pin_textarea_height(self, admin_client):
+        import re
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        html = admin_client.get(_change_url(sub)).content.decode()
+        css = "".join(re.findall(r"<style[^>]*>(.*?)</style>", html, re.DOTALL))
+        css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+        rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+        assert any("textarea" in sel for sel, _ in rules)
+        for sel, block in rules:
+            if "textarea" not in sel:
+                continue
+            for decl in block.split(";"):
+                prop = decl.split(":", 1)[0].strip()
+                if prop in ("height", "min-height", "max-height"):
+                    assert "!important" not in decl, (
+                        f"{' '.join(sel.split())}: {decl.strip()}"
+                    )
