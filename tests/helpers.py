@@ -199,6 +199,21 @@ def css_rules(css: str) -> list[tuple[list[str], dict[str, str]]]:
     return rules
 
 
+def css_media_blocks(css: str) -> dict[str, str]:
+    """Body of every top-level @media block in `css`, keyed by its condition
+    with whitespace normalised; blocks sharing a condition are concatenated."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    blocks: dict[str, str] = {}
+    for m in re.finditer(r"@media([^{]+)\{", css):
+        depth, i = 1, m.end()
+        while depth and i < len(css):
+            depth += {"{": 1, "}": -1}.get(css[i], 0)
+            i += 1
+        cond = " ".join(m.group(1).split())
+        blocks[cond] = blocks.get(cond, "") + css[m.end() : i - 1]
+    return blocks
+
+
 def css_specificity(selector: str) -> tuple[int, int, int]:
     """(ids, classes/attributes/pseudo-classes, elements) of a simple CSS
     selector; enough for the flat admin selectors the tests compare."""
