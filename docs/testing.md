@@ -76,6 +76,8 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_export_formula_guard.py` | CSV cells that start like a formula get a leading `'` (`csv_safe` in `apps/submissions/csv_utils.py`) |
 | `test_email_plaintext.py` | `render_plaintext()`: plain-text email bodies rendered without HTML escaping |
 | `test_query_counts.py` | List endpoints (API list, admin changelist) issue the same number of queries for 3 and 12 rows: no per-row (N+1) queries |
+| `test_api_patch_reset.py` | API `PATCH` on an approved submission resets it only on a real non-exempt change (re-sent, re-padded or NFD values keep approval), content + reset in one transaction, no-change notification contract |
+| `test_http_utils.py` | `get_client_ip()` returns only valid IPs (malformed `X-Real-IP`/`X-Forwarded-For` fall through), `get_ratelimit_ip()` always gives django-ratelimit a parseable IP |
 
 Run `pytest --collect-only -q` for the current test count; a coverage threshold of ≥ 80% is enforced.
 
