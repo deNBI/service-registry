@@ -62,7 +62,10 @@ html[data-theme="dark"] { --md-editor-warn-fg: #f0b35a; }
 .md-editor__tab:focus-visible,
 .md-editor__preview:focus-visible { outline: 2px solid var(--link-fg); outline-offset: -2px; }
 
-/* The box carries the border; the textarea inside reads as one control. */
+/* The box carries the border; the textarea inside reads as one control.
+ * #content-main outranks the admin's fixed .vLargeTextField widths
+ * (e.g. `.colM .aligned .vLargeTextField { width: 610px }`). */
+#content-main .md-editor__panel textarea,
 form .aligned .md-editor__panel textarea,
 .md-editor__panel textarea {
   display: block;

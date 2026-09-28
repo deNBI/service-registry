@@ -530,3 +530,51 @@ def test_exports_carry_the_stored_description_for_any_viewing_role(
     else:
         value = json.loads(resp.content)[0]["service_description"]
     assert value == ROLE_DESC
+
+
+def _specificity(selector: str) -> tuple[int, int, int]:
+    """(ids, classes/attributes/pseudo-classes, elements) of a simple CSS
+    selector; enough for the flat selectors compared below."""
+    sel = re.sub(
+        r"::?[\w-]+(\([^)]*\))?",
+        lambda m: " .x" if m.group(0)[1] != ":" else "",
+        selector,
+    )
+    ids = len(re.findall(r"#[\w-]+", sel))
+    classes = len(re.findall(r"\.[\w-]+|\[[^\]]*\]", sel))
+    elements = len(re.findall(r"(?:^|[\s>+~])([a-zA-Z][\w-]*)", sel))
+    return ids, classes, elements
+
+
+def _width_selectors(path: str, target: str) -> list[str]:
+    """Selectors of rules in the static file `path` that set `width` and
+    whose selector contains `target`."""
+    from django.contrib.staticfiles import finders
+
+    with open(finders.find(path), encoding="utf-8") as fh:
+        css = re.sub(r"/\*.*?\*/", "", fh.read(), flags=re.DOTALL)
+    found = []
+    for sel_list, block in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        if not re.search(r"(^|;)\s*width\s*:", block):
+            continue
+        found += [" ".join(s.split()) for s in sel_list.split(",") if target in s]
+    return found
+
+
+def test_specificity_helper():
+    assert _specificity(".colM .aligned .vLargeTextField") == (0, 3, 0)
+    assert _specificity(".colM fieldset.wide .vLargeTextField") == (0, 3, 1)
+    assert _specificity("#content-main .md-editor__panel textarea") == (1, 1, 1)
+    assert _specificity("a:hover") == (0, 1, 1)
+
+
+def test_editor_textarea_fills_the_box():
+    """The admin sizes .vLargeTextField to fixed widths (e.g. 610px); inside
+    the editor the textarea must fill the bordered box instead, so the
+    editor's full-width rule has to out-rank every admin width rule."""
+    admin = _width_selectors("admin/css/forms.css", ".vLargeTextField")
+    ours = _width_selectors(
+        "admin/css/markdown_preview.css", ".md-editor__panel textarea"
+    )
+    assert admin and ours
+    assert max(map(_specificity, ours)) > max(map(_specificity, admin))
