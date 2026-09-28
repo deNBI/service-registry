@@ -66,7 +66,9 @@ def test_endpoint_is_csrf_protected():
 
 @pytest.mark.django_db
 @override_settings(RATELIMIT_ENABLE=True)
-def test_rate_limit_is_enforced_and_keyed_on_real_client_ip(client):
+def test_rate_limit_is_enforced_and_keyed_on_real_client_ip(
+    client, frozen_ratelimit_clock
+):
     """After RATE_LIMIT_VALIDATE requests the endpoint returns 403 (block=True),
     AND the limit is keyed on the *real client IP* (X-Real-IP), not REMOTE_ADDR.
 

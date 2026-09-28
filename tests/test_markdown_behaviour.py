@@ -108,6 +108,86 @@ def test_web_edit_resubmit_legacy_entity_stays_approved(client):
 
 
 # ---------------------------------------------------------------------------
+# Line endings: browsers submit every textarea with CRLF line breaks, while
+# rows created through the API (JSON) or seed data hold LF. An untouched
+# description must never count as a change because of that.
+# ---------------------------------------------------------------------------
+
+MULTILINE_LF = "First line of a description.\nSecond line, long enough overall.\n- a"
+
+
+def _as_browser(text):
+    return text.replace("\r\n", "\n").replace("\n", "\r\n")
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [MULTILINE_LF, _as_browser(MULTILINE_LF)],
+    ids=["stored_lf", "stored_crlf"],
+)
+def test_web_edit_crlf_resubmit_stays_approved_and_logs_nothing(client, stored):
+    from apps.submissions.models import ServiceSubmission, SubmissionChangeLog
+
+    sub = _approved("placeholder description long enough to be valid here.")
+    # Store the exact line endings under test (bypasses save() normalisation,
+    # as rows written before it did).
+    ServiceSubmission.objects.filter(pk=sub.pk).update(service_description=stored)
+    sub.refresh_from_db()
+    _grant_edit(client, sub)
+    data = edit_form_data(sub, service_description=_as_browser(stored))
+    resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
+    assert resp.status_code == 302, resp.content[:2000]
+    sub.refresh_from_db()
+    assert sub.status == "approved"
+    assert sub.service_description == MULTILINE_LF
+    logged = [
+        ch["field"]
+        for log in SubmissionChangeLog.objects.filter(submission=sub)
+        for ch in log.changes
+    ]
+    assert "service_description" not in logged
+
+
+def test_every_input_path_stores_lf_line_endings():
+    from apps.submissions.forms import SubmissionForm
+
+    form = SubmissionForm(
+        data=base_form_data({"service_description": _as_browser(MULTILINE_LF)})
+    )
+    assert form.is_valid(), form.errors
+    obj = form.save()
+    obj.refresh_from_db()
+    assert obj.service_description == MULTILINE_LF
+    obj.service_description = "Old Mac\rline endings, long enough to be a valid text."
+    obj.save()
+    obj.refresh_from_db()
+    assert obj.service_description == (
+        "Old Mac\nline endings, long enough to be a valid text."
+    )
+
+
+def test_length_limit_counts_a_line_break_once_on_every_channel():
+    """The web form (CRLF), admin and API (LF) all accept the same text: a
+    line break counts as one character everywhere."""
+    from apps.submissions.forms import SubmissionForm
+    from apps.submissions.models import DESCRIPTION_MAX_LENGTH
+
+    body = "x" * (DESCRIPTION_MAX_LENGTH - 10)
+    text = body + "\n" * 10  # exactly the limit with LF...
+    text = "a" + "\n" * 10 + body[1:]  # ...and not only as trailing whitespace
+    assert len(text) == DESCRIPTION_MAX_LENGTH
+    form = SubmissionForm(
+        data=base_form_data({"service_description": _as_browser(text)})
+    )
+    assert form.is_valid(), form.errors
+    over = SubmissionForm(
+        data=base_form_data({"service_description": _as_browser(text + "y")})
+    )
+    assert not over.is_valid()
+    assert "service_description" in over.errors
+
+
+# ---------------------------------------------------------------------------
 # highlight guard
 # ---------------------------------------------------------------------------
 

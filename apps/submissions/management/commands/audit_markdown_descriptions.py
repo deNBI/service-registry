@@ -6,7 +6,6 @@ Markdown, so operators can fix them in the admin before flipping the
 """
 
 import csv
-import html
 import os
 
 from django.core.management.base import BaseCommand, CommandError
@@ -14,6 +13,7 @@ from django.core.management.base import BaseCommand, CommandError
 from apps.submissions.csv_utils import csv_safe
 from apps.submissions.markdown_render import (
     _WS_RE,
+    decode_legacy_entities,
     markdown_to_text,
     render_with_notice,
 )
@@ -55,12 +55,13 @@ def _preview_pair(today: str, rendered: str) -> tuple[str, str]:
 def audit_description(raw: str) -> tuple[list[str], str, str]:
     """Return (reasons, today_text, markdown_text) for one description.
 
-    today_text approximates what readers see now (entities decoded,
-    whitespace collapsed); markdown_text is the full, untruncated plain text
-    of the Markdown rendering. Rendering is flag-independent and uncached.
+    today_text is what readers see with the flag off (legacy entities
+    decoded, whitespace collapsed); markdown_text is the full, untruncated
+    plain text of the Markdown rendering. Rendering is flag-independent and
+    uncached.
     """
     raw = raw or ""
-    today = _collapse(html.unescape(raw))
+    today = _collapse(decode_legacy_entities(raw))
     # The plain text never exceeds the raw length (rendering strips syntax
     # and unescaping only shrinks entities), so len(raw) + 1 never truncates.
     rendered = _collapse(markdown_to_text(raw, limit=len(raw) + 1))
@@ -101,7 +102,7 @@ class Command(BaseCommand):
         qs = ServiceSubmission.objects.only(
             "id", "service_name", "status", "service_description"
         ).order_by("id")
-        for sub in qs:
+        for sub in qs.iterator():
             reasons, today, rendered = audit_description(sub.service_description)
             if reasons:
                 flagged.append(

@@ -8,9 +8,7 @@
        hx-target="#field-errors-{{ field.html_name }}"
        hx-swap="innerHTML">
     {% if field.errors %}
-      {% with field_class=field.field.widget.attrs.class|default:"form-control" %}
-        {{ field.as_widget }}
-      {% endwith %}
+      {{ field.as_widget }}
       <script>
         (function(){
           var w = document.getElementById('field-wrapper-{{ field.html_name }}');

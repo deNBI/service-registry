@@ -61,3 +61,25 @@ def test_md_snippet_uses_cached_snippet(settings):
     # Same pk/updated_at: the filter must serve the cached snippet, not re-render.
     sub.service_description = "second"
     assert md_snippet(sub) == "first"
+
+
+def test_card_and_list_share_one_markdown_parse(settings):
+    """The card snippet is derived from the list view's cached HTML: rendering
+    both for a service parses the Markdown once, and the snippet equals
+    markdown_to_text() of the raw text."""
+    from unittest import mock
+
+    from apps.submissions import markdown_render as mr
+
+    settings.SITE_CONFIG = {"features": {"markdown_descriptions": True}}
+    raw = "2024. Launched **fast** tools\n2025. Added [docs](https://e.org) &gt; more"
+    sub = ServiceSubmissionFactory(
+        status="approved", biotools_url="", service_description=raw
+    )
+    with mock.patch.object(mr, "_md_to_html", wraps=mr._md_to_html) as parse:
+        html = md_description(sub)
+        snippet = md_snippet(sub)
+    assert parse.call_count == 1
+    assert "<strong>fast</strong>" in str(html)
+    assert snippet == mr.markdown_to_text(raw)
+    assert snippet == "2024. Launched fast tools 2025. Added docs > more"

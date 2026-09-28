@@ -49,9 +49,9 @@ def _make(desc, name="Svc", status="approved"):
         # Headings are rendered (scaled down), so nothing is removed, but the
         # '#' disappears and the display text changes.
         ("# Heading\n\nBody", "text_changed"),
-        # Python-Markdown needs no space after '#': this IS a heading and
-        # the '#' disappears, so the display genuinely changes.
-        ("#1 tool for alignment", "text_changed"),
+        # CommonMark lets a bullet interrupt a paragraph (as GitHub does), so
+        # the dash disappears even without a blank line.
+        ("Our tool does:\n- alignment", "text_changed"),
         ("Logo ![i](https://e.org/x.png) here", "content_removed"),
         ("Run `make build` first", "content_removed"),
     ],
@@ -75,6 +75,10 @@ def test_flags_rows_whose_display_changes(desc, reason):
         "gene_name and length*width values",
         "x &gt; 5 &amp; y",
         "Tool #1 for alignment",
+        # CommonMark needs a space after '#' for a heading.
+        "#1 tool for alignment",
+        # Only a list starting at 1 may interrupt a paragraph.
+        "Founded in\n2024. This project began",
         "Line one\nLine two",
         "List<String> and <select>",
         "",

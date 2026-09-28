@@ -7,7 +7,7 @@ from django.utils.safestring import SafeString
 
 from apps.submissions import markdown_render as mr
 from apps.submissions.markdown_render import (
-    RENDER_VERSION,
+    RENDER_FINGERPRINT,
     markdown_enabled,
     markdown_to_text,
     render_markdown,
@@ -45,7 +45,7 @@ def test_bullet_and_numbered_lists():
     assert "<ol>" in out2 and "<li>one</li>" in out2
 
 
-def test_nl2br_preserves_single_newlines():
+def test_single_newline_is_a_line_break():
     out = render_markdown("line one\nline two")
     assert "<br>" in out
 
@@ -152,17 +152,23 @@ def test_snippet_strips_list_markers():
 
 
 def test_snippet_unspaced_list_matches_list_view():
-    # Without a blank line Markdown keeps it as paragraph text, so the list
-    # view shows the dash; the card snippet must agree.
+    # CommonMark (like GitHub) lets a bullet interrupt a paragraph, so the
+    # list view shows a list without the dash; the card snippet must agree.
     text = "Our tool does:\n- alignment"
-    assert "- alignment" in str(render_markdown(text))
-    assert markdown_to_text(text) == "Our tool does: - alignment"
+    assert str(render_markdown(text)) == (
+        "<p>Our tool does:</p>\n<ul>\n<li>alignment</li>\n</ul>"
+    )
+    assert markdown_to_text(text) == "Our tool does: alignment"
 
 
 def test_snippet_keeps_prose_that_looks_like_markers():
-    assert "2024." in markdown_to_text("Founded in\n2024. This project began")
-    assert "- 5 degrees" in markdown_to_text(
-        "Temperatures of\n- 5 degrees were recorded"
+    # Only an ordered list starting at 1 may interrupt a paragraph.
+    assert markdown_to_text("Founded in\n2024. This project began") == (
+        "Founded in 2024. This project began"
+    )
+    # A dash mid-line is never a marker.
+    assert markdown_to_text("Temperatures of - 5 degrees were recorded") == (
+        "Temperatures of - 5 degrees were recorded"
     )
     assert ">90% accuracy" in markdown_to_text("&gt;90% accuracy on the benchmark")
 
@@ -258,15 +264,15 @@ def test_submission_description_key_and_ttl(md_on, monkeypatch):
         mr.cache, "set", lambda k, v, timeout: calls.append((k, timeout))
     )
     mr.render_submission_description(_sub("x", pk=7))
-    assert calls == [(f"md:v{mr.RENDER_VERSION}:html:7:{_TS_US}", mr.MD_CACHE_TTL)]
+    assert calls == [(f"md:{mr.RENDER_FINGERPRINT}:html:7:{_TS_US}", mr.MD_CACHE_TTL)]
     assert mr.MD_CACHE_TTL == 60 * 60 * 24
 
 
-def test_render_version_bump_forces_fresh_render(md_on, monkeypatch):
+def test_fingerprint_change_forces_fresh_render(md_on, monkeypatch):
     sub = _sub("**one**")
     mr.render_submission_description(sub)
     sub.service_description = "**two**"
-    monkeypatch.setattr(mr, "RENDER_VERSION", mr.RENDER_VERSION + 1)
+    monkeypatch.setattr(mr, "RENDER_FINGERPRINT", "0" * 16)
     assert "<strong>two</strong>" in mr.render_submission_description(sub)
 
 
@@ -294,14 +300,19 @@ def test_snippet_key_and_ttl(md_on, monkeypatch):
         mr.cache, "set", lambda k, v, timeout: calls.append((k, timeout))
     )
     mr.submission_description_snippet(_sub("x", pk=7))
-    assert calls == [(f"md:v{mr.RENDER_VERSION}:text:7:{_TS_US}", mr.MD_CACHE_TTL)]
+    # The snippet is derived from the rendered HTML, which is cached on the
+    # way (shared with the list view), then the text itself.
+    assert calls == [
+        (f"md:{mr.RENDER_FINGERPRINT}:html:7:{_TS_US}", mr.MD_CACHE_TTL),
+        (f"md:{mr.RENDER_FINGERPRINT}:text:7:{_TS_US}", mr.MD_CACHE_TTL),
+    ]
 
 
-def test_snippet_render_version_bump_forces_fresh(md_on, monkeypatch):
+def test_snippet_fingerprint_change_forces_fresh(md_on, monkeypatch):
     sub = _sub("first")
     mr.submission_description_snippet(sub)
     sub.service_description = "second"
-    monkeypatch.setattr(mr, "RENDER_VERSION", mr.RENDER_VERSION + 1)
+    monkeypatch.setattr(mr, "RENDER_FINGERPRINT", "0" * 16)
     assert mr.submission_description_snippet(sub) == "second"
 
 
@@ -350,8 +361,27 @@ def test_snippet_word_boundary_after_scaled_heading():
     assert markdown_to_text("# Title\nBody") == "Title Body"
 
 
-def test_render_version_is_positive_int():
-    assert isinstance(RENDER_VERSION, int) and RENDER_VERSION > 0
+def test_fingerprint_is_stable_and_tracks_rules_and_libraries(monkeypatch):
+    """Same code + libraries -> same key part; a changed rule (module
+    source) or a library upgrade -> a different one, so no cached HTML
+    from other rules is ever served."""
+    import importlib.metadata
+
+    assert len(RENDER_FINGERPRINT) == 16
+    assert mr._render_fingerprint() == RENDER_FINGERPRINT
+    real_version = importlib.metadata.version
+    monkeypatch.setattr(
+        importlib.metadata,
+        "version",
+        lambda d: "99.0" if d == "bleach" else real_version(d),
+    )
+    assert mr._render_fingerprint() != RENDER_FINGERPRINT
+    monkeypatch.setattr(importlib.metadata, "version", real_version)
+    real_read = mr.Path.read_bytes
+    monkeypatch.setattr(
+        mr.Path, "read_bytes", lambda self: real_read(self) + b"# rule change"
+    )
+    assert mr._render_fingerprint() != RENDER_FINGERPRINT
 
 
 @pytest.mark.parametrize(
@@ -404,8 +434,8 @@ def test_badge_link_left_empty_by_removed_image_is_unwrapped(src):
     """A README badge loses its image; the now-empty link must not remain as
     a clickable anchor with no text (accessibility defect)."""
     html, removed = render_with_notice(src)
-    assert "<a" not in str(html)
-    assert str(html).replace(" ", "") == "<p></p>"
+    # The paragraph held only the badge, so it is dropped as well.
+    assert str(html) == ""
     assert removed is True
     assert "<a" not in str(render_markdown(src))
 
@@ -476,7 +506,7 @@ def test_link_with_zero_width_and_real_text_is_kept():
 def test_cache_key_uses_integer_microseconds():
     ts = _dt.datetime(2026, 1, 2, 3, 4, 5, 123456, tzinfo=_dt.timezone.utc)
     key = mr._cache_key("html", _sub("x", pk=3, updated_at=ts))
-    assert key == f"md:v{mr.RENDER_VERSION}:html:3:{int(ts.timestamp() * 1_000_000)}"
+    assert key == f"md:{mr.RENDER_FINGERPRINT}:html:3:{int(ts.timestamp() * 1_000_000)}"
     assert key.endswith("123456")
     assert mr._cache_key("text", _sub("x", pk=3, updated_at=None)).endswith(":3:0")
 
@@ -485,3 +515,21 @@ def test_anchor_attribute_filter_drops_other_attributes():
     assert mr._allowed_a_attr("a", "title", "t") is True
     assert mr._allowed_a_attr("a", "class", "x") is False
     assert mr._allowed_a_attr("a", "onclick", "x") is False
+
+
+@pytest.mark.parametrize(
+    "stored,shown",
+    [
+        ("x &gt; 5 &amp; y", "x > 5 & y"),  # legacy web-form row
+        ("a < b & c", "a < b & c"),  # new raw row: unchanged
+        ("&amp;lt;b&amp;gt;", "&lt;b&gt;"),  # decoded exactly once
+        ("&lt;script&gt;", "<script>"),  # plain text; templates escape it
+        ("caf&eacute; &#233; &#xE9;", "café é é"),
+        ("", ""),
+        (None, ""),
+    ],
+)
+def test_decode_legacy_entities(stored, shown):
+    assert mr.decode_legacy_entities(stored) == shown
+    # Returns plain text, never marked safe: callers must escape it.
+    assert not isinstance(mr.decode_legacy_entities(stored), SafeString)

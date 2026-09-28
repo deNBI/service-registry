@@ -59,3 +59,53 @@ def test_field_markup_with_errors(client, name):
     assert f"document.getElementById('field-wrapper-{name}')" in block
     assert "el.classList.add('is-invalid');" in block
     assert '<div class="invalid-feedback d-block" role="alert">' in block
+
+
+# ---------------------------------------------------------------------------
+# Fieldset branch (RadioSelect / CheckboxSelectMultiple): legend + the same
+# widget and feedback partials as the <div> branch
+# ---------------------------------------------------------------------------
+
+FIELDSET_FIELDS = ["is_toolbox", "register_as_elixir", "survey_participation"]
+
+
+def _render_field(form, name):
+    from django.template.loader import render_to_string
+
+    return render_to_string(
+        "submissions/partials/field.html", {"field": form[name], "required": True}
+    )
+
+
+@pytest.mark.parametrize("name", FIELDSET_FIELDS)
+def test_fieldset_field_markup(name):
+    from apps.submissions.forms import SubmissionForm
+
+    form = SubmissionForm()
+    assert form[name].use_fieldset
+    html = _render_field(form, name)
+    assert html.strip().startswith(f'<fieldset class="mb-3" id="field-wrapper-{name}">')
+    assert '<legend class="form-label">' in html
+    assert '<span class="required-star" aria-label="required">*</span>' in html
+    assert html.count(f'hx-target="#field-errors-{name}"') == 1
+    assert 'hx-trigger="change"' in html
+    assert html.count(f'<div id="field-errors-{name}">') == 1
+    assert 'role="alert"' not in html
+    assert "is-invalid" not in html
+
+
+@pytest.mark.parametrize("name", FIELDSET_FIELDS)
+def test_fieldset_field_markup_with_errors(name):
+    from apps.submissions.forms import SubmissionForm
+
+    form = SubmissionForm(data={})
+    form.is_valid()
+    form.add_error(name, "Pick one")
+    html = _render_field(form, name)
+    assert f'<fieldset class="mb-3 has-error" id="field-wrapper-{name}">' in html
+    assert '<legend class="form-label text-danger fw-semibold">' in html
+    assert f"document.getElementById('field-wrapper-{name}')" in html
+    assert "el.classList.add('is-invalid');" in html
+    assert '<div class="invalid-feedback d-block" role="alert">' in html
+    assert "<strong>⚠ Pick one</strong>" in html
+    assert html.count('role="alert"') == len(form.errors[name])

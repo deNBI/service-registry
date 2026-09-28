@@ -103,6 +103,7 @@ def test_render_plaintext_matches_render_to_string_for_safe_values():
         "WEBSITE_URL": "https://example.com",
     }
     sub.service_description = "plain"
+    ctx["service_description_text"] = "plain"
     name = "submissions/email/notification.txt"
     assert render_plaintext(name, ctx) == render_to_string(name, ctx)
 
@@ -168,9 +169,33 @@ def test_admin_text_email_shows_raw_markdown(settings):
     _assert_unescaped(msg.body)
 
 
+def test_html_change_table_never_turns_legacy_markup_live(settings):
+    """The description's change values are entity-decoded once for display,
+    then autoescaped once: legacy encoded markup reads as text, never as a
+    live tag, and double-encoded text keeps one level of encoding."""
+    from apps.submissions.tasks import send_submission_notification
+
+    settings.SUBMISSION_NOTIFY_OVERRIDE = "admin@example.com"
+    sub = _submission()
+    changes = [
+        {
+            "field": "service_description",
+            "label": "Service Description",
+            "old": "&amp;lt;b&amp;gt; kept encoded",
+            "new": "&lt;script&gt;alert(1)&lt;/script&gt;",
+        }
+    ]
+    send_submission_notification(str(sub.id), event="updated", changes=changes)
+    html_body = _html(mail.outbox[0])
+    assert "<script>" not in html_body
+    assert '<td class="after">&lt;script&gt;alert(1)&lt;/script&gt;</td>' in html_body
+    assert '<td class="before">&amp;lt;b&amp;gt; kept encoded</td>' in html_body
+
+
 def test_html_notification_still_escapes(settings):
     # notification.html has no description row; a description edit reaches it
-    # through the change table (ch.old / ch.new), which must stay escaped.
+    # through the change table (ch.old / ch.new), which is autoescaped once
+    # (after the one-time legacy-entity decode, a no-op for this raw value).
     from apps.submissions.tasks import send_submission_notification
 
     settings.SUBMISSION_NOTIFY_OVERRIDE = "admin@example.com"
@@ -262,3 +287,85 @@ def test_submitter_email_via_task_not_escaped():
     submitter = next(m for m in mail.outbox if "pi@example.com" in m.to)
     assert "Dear Zoë O'Brien," in submitter.body
     _assert_unescaped(submitter.body)
+
+
+# ---------------------------------------------------------------------------
+# Legacy HTML entities in the description are decoded once in plain text
+# ---------------------------------------------------------------------------
+
+LEGACY_DESC = "x &gt; 5 &amp; y"
+
+
+def _description_section(body: str) -> str:
+    start = body.index("Description:\n") + len("Description:\n")
+    return body[start : body.index("\n\nCategories:")]
+
+
+def test_admin_text_email_decodes_legacy_description_entities(settings):
+    """Rows saved by the old escaping web form hold entities; plain text must
+    show the intended characters, as the API and Markdown rendering do."""
+    from apps.submissions.tasks import send_submission_notification
+
+    settings.SUBMISSION_NOTIFY_OVERRIDE = "admin@example.com"
+    sub = _submission(service_description=LEGACY_DESC)
+    send_submission_notification(str(sub.id), event="created")
+    assert _description_section(mail.outbox[0].body) == "x > 5 & y"
+
+
+def test_text_email_decodes_description_entities_exactly_once(settings):
+    from apps.submissions.tasks import send_submission_notification
+
+    settings.SUBMISSION_NOTIFY_OVERRIDE = "admin@example.com"
+    sub = _submission(service_description="&amp;lt;b&amp;gt; &lt;i&gt;")
+    send_submission_notification(str(sub.id), event="created")
+    assert _description_section(mail.outbox[0].body) == "&lt;b&gt; <i>"
+
+
+def test_text_email_raw_description_unchanged(settings):
+    """New raw rows are unaffected: only entity sequences are decoded."""
+    from apps.submissions.tasks import send_submission_notification
+
+    settings.SUBMISSION_NOTIFY_OVERRIDE = "admin@example.com"
+    raw = "a < b & c > d **bold**\r\nline 2"
+    sub = _submission(service_description=raw)
+    send_submission_notification(str(sub.id), event="created")
+    # Stored with LF line endings (browsers submit CRLF); nothing else changes.
+    assert _description_section(mail.outbox[0].body) == raw.replace("\r\n", "\n")
+
+
+def test_change_tables_decode_description_entities_only():
+    """The description's before/after values in the change tables are
+    decoded once in both the .txt and the .html body (the HTML autoescapes
+    the decoded value exactly once); other fields stay as stored."""
+    from apps.submissions.tasks import send_submission_notification
+
+    sub = _submission(service_description=LEGACY_DESC)
+    changes = [
+        {
+            "field": "service_description",
+            "label": "Service Description",
+            "old": "a &lt; b",
+            "new": LEGACY_DESC,
+        },
+        {
+            "field": "service_name",
+            "label": "Service Name",
+            "old": "R&amp;D",
+            "new": "Bob's Tool & Co",
+        },
+    ]
+    send_submission_notification(str(sub.id), event="updated", changes=changes)
+    admin = next(m for m in mail.outbox if "pi@example.com" not in m.to)
+    submitter = next(m for m in mail.outbox if "pi@example.com" in m.to)
+    assert "    Before: a < b\n    After:  x > 5 & y\n" in admin.body
+    assert "    Before: R&amp;D\n" in admin.body
+    assert "    Previous: a < b\n    New:      x > 5 & y\n" in submitter.body
+    assert "    Previous: R&amp;D\n" in submitter.body
+    # HTML alternatives: decoded once, then autoescaped once.
+    for msg in (admin, submitter):
+        html = _html(msg)
+        assert '<td class="before">a &lt; b</td>' in html
+        assert '<td class="after">x &gt; 5 &amp; y</td>' in html
+        assert '<td class="before">R&amp;amp;D</td>' in html
+    # The caller's change dicts are not mutated.
+    assert changes[0]["new"] == LEGACY_DESC

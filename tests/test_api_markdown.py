@@ -185,3 +185,187 @@ def test_patch_ignores_client_html_and_renders_new_raw(api_admin_client, setting
     assert body["service_description"] == new_raw
     sub.refresh_from_db()
     assert sub.service_description == new_raw
+
+
+# ---------------------------------------------------------------------------
+# Every API access path, in both flag states: the raw field is the stored
+# value and service_description_html is the same, correct rendering whoever
+# asks (owner write/read key, admin full/read key, create/update responses).
+# ---------------------------------------------------------------------------
+
+API_RAW = (
+    "Aligns **short reads** & x &gt; 5 for List<String> users.\n\n"
+    "- fast\n- accurate\n\n[docs](https://example.org/docs)"
+)
+API_HTML_ON = (
+    "<p>Aligns <strong>short reads</strong> &amp; x &gt; 5 for "
+    "List&lt;String&gt; users.</p>\n<ul>\n<li>fast</li>\n<li>accurate</li>\n</ul>\n"
+    '<p><a href="https://example.org/docs" rel="nofollow noopener noreferrer" '
+    'target="_blank">docs</a></p>'
+)
+# Flag off: entities decoded once, then the plain text escaped once.
+API_HTML_OFF = (
+    "Aligns **short reads** &amp; x &gt; 5 for List&lt;String&gt; users.\n\n"
+    "- fast\n- accurate\n\n[docs](https://example.org/docs)"
+)
+
+
+@pytest.fixture(params=[False, True], ids=["flag_off", "flag_on"])
+def api_flag(request, settings):
+    settings.SITE_CONFIG = {"features": {"markdown_descriptions": request.param}}
+    return request.param
+
+
+def _expected_html(flag_on: bool) -> str:
+    return API_HTML_ON if flag_on else API_HTML_OFF
+
+
+def _admin_key_client(scope: str) -> APIClient:
+    from apps.api.models import AdminAPIKey
+
+    plaintext = secrets.token_urlsafe(48)
+    AdminAPIKey.objects.create(
+        label=f"MD {scope} key",
+        key_hash=hashlib.sha256(plaintext.encode()).hexdigest(),
+        scope=scope,
+        is_active=True,
+    )
+    c = APIClient()
+    c.credentials(HTTP_AUTHORIZATION=f"AdminKey {plaintext}")
+    return c
+
+
+def _owner_key_client(sub, scope: str) -> APIClient:
+    from tests.factories import APIKeyFactory
+
+    _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub, scope=scope)
+    c = APIClient()
+    c.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+    return c
+
+
+def test_expected_html_literals_match_the_renderer():
+    """Guards the literals above against drifting from the spec'd pipeline."""
+    assert str(render_markdown(API_RAW)) == API_HTML_ON
+
+
+@pytest.mark.parametrize(
+    "who", ["owner_write", "owner_read", "admin_full", "admin_read"]
+)
+def test_detail_same_for_every_authorised_caller(who, api_flag):
+    sub = ServiceSubmissionFactory(
+        status="approved", biotools_url="", service_description=API_RAW
+    )
+    kind, scope = who.split("_")
+    client = (
+        _owner_key_client(sub, scope) if kind == "owner" else _admin_key_client(scope)
+    )
+    resp = client.get(f"/api/v1/submissions/{sub.id}/")
+    assert resp.status_code == 200, resp.content
+    body = resp.json()
+    assert body["service_description"] == API_RAW
+    assert body["service_description_html"] == _expected_html(api_flag)
+
+
+@pytest.mark.parametrize("scope", ["full", "read"])
+def test_list_raw_only_for_admin_keys(scope, api_flag):
+    ServiceSubmissionFactory(
+        status="approved", biotools_url="", service_description=API_RAW
+    )
+    resp = _admin_key_client(scope).get("/api/v1/submissions/")
+    assert resp.status_code == 200
+    rows = resp.json()["results"]
+    assert [r["service_description"] for r in rows] == [API_RAW]
+    assert all("service_description_html" not in r for r in rows)
+
+
+def test_create_stores_raw_and_returns_rendering(api_flag):
+    """An unauthenticated create stores the text exactly as sent (no HTML
+    escaping on any input path) and the 201 body already carries the html."""
+    from apps.submissions.models import ServiceSubmission
+    from tests.test_api import _valid_payload
+
+    payload = {**_valid_payload(), "service_description": API_RAW}
+    resp = APIClient().post("/api/v1/submissions/", payload, format="json")
+    assert resp.status_code == 201, resp.content
+    body = resp.json()
+    assert body["service_description"] == API_RAW
+    assert body["service_description_html"] == _expected_html(api_flag)
+    stored = ServiceSubmission.objects.get(pk=body["id"])
+    assert stored.service_description == API_RAW
+
+
+def test_owner_patch_response_and_follow_up_get_agree(api_flag):
+    sub = ServiceSubmissionFactory(
+        status="approved",
+        biotools_url="",
+        service_description="Original description that is long enough to be valid.",
+    )
+    client = _owner_key_client(sub, "write")
+    client.get(f"/api/v1/submissions/{sub.id}/")  # warm the render cache
+    resp = client.patch(
+        f"/api/v1/submissions/{sub.id}/",
+        {"service_description": API_RAW},
+        format="json",
+    )
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["service_description_html"] == _expected_html(api_flag)
+    again = client.get(f"/api/v1/submissions/{sub.id}/").json()
+    assert again["service_description"] == API_RAW
+    assert again["service_description_html"] == _expected_html(api_flag)
+
+
+def test_api_patch_of_other_field_keeps_crlf_row_unchanged_in_the_diff(api_flag):
+    """A row stored with CRLF (old web-form rows) is re-stored with LF on the
+    next save, but that is not a description change: no description diff is
+    logged. (Whether the status resets follows the API's documented rule:
+    any submitted non-exempt field resets it, changed or not.)"""
+    from apps.submissions.models import ServiceSubmission, SubmissionChangeLog
+
+    crlf = "Line one of the description.\r\nLine two, long enough overall."
+    sub = ServiceSubmissionFactory(status="approved", biotools_url="")
+    ServiceSubmission.objects.filter(pk=sub.pk).update(service_description=crlf)
+    resp = _owner_key_client(sub, "write").patch(
+        f"/api/v1/submissions/{sub.id}/",
+        {"service_description": crlf.replace("\r\n", "\n")},
+        format="json",
+    )
+    assert resp.status_code == 200, resp.content
+    sub.refresh_from_db()
+    assert sub.service_description == crlf.replace("\r\n", "\n")
+    logged = [
+        ch["field"]
+        for log in SubmissionChangeLog.objects.filter(submission=sub)
+        for ch in log.changes
+    ]
+    assert "service_description" not in logged
+
+
+def test_key_factory_honours_scope_and_rejects_unknown_arguments():
+    """The factory once dropped scope= silently, so 'read key' tests really
+    used write keys. It must create the requested scope or fail loudly."""
+    from tests.factories import APIKeyFactory
+
+    sub = ServiceSubmissionFactory(biotools_url="")
+    key, _ = APIKeyFactory.create_with_plaintext(submission=sub, scope="read")
+    assert key.scope == "read"
+    key, _ = APIKeyFactory.create_with_plaintext(submission=sub)
+    assert key.scope == "write"
+    with pytest.raises(TypeError, match="is_active"):
+        APIKeyFactory.create_with_plaintext(submission=sub, is_active=False)
+
+
+def test_owner_read_key_cannot_patch_description(api_flag):
+    sub = ServiceSubmissionFactory(
+        status="approved",
+        biotools_url="",
+        service_description="Original description that is long enough to be valid.",
+    )
+    resp = _owner_key_client(sub, "read").patch(
+        f"/api/v1/submissions/{sub.id}/",
+        {"service_description": API_RAW},
+        format="json",
+    )
+    assert resp.status_code == 403
+    sub.refresh_from_db()
+    assert sub.service_description.startswith("Original description")

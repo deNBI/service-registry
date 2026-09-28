@@ -25,46 +25,8 @@
     </span>
     {% endif %}
   </legend>
-
-  {# Render the widget — HTMX validates on change #}
-  <div hx-post="{% url 'submissions:validate_field' %}"
-       hx-trigger="change"
-       hx-include="[name='{{ field.html_name }}']"
-       hx-vals='{"field": "{{ field.html_name }}"}'
-       hx-target="#field-errors-{{ field.html_name }}"
-       hx-swap="innerHTML">
-    {% if field.errors %}
-      {{ field.as_widget }}
-      <script>
-        (function(){
-          var w = document.getElementById('field-wrapper-{{ field.html_name }}');
-          if(w) w.querySelectorAll('input,select,textarea').forEach(function(el){
-            el.classList.add('is-invalid');
-          });
-        })();
-      </script>
-    {% else %}
-      {{ field }}
-    {% endif %}
-  </div>
-
-  {# Help text #}
-  {% with help=help_override|default:field.help_text %}
-  {% if help %}
-  <div class="form-text text-muted">{{ help }}</div>
-  {% endif %}
-  {% endwith %}
-
-  {# Validation errors #}
-  <div id="field-errors-{{ field.html_name }}">
-    {% if field.errors %}
-    {% for error in field.errors %}
-    <div class="invalid-feedback d-block" role="alert">
-      <strong>⚠ {{ error }}</strong>
-    </div>
-    {% endfor %}
-    {% endif %}
-  </div>
+  {% include "submissions/partials/field_widget.html" %}
+  {% include "submissions/partials/field_feedback.html" %}
 </fieldset>
 
 {% else %}

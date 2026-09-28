@@ -166,7 +166,7 @@ def edit_form_payload(sub, **overrides):
 
 def list_desc(content: bytes) -> str:
     m = re.search(
-        r'<div class="catalogue-list-desc-text">(.*?)</div>',
+        r'<div class="catalogue-list-desc-text md-rendered">(.*?)</div>',
         content.decode(),
         re.DOTALL,
     )

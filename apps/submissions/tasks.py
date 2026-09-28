@@ -36,6 +36,8 @@ from django.template.loader import get_template, render_to_string
 from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
+from .markdown_render import decode_legacy_entities
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -114,6 +116,38 @@ def render_plaintext(template_name: str, context: dict) -> str:
     # the underlying django.template.base.Template as .template, and rendering
     # that directly lets us pass a Context with autoescape=False.
     return template.template.render(Context(context, autoescape=False))
+
+
+def _decoded_description_context(context: dict) -> dict:
+    """Return a copy of an email context with the service description's
+    legacy HTML entities decoded once (decode_legacy_entities), for both the
+    .txt and the .html body.
+
+    Rows saved before Markdown support hold entities (the old web form
+    escaped its input), which emails would otherwise show literally
+    (x &gt; 5), unlike the catalogue and the API. Adds
+    service_description_text and decodes the description's before/after
+    values in the change list; other fields are left as stored. The .txt
+    body is rendered unescaped and the .html body autoescapes the decoded
+    values exactly once.
+    """
+    ctx = dict(context)
+    # Both callers always pass the submission.
+    ctx["service_description_text"] = decode_legacy_entities(
+        ctx["submission"].service_description
+    )
+    if ctx.get("changes"):
+        ctx["changes"] = [
+            {
+                **ch,
+                "old": decode_legacy_entities(ch["old"]),
+                "new": decode_legacy_entities(ch["new"]),
+            }
+            if ch.get("field") == "service_description"
+            else ch
+            for ch in ctx["changes"]
+        ]
+    return ctx
 
 
 def _build_admin_url(submission_id) -> str:
@@ -221,6 +255,7 @@ def send_submission_notification(
         "changes": changes or [],
         "admin_url": admin_url,
     }
+    context = _decoded_description_context(context)
 
     text_body = render_plaintext("submissions/email/notification.txt", context)
     html_body = render_to_string("submissions/email/notification.html", context)
@@ -295,11 +330,13 @@ def _send_submitter_email(
         service_name=submission.service_name,
         **(subject_kwargs or {}),
     )
-    context = {
-        **_site_email_context(),
-        "submission": submission,
-        **(extra_context or {}),
-    }
+    context = _decoded_description_context(
+        {
+            **_site_email_context(),
+            "submission": submission,
+            **(extra_context or {}),
+        }
+    )
     text_body = render_plaintext(txt_template, context)
     html_body = render_to_string(html_template, context)
 

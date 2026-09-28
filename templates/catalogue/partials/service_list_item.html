@@ -89,13 +89,15 @@
       </div>
       {% endif %}
 
-      {# Foldable description #}
-      {% if service.service_description %}
+      {# Foldable description (hidden when nothing renders, e.g. image only) #}
+      {% with description=service|md_description %}
+      {% if description %}
       <details class="catalogue-list-desc-toggle">
         <summary>Description</summary>
-        <div class="catalogue-list-desc-text">{{ service|md_description }}</div>
+        <div class="catalogue-list-desc-text md-rendered">{{ description }}</div>
       </details>
       {% endif %}
+      {% endwith %}
 
     </div>
   </div>

@@ -15,10 +15,8 @@ Security notes:
     in the POST response and never again.
 """
 
-import html as html_lib
-
 from django.core.exceptions import ObjectDoesNotExist
-from django.utils.html import escape
+from django.utils.html import conditional_escape
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
@@ -31,10 +29,7 @@ from apps.submissions.models import (
     DESCRIPTION_MIN_LENGTH,
     ServiceSubmission,
 )
-from apps.submissions.markdown_render import (
-    markdown_enabled,
-    render_submission_description,
-)
+from apps.submissions.markdown_render import render_submission_description
 
 
 # ---------------------------------------------------------------------------
@@ -343,10 +338,9 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
         web form (for example `&gt;`) are decoded first, so they display as
         the intended character rather than as a literal entity.
         """
-        if not markdown_enabled():
-            raw = html_lib.unescape(obj.service_description or "")
-            return str(escape(raw))
-        return str(render_submission_description(obj))
+        # Flag on: sanitized SafeString, kept as is. Flag off: the decoded
+        # plain str, escaped exactly once.
+        return str(conditional_escape(render_submission_description(obj)))
 
     def get_links(self, obj) -> dict:
         request = self.context.get("request")

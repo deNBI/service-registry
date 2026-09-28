@@ -34,3 +34,22 @@ def superuser_client(db):
     c = Client()
     c.force_login(user)
     return c
+
+
+@pytest.fixture
+def frozen_ratelimit_clock(monkeypatch):
+    """Freeze django-ratelimit's clock for the test.
+
+    Its window is ``ts - ts % period + crc32(key) % period``, so a test that
+    fills a bucket with many requests is flaky if a window boundary passes
+    mid-loop (the counter resets and the "limited" request is let through).
+    Replacing the ``time`` module inside django_ratelimit.core pins every
+    request of the test to one window without touching time.time elsewhere.
+    """
+    from types import SimpleNamespace
+
+    import django_ratelimit.core
+
+    monkeypatch.setattr(
+        django_ratelimit.core, "time", SimpleNamespace(time=lambda: 1_800_000_000.0)
+    )

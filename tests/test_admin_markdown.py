@@ -212,3 +212,321 @@ def test_description_rendered_placeholder_without_saved_object():
 
     model_admin = ServiceSubmissionAdmin(ServiceSubmission, site)
     assert model_admin.description_rendered(None) == "—"
+
+
+# ---------------------------------------------------------------------------
+# Admin behaviour in BOTH flag states: the flag only swaps the widget; saving,
+# validation, the changelist and legacy rows must behave identically.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(params=[False, True], ids=["flag_off", "flag_on"])
+def md_flag(request, settings):
+    _set_flag(settings, request.param)
+    return request.param
+
+
+SPECIAL = (
+    'Uses <b>tags</b>, x < 5 & y > 2, "quotes", Bob\'s **bold** _it_ and '
+    "[a link](https://example.org)\r\n- item &amp; entity text"
+)
+# Stored exactly as typed except for LF line endings (browsers submit CRLF).
+SPECIAL_STORED = SPECIAL.replace("\r\n", "\n")
+
+
+def _textarea_value(content: bytes) -> str:
+    """The textarea's value as a browser would submit it (HTML-unescaped)."""
+    import html
+
+    m = re.search(
+        r'<textarea[^>]*name="service_description"[^>]*>\n(.*?)</textarea>',
+        content.decode(),
+        re.DOTALL,
+    )
+    assert m, "service_description textarea not rendered"
+    return html.unescape(m.group(1))
+
+
+def test_admin_change_form_widget_follows_flag(superuser_client, md_flag):
+    sub = ServiceSubmissionFactory(status="approved", biotools_url="")
+    html = superuser_client.get(_change_url(sub)).content.decode()
+    assert ("data-md-editor" in html) is md_flag
+    assert ("js/markdown-editor.js" in html) is md_flag
+    assert "Description (rendered)" not in html
+    assert b'rows="5"' in _textarea(html.encode())
+
+
+def test_admin_add_form_widget_follows_flag(superuser_client, md_flag):
+    resp = superuser_client.get(reverse("admin:submissions_servicesubmission_add"))
+    assert resp.status_code == 200
+    assert (b"data-md-editor" in resp.content) is md_flag
+    assert b"Description (rendered)" not in resp.content
+
+
+def test_admin_saves_description_exactly_as_typed(superuser_client, md_flag):
+    """No HTML escaping on save in either state: raw text is stored (the model
+    only NFC-normalises and strips)."""
+    sub = ServiceSubmissionFactory(status="approved", biotools_url="")
+    payload = edit_form_payload(sub, service_description=SPECIAL)
+    resp = superuser_client.post(_change_url(sub), data=payload)
+    assert resp.status_code == 302, (
+        resp.context["adminform"].form.errors if resp.context else resp
+    )
+    sub.refresh_from_db()
+    assert sub.service_description == SPECIAL_STORED
+    # The change form shows it back exactly (escaped once in the HTML).
+    assert _textarea_value(superuser_client.get(_change_url(sub)).content) == (
+        SPECIAL_STORED
+    )
+
+
+def test_admin_add_form_saves_with_either_widget(superuser_client, md_flag):
+    from apps.submissions.models import ServiceSubmission
+
+    template = ServiceSubmissionFactory(status="approved", biotools_url="")
+    payload = edit_form_payload(
+        template, service_name="Admin Added Tool", service_description=SPECIAL
+    )
+    payload["status"] = "submitted"
+    resp = superuser_client.post(
+        reverse("admin:submissions_servicesubmission_add"), data=payload
+    )
+    assert resp.status_code == 302, (
+        resp.context["adminform"].form.errors if resp.context else resp
+    )
+    added = ServiceSubmission.objects.get(service_name="Admin Added Tool")
+    assert added.service_description == SPECIAL_STORED
+
+
+def test_admin_validation_error_keeps_widget_and_text(superuser_client, md_flag):
+    sub = ServiceSubmissionFactory(status="approved", biotools_url="")
+    payload = edit_form_payload(sub, service_description="too short")
+    resp = superuser_client.post(_change_url(sub), data=payload)
+    assert resp.status_code == 200
+    html = resp.content.decode()
+    assert "at least 50 characters" in html
+    assert ("data-md-editor" in html) is md_flag
+    assert _textarea_value(resp.content) == "too short"
+    sub.refresh_from_db()
+    assert sub.service_description != "too short"
+
+
+def test_admin_untouched_legacy_row_round_trips_unchanged(superuser_client, md_flag):
+    """Saving another field must not alter a legacy entity description: the
+    textarea shows the stored text, the browser submits it back verbatim, and
+    no description change is logged."""
+    from apps.submissions.models import SubmissionChangeLog
+
+    legacy = "Legacy row from the old escaping form: x &gt; 5 &amp; y &lt;b&gt;."
+    sub = ServiceSubmissionFactory(
+        status="approved", biotools_url="", service_description=legacy
+    )
+    shown = _textarea_value(superuser_client.get(_change_url(sub)).content)
+    assert shown == legacy
+    payload = edit_form_payload(sub, service_description=shown)
+    payload["comments"] = "admin note changed"
+    resp = superuser_client.post(_change_url(sub), data=payload)
+    assert resp.status_code == 302
+    sub.refresh_from_db()
+    assert sub.service_description == legacy
+    logged = [
+        ch["field"]
+        for log in SubmissionChangeLog.objects.filter(submission=sub)
+        for ch in log.changes
+    ]
+    assert "comments" in logged
+    assert "service_description" not in logged
+
+
+@pytest.mark.parametrize("stored_crlf", [False, True], ids=["stored_lf", "stored_crlf"])
+def test_admin_browser_crlf_resave_is_not_a_change(
+    superuser_client, md_flag, stored_crlf
+):
+    """Browsers submit textareas with CRLF; an untouched multi-line
+    description must not be logged as changed (whatever the stored line
+    endings) and ends up stored with LF."""
+    from apps.submissions.models import ServiceSubmission, SubmissionChangeLog
+
+    lf = "Line one of the description.\nLine two, long enough overall.\n- item"
+    sub = ServiceSubmissionFactory(status="approved", biotools_url="")
+    stored = lf.replace("\n", "\r\n") if stored_crlf else lf
+    ServiceSubmission.objects.filter(pk=sub.pk).update(service_description=stored)
+    sub.refresh_from_db()
+    payload = edit_form_payload(sub, service_description=lf.replace("\n", "\r\n"))
+    payload["comments"] = "unrelated admin note"
+    resp = superuser_client.post(_change_url(sub), data=payload)
+    assert resp.status_code == 302
+    sub.refresh_from_db()
+    assert sub.service_description == lf
+    logged = [
+        ch["field"]
+        for log in SubmissionChangeLog.objects.filter(submission=sub)
+        for ch in log.changes
+    ]
+    assert logged == ["comments"]
+
+
+def test_admin_changelist_and_search_load(superuser_client, md_flag):
+    ServiceSubmissionFactory(
+        status="approved", biotools_url="", service_name="Listed **Tool**"
+    )
+    url = reverse("admin:submissions_servicesubmission_changelist")
+    for query in ("", "?q=Listed"):
+        resp = superuser_client.get(url + query)
+        assert resp.status_code == 200
+        assert b"Listed **Tool**" in resp.content
+
+
+def test_admin_viewer_page_follows_flag(viewer_client, md_flag):
+    sub = ServiceSubmissionFactory(
+        status="approved",
+        biotools_url="",
+        service_description="Viewer sees **bold** and x &gt; 5 in the saved text.",
+    )
+    html = viewer_client.get(_change_url(sub)).content.decode()
+    assert ("Description (rendered)" in html) is md_flag
+    assert ("<strong>bold</strong>" in html) is md_flag
+    assert "data-md-editor" not in html
+    # The read-only source value is shown as stored (escaped once).
+    assert "Viewer sees **bold** and x &amp;gt; 5 in the saved text." in html
+
+
+# ---------------------------------------------------------------------------
+# Role x flag matrix: only change_servicesubmission decides editor vs
+# read-only; every role that can open the change form without it gets the
+# rendered row (flag on); nobody without change permission can save.
+# ---------------------------------------------------------------------------
+
+ROLES = {
+    "superuser": None,
+    "editor": ["view_servicesubmission", "change_servicesubmission"],
+    "change_only": ["change_servicesubmission"],
+    "viewer": ["view_servicesubmission"],
+    "approver": ["view_servicesubmission", "approve_servicesubmission"],
+    "key_manager": ["view_servicesubmission", "manage_apikeys"],
+    "adder": ["add_servicesubmission"],
+    "add_viewer": ["add_servicesubmission", "view_servicesubmission"],
+}
+ROLE_DESC = "Role check: **bold** text and x &gt; 5, long enough to be valid."
+
+
+def _role_client(role):
+    from django.contrib.auth import get_user_model
+    from django.contrib.auth.models import Permission
+    from django.test import Client
+
+    User = get_user_model()
+    if ROLES[role] is None:
+        user = User.objects.create_superuser(
+            username=f"role-{role}", password="rolepass123", email="r@example.com"
+        )
+    else:
+        user = User.objects.create_user(
+            username=f"role-{role}", password="rolepass123", is_staff=True
+        )
+        user.user_permissions.set(
+            Permission.objects.filter(
+                content_type__app_label="submissions", codename__in=ROLES[role]
+            )
+        )
+        assert user.user_permissions.count() == len(ROLES[role])
+    c = Client()
+    c.force_login(user)
+    return c
+
+
+def _perms(role):
+    return (
+        set(ROLES["editor"] + ["add_servicesubmission"])
+        if ROLES[role] is None
+        else set(ROLES[role])
+    )
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_change_form_by_role(role, md_flag):
+    sub = ServiceSubmissionFactory(
+        status="approved", biotools_url="", service_description=ROLE_DESC
+    )
+    perms = _perms(role)
+    can_change = "change_servicesubmission" in perms
+    can_open = can_change or "view_servicesubmission" in perms
+    resp = _role_client(role).get(_change_url(sub))
+    if not can_open:
+        assert resp.status_code == 403
+        return
+    assert resp.status_code == 200
+    html = resp.content.decode()
+    has_textarea = 'name="service_description"' in html
+    assert has_textarea is can_change
+    assert ("data-md-editor" in html) is (md_flag and can_change)
+    assert ("Description (rendered)" in html) is (md_flag and not can_change)
+    rendered = re.search(r'<div class="md-rendered">(.*?)</div>', html, re.DOTALL)
+    assert (rendered is not None) is (md_flag and not can_change)
+    if rendered:
+        assert rendered.group(1) == (
+            "<p>Role check: <strong>bold</strong> text and x &gt; 5, long enough "
+            "to be valid.</p>"
+        )
+    if not can_change:
+        # The raw source is still shown read-only, exactly as stored.
+        assert (
+            "Role check: **bold** text and x &amp;gt; 5, long enough to be valid."
+            in html
+        )
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_add_form_by_role(role, md_flag):
+    resp = _role_client(role).get(reverse("admin:submissions_servicesubmission_add"))
+    if "add_servicesubmission" not in _perms(role):
+        assert resp.status_code == 403
+        return
+    assert resp.status_code == 200
+    assert (b"data-md-editor" in resp.content) is md_flag
+    assert b"Description (rendered)" not in resp.content
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_only_change_permission_can_save_description(role, md_flag):
+    sub = ServiceSubmissionFactory(
+        status="approved", biotools_url="", service_description=ROLE_DESC
+    )
+    new = "Role-edited description with enough characters to pass validation."
+    resp = _role_client(role).post(
+        _change_url(sub), data=edit_form_payload(sub, service_description=new)
+    )
+    sub.refresh_from_db()
+    if "change_servicesubmission" in _perms(role):
+        assert resp.status_code == 302
+        assert sub.service_description == new
+    else:
+        assert resp.status_code == 403
+        assert sub.service_description == ROLE_DESC
+
+
+@pytest.mark.parametrize("role", ["superuser", "viewer", "approver"])
+@pytest.mark.parametrize("action", ["action_export_csv", "action_export_json"])
+def test_exports_carry_the_stored_description_for_any_viewing_role(
+    role, action, md_flag
+):
+    """Exports are a source view: the stored raw text, identical for every
+    role allowed to export and in both flag states."""
+    import csv
+    import io
+    import json
+
+    sub = ServiceSubmissionFactory(
+        status="approved", biotools_url="", service_description=ROLE_DESC
+    )
+    resp = _role_client(role).post(
+        reverse("admin:submissions_servicesubmission_changelist"),
+        {"action": action, "_selected_action": [str(sub.pk)]},
+    )
+    assert resp.status_code == 200
+    if action == "action_export_csv":
+        rows = list(csv.DictReader(io.StringIO(resp.content.decode("utf-8-sig"))))
+        value = rows[0]["service_description"]
+    else:
+        value = json.loads(resp.content)[0]["service_description"]
+    assert value == ROLE_DESC

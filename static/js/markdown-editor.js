@@ -24,10 +24,11 @@
   var PY_WS = "\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
   var PY_STRIP = new RegExp("^[" + PY_WS + "]+|[" + PY_WS + "]+$", "g");
 
-  // Same length the server validates: NFC, str.strip(), in code points.
-  // Browsers submit textarea line breaks as CRLF, so each one counts as 2.
+  // Same length the server validates: LF line endings (the server turns the
+  // browser's CRLF back into LF, so a line break counts once), NFC,
+  // str.strip(), in code points.
   function serverLength(s) {
-    return Array.from(s.normalize("NFC").replace(PY_STRIP, "").replace(/\r?\n/g, "\r\n")).length;
+    return Array.from(s.replace(/\r\n?/g, "\n").normalize("NFC").replace(PY_STRIP, "")).length;
   }
 
   // Error fragments (rate limit, too long, unavailable) must not be reused.

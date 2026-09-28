@@ -39,6 +39,7 @@ from .diff_utils import (
 from .forms import SubmissionForm, UpdateKeyForm
 from .http_utils import get_client_ip, hash_user_agent
 from .markdown_render import markdown_enabled, render_with_notice
+from .validation import normalize_newlines
 from .models import (
     CHANGELOG_ACTOR_SUBMITTER,
     DESCRIPTION_MAX_LENGTH,
@@ -667,8 +668,8 @@ def markdown_preview_view(request: HttpRequest) -> HttpResponse:
     Called via fetch() by the Write/Preview description editor: renders the
     posted ``service_description`` through the shared render_markdown
     pipeline and returns the preview fragment, plus a non-blocking notice
-    when sanitization removed content. The text is NFC-normalised and
-    stripped first, exactly as clean_service_description does, so the length
+    when sanitization removed content. The text gets LF line endings, NFC and
+    stripping first, exactly as clean_service_description does, so the length
     check and the preview match what the form will accept and store.
     Empty/whitespace-only input returns a 'Nothing to preview' placeholder.
     404 when the markdown_descriptions feature flag is off.
@@ -687,7 +688,7 @@ def markdown_preview_view(request: HttpRequest) -> HttpResponse:
             {"error": "Too many previews. Please wait a moment and try again."},
         )
     text = unicodedata.normalize(
-        "NFC", request.POST.get("service_description", "")
+        "NFC", normalize_newlines(request.POST.get("service_description", ""))
     ).strip()
     if not text:
         return render(request, template, {"empty": True})

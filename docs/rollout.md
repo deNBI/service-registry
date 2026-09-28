@@ -413,7 +413,7 @@ Tools: Uptime Kuma (self-hosted), Healthchecks.io, or your institution's monitor
 
 Markdown rendering of `service_description` is behind the `[features] markdown_descriptions` flag in `config/site.toml`. It involves no data migration: descriptions are stored as raw text either way, and the flag only changes how they are displayed. Enable it in production in this order:
 
-1. **Deploy with the flag off** (`markdown_descriptions = false`, the default). Every surface keeps showing the plain, autoescaped description.
+1. **Deploy with the flag off** (`markdown_descriptions = false`, the default). Every surface keeps showing the plain, autoescaped description; the only visible change is that legacy rows no longer show literal entities such as `&gt;` (see the note below).
 2. **Run the audit** against production:
    ```bash
    docker compose exec web python manage.py audit_markdown_descriptions --csv /tmp/md-audit.csv
@@ -429,9 +429,11 @@ Markdown rendering of `service_description` is behind the `[features] markdown_d
 
 **Rollback:** set `markdown_descriptions = false` and restart the same services. Display returns to plain text immediately; no data changes are needed.
 
-**Note for API consumers:** rows saved before this release may contain HTML entities such as `&gt;` or `&amp;` in the raw `service_description`, because the old web form HTML-escaped its input. Rows saved from this release on hold the text exactly as typed. `service_description_html` decodes those entities in both flag states, so it displays both kinds of row correctly: with `markdown_descriptions` on it is the rendered HTML, and with it off it is the decoded plain text HTML-escaped once. Consumers that display descriptions should therefore prefer it over the raw field.
+**Legacy entities and API consumers:** rows saved before this release may contain HTML entities such as `&gt;` or `&amp;` in the raw `service_description`, because the old web form HTML-escaped its input. Rows saved from this release on hold the text exactly as typed. Stored values are never rewritten; instead every display surface (catalogue list and cards, `service_description_html`, notification emails) decodes those entities exactly once in both flag states, so both kinds of row display correctly. Source views (the admin textarea and change history, the raw API field and the CSV/JSON exports) show the stored value. API consumers that display descriptions should therefore prefer `service_description_html` over the raw field.
 
-Rendered HTML is cached per submission (keyed on its `updated_at`) for 24 hours. When a release changes the rendering or sanitization rules, bump `RENDER_VERSION` in `apps/submissions/markdown_render.py` so no stale output is served.
+**Parser:** descriptions are parsed as CommonMark (`markdown-it-py`), which renders any input up to the length limit in linear time and caps nesting depth, so no description can stall a worker. Compared with plain text, a line starting with `# ` (hash and space) becomes a heading, a `- ` or `1. ` line becomes a list even directly under a line of text, and a list may start at another number (`2024. Launched` keeps `2024`). The audit reports every row whose display changes.
+
+Rendered HTML is cached per submission (keyed on its `updated_at`) for 24 hours. The key also contains an automatic fingerprint of the rendering code and of the installed markdown-it-py, mdurl and bleach versions, so a release that changes the rules or upgrades those libraries never serves HTML cached under the old ones; no manual step is needed.
 
 ---
 

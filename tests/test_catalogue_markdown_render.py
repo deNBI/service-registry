@@ -44,6 +44,24 @@ def test_list_view_renders_markdown(client, settings):
     assert b"<strong>bold</strong>" in resp.content
 
 
+@pytest.mark.parametrize("flag,shown", [(MD_ON, False), (MD_OFF, True)])
+def test_description_toggle_hidden_when_nothing_renders(client, settings, flag, shown):
+    """An image-only description renders empty with the flag on, so the list
+    view must not offer an empty "Description" toggle; with the flag off the
+    source text is shown as before."""
+    settings.SITE_CONFIG = flag
+    ServiceSubmissionFactory(
+        status="approved",
+        biotools_url="",
+        service_name="ImgOnly",
+        service_description="![logo](https://example.org/logo.png)",
+    )
+    html = client.get(_list_url()).content.decode()
+    assert "ImgOnly" in html
+    assert ("<summary>Description</summary>" in html) is shown
+    assert ('class="catalogue-list-desc-text md-rendered"' in html) is shown
+
+
 def test_list_view_description_container_is_div(client, settings):
     settings.SITE_CONFIG = MD_ON
     ServiceSubmissionFactory(
@@ -53,7 +71,7 @@ def test_list_view_description_container_is_div(client, settings):
         service_description="para one\n\n- item",
     )
     resp = client.get(_list_url())
-    assert b'<div class="catalogue-list-desc-text">' in resp.content
+    assert b'<div class="catalogue-list-desc-text md-rendered">' in resp.content
     assert b'<p class="catalogue-list-desc-text">' not in resp.content
     inner = _list_desc(resp.content)
     assert "<p>para one</p>" in inner

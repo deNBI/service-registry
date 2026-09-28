@@ -142,7 +142,9 @@ def test_preview_get_is_405(client, md_on):
 
 
 @override_settings(RATELIMIT_ENABLE=True)
-def test_preview_is_rate_limited_with_friendly_message(client, md_on):
+def test_preview_is_rate_limited_with_friendly_message(
+    client, md_on, frozen_ratelimit_clock
+):
     """A throttled preview returns 200 with an inline message (the editor JS
     shows non-2xx as a generic error), and the bucket is keyed on the real client IP (X-Real-IP)."""
     cache.clear()
@@ -184,7 +186,8 @@ def test_preview_empty_input_shows_placeholder(client, md_on, text):
 def test_preview_notice_wording(client, md_on):
     resp = client.post(URL, {"service_description": "![i](https://e.org/x.png) text"})
     assert (
-        "Some formatting was removed: images, code, horizontal rules and unsafe links "
+        "Some formatting was removed: images, code, horizontal rules, very deep "
+        "nesting and links that do not start with http://, https:// or mailto: "
         "are not supported."
     ) in resp.content.decode()
 

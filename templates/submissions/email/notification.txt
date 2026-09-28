@@ -25,7 +25,7 @@ Service Centre: {{ submission.service_center }}
 ELIXIR-DE Registration: {% if submission.register_as_elixir %}Yes{% else %}No{% endif %}
 
 Description:
-{{ submission.service_description }}
+{{ service_description_text }}
 
 Categories: {{ categories|join:", " }}
 Year Established: {{ submission.year_established }}

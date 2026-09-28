@@ -64,7 +64,9 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_logo_utils.py` | `validate_and_process_logo()` — magic bytes, size limits, EXIF stripping, SVG sanitisation, XML attack prevention (XXE/billion-laughs), path traversal |
 | `test_template_tags.py` | `linkify_description` filter — named links, bare URLs, paragraph/line breaks, XSS escaping |
 | `test_markdown_*.py`, `test_catalogue_markdown_render.py`, `test_api_markdown.py`, `test_admin_markdown.py` | Markdown descriptions: render/sanitize pipeline (heading shift, link filtering), XSS, cross-surface consistency, template filters, preview endpoint, Write/Preview editor markup, counter limits and WCAG AA text contrast of the editor CSS (`test_markdown_editor_render.py`), API `service_description_html`, admin editor widget and the view-only rendered row |
-| `test_field_partials.py` | `field.html` composed of `field_label.html` / `field_widget.html` / `field_feedback.html`: label, inline-validation wrapper and error markup, with and without errors |
+| `test_markdown_robustness.py` | Markdown engine under hostile input: every pathological max-length description renders in linear time (4x input must cost under 10x, a load- and coverage-independent check; the old engine measured 14-29x) and without hanging, nesting cap reported as removed, ordered-list `start` filter |
+| `test_markdown_output_matrix.py` | Exact output of every description surface (catalogue, API, admin, preview, emails, exports, audit) for both flag states and each input class |
+| `test_field_partials.py` | `field.html` composed of `field_label.html` / `field_widget.html` / `field_feedback.html` (the fieldset branch reuses the widget and feedback partials): label or legend, inline-validation wrapper and error markup, with and without errors |
 | `test_audit_markdown_command.py` | `audit_markdown_descriptions` flagging, diff-centred previews, CSV output and exit status |
 | `test_export_formula_guard.py` | CSV formula-injection guard (`csv_safe` in `apps/submissions/csv_utils.py`) |
 | `test_email_plaintext.py` | `render_plaintext()`: plain-text email bodies rendered without HTML escaping |

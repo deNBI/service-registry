@@ -202,20 +202,21 @@ def test_markdown_editor_js_exists_and_has_no_placeholder():
 
 
 def _client_count(value: str) -> int:
-    """Python port of markdown-editor.js serverLength(): the textarea value
-    (LF line breaks), NFC, trimmed, each line break counted as CRLF."""
-    return len(re.sub(r"\r?\n", "\r\n", unicodedata.normalize("NFC", value).strip()))
+    """Python port of markdown-editor.js serverLength(): LF line endings (a
+    line break counts once), NFC, trimmed."""
+    return len(unicodedata.normalize("NFC", re.sub(r"\r\n?", "\n", value)).strip())
 
 
 @pytest.mark.parametrize(
     ("typed", "valid"),
     [
-        # 24 + line break + 24 = 49 in the textarea (LF), but browsers submit
-        # CRLF, so the server counts 50 and accepts it at min 50.
-        ("a" * 24 + "\n" + "b" * 24, True),
-        ("a" * 23 + "\n" + "b" * 24, False),
-        # Decomposed é (NFC -> 1 code point), surrounding whitespace trimmed.
-        ("  e\u0301" + "x" * 44 + "\n\ny  ", True),
+        # 24 + line break + 25 = 50: browsers submit the break as CRLF, but the
+        # server counts it once, like the counter, and accepts it at min 50.
+        ("a" * 24 + "\n" + "b" * 25, True),
+        ("a" * 24 + "\n" + "b" * 24, False),
+        # Decomposed e + U+0301 (NFC -> 1 code point), whitespace trimmed.
+        ("  e\u0301" + "x" * 46 + "\n\ny  ", True),
+        ("  e\u0301" + "x" * 45 + "\n\ny  ", False),
     ],
 )
 def test_server_counts_submitted_crlf_like_the_client_counter(typed, valid):
@@ -223,9 +224,8 @@ def test_server_counts_submitted_crlf_like_the_client_counter(typed, valid):
     form = SubmissionForm(data=base_form_data({"service_description": submitted}))
     form.is_valid()
     assert ("service_description" not in form.errors) is valid
-    server_len = len(unicodedata.normalize("NFC", submitted).strip())
-    assert server_len == _client_count(typed)
-    assert (server_len >= DESCRIPTION_MIN_LENGTH) is valid
+    assert _client_count(typed) == _client_count(submitted)
+    assert (_client_count(typed) >= DESCRIPTION_MIN_LENGTH) is valid
 
 
 def test_help_table_has_explicit_aria_roles():

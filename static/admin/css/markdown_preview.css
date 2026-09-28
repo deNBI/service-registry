@@ -110,16 +110,17 @@ form .aligned .md-rendered ol li,
 .md-rendered h4,
 .md-rendered h5,
 .md-rendered h6 {
-  margin: 8px 0 4px;
+  margin: 0.75em 0 0.35em;
   padding: 0;
   font-weight: 600;
   color: var(--body-fg);
   background: none;
   text-transform: none;
 }
-.md-rendered h4 { font-size: 0.95rem; }
-.md-rendered h5 { font-size: 0.875rem; }
-.md-rendered h6 { font-size: 0.8125rem; color: var(--body-quiet-color); }
+/* Same relative scale as registry.css .md-rendered (catalogue + public preview). */
+.md-rendered h4 { font-size: 1.17em; }
+.md-rendered h5 { font-size: 1.08em; }
+.md-rendered h6 { font-size: 1em; }
 .md-rendered > :first-child { margin-top: 0; }
 .md-rendered > :last-child { margin-bottom: 0; }
 
