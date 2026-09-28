@@ -15,7 +15,7 @@ import pytest
 from django.urls import reverse
 
 from tests.factories import ServiceSubmissionFactory
-from tests.helpers import edit_form_payload
+from tests.helpers import css_rules, css_specificity, edit_form_payload
 
 pytestmark = pytest.mark.django_db
 
@@ -532,40 +532,30 @@ def test_exports_carry_the_stored_description_for_any_viewing_role(
     assert value == ROLE_DESC
 
 
-def _specificity(selector: str) -> tuple[int, int, int]:
-    """(ids, classes/attributes/pseudo-classes, elements) of a simple CSS
-    selector; enough for the flat selectors compared below."""
-    sel = re.sub(
-        r"::?[\w-]+(\([^)]*\))?",
-        lambda m: " .x" if m.group(0)[1] != ":" else "",
-        selector,
-    )
-    ids = len(re.findall(r"#[\w-]+", sel))
-    classes = len(re.findall(r"\.[\w-]+|\[[^\]]*\]", sel))
-    elements = len(re.findall(r"(?:^|[\s>+~])([a-zA-Z][\w-]*)", sel))
-    return ids, classes, elements
-
-
-def _width_selectors(path: str, target: str) -> list[str]:
-    """Selectors of rules in the static file `path` that set `width` and
-    whose selector contains `target`."""
+def _static_css(path: str) -> str:
     from django.contrib.staticfiles import finders
 
     with open(finders.find(path), encoding="utf-8") as fh:
-        css = re.sub(r"/\*.*?\*/", "", fh.read(), flags=re.DOTALL)
-    found = []
-    for sel_list, block in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
-        if not re.search(r"(^|;)\s*width\s*:", block):
-            continue
-        found += [" ".join(s.split()) for s in sel_list.split(",") if target in s]
-    return found
+        return fh.read()
 
 
-def test_specificity_helper():
-    assert _specificity(".colM .aligned .vLargeTextField") == (0, 3, 0)
-    assert _specificity(".colM fieldset.wide .vLargeTextField") == (0, 3, 1)
-    assert _specificity("#content-main .md-editor__panel textarea") == (1, 1, 1)
-    assert _specificity("a:hover") == (0, 1, 1)
+def _width_selectors(path: str, target: str) -> list[str]:
+    """Selectors containing `target` in rules of static file `path` that set
+    a width."""
+    return [
+        sel
+        for sels, decls in css_rules(_static_css(path))
+        if "width" in decls
+        for sel in sels
+        if target in sel
+    ]
+
+
+def test_css_specificity_helper():
+    assert css_specificity(".colM .aligned .vLargeTextField") == (0, 3, 0)
+    assert css_specificity(".colM fieldset.wide .vLargeTextField") == (0, 3, 1)
+    assert css_specificity("#content-main .md-editor__panel textarea") == (1, 1, 1)
+    assert css_specificity("a:hover") == (0, 1, 1)
 
 
 def test_editor_textarea_fills_the_box():
@@ -577,4 +567,4 @@ def test_editor_textarea_fills_the_box():
         "admin/css/markdown_preview.css", ".md-editor__panel textarea"
     )
     assert admin and ours
-    assert max(map(_specificity, ours)) > max(map(_specificity, admin))
+    assert max(map(css_specificity, ours)) > max(map(css_specificity, admin))

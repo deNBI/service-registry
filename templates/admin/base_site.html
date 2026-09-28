@@ -206,6 +206,9 @@ select[name=action] option { font-size: .875rem; }
   min-height: 3rem;
   resize: vertical;
 }
+/* Django's responsive.css caps textareas at 120px below 1024px wide, which
+   also stops the resize handle there. */
+#content-main textarea { max-height: none; }
 /* URL fields — long enough for a real URL, but don't fill the whole row */
 #content-main input.vURLField {
   max-width: 560px;

@@ -21,6 +21,7 @@ from tests.factories import (
     BioToolsRecordFactory,
     ServiceSubmissionFactory,
 )
+from tests.helpers import css_rules, css_specificity
 from tests.helpers import edit_form_payload as _edit_form_payload
 
 
@@ -1528,25 +1529,48 @@ class TestAdminServiceNameChangePersists:
 
 @pytest.mark.django_db
 class TestAdminTextareaResize:
-    """The native resize handle works by writing an inline ``height``. An
-    ``!important`` height in a stylesheet beats that inline style, so the
-    handle shows but dragging it does nothing."""
+    """The native resize handle works by writing an inline ``height``, so no
+    stylesheet may pin or cap the height of admin textareas."""
 
-    def test_admin_styles_do_not_pin_textarea_height(self, admin_client):
+    @staticmethod
+    def _page_rules(admin_client):
         import re
 
         sub = ServiceSubmissionFactory(biotools_url="")
         html = admin_client.get(_change_url(sub)).content.decode()
         css = "".join(re.findall(r"<style[^>]*>(.*?)</style>", html, re.DOTALL))
-        css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
-        rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
-        assert any("textarea" in sel for sel, _ in rules)
-        for sel, block in rules:
-            if "textarea" not in sel:
-                continue
-            for decl in block.split(";"):
-                prop = decl.split(":", 1)[0].strip()
-                if prop in ("height", "min-height", "max-height"):
-                    assert "!important" not in decl, (
-                        f"{' '.join(sel.split())}: {decl.strip()}"
-                    )
+        return css_rules(css)
+
+    def test_admin_styles_do_not_pin_textarea_height(self, admin_client):
+        """An ``!important`` height beats the handle's inline style, so the
+        handle shows but dragging it does nothing."""
+        rules = [
+            (s, d) for s, d in self._page_rules(admin_client) if "textarea" in str(s)
+        ]
+        assert rules
+        for sels, decls in rules:
+            for prop in ("height", "min-height", "max-height"):
+                assert "!important" not in decls.get(prop, ""), f"{sels}: {prop}"
+
+    def test_admin_lifts_the_responsive_textarea_height_cap(self, admin_client):
+        """Django's responsive.css caps textareas at 120px below 1024px wide,
+        which stops the handle there; the admin override must out-rank it."""
+        from django.contrib.staticfiles import finders
+
+        with open(finders.find("admin/css/responsive.css"), encoding="utf-8") as fh:
+            django_caps = [
+                sel
+                for sels, decls in css_rules(fh.read())
+                if decls.get("max-height", "none") != "none"
+                for sel in sels
+                if "textarea" in sel
+            ]
+        ours = [
+            sel
+            for sels, decls in self._page_rules(admin_client)
+            if decls.get("max-height") == "none"
+            for sel in sels
+            if "textarea" in sel
+        ]
+        assert django_caps and ours
+        assert max(map(css_specificity, ours)) > max(map(css_specificity, django_caps))
