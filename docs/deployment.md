@@ -273,8 +273,35 @@ docker compose logs web --tail 50
 
 Submitters can upload a logo image (PNG, JPEG, or SVG) with each service registration.
 Uploaded files are stored under `mediafiles/logos/<uuid>.<ext>` inside the container and
-served by Gunicorn via Django's `django.views.static.serve` — the host Nginx simply
-proxies all requests through, so no special Nginx `location /media/` block is needed.
+served by Gunicorn via Django's `django.views.static.serve`. The host Nginx proxies
+these requests through; the bundled config's `location /media/` block only adds
+cache headers.
+
+Django serves uploaded media with its own restrictive `Content-Security-Policy`
+header (`default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; sandbox`).
+Nginx must pass this header through unchanged: do not add `proxy_hide_header
+Content-Security-Policy` or an `add_header Content-Security-Policy` for `/media/`.
+
+### Request size for uploads
+
+Logos are uploaded through `/register/`, `/update/`, `/api/` and the admin URL
+prefix (`ADMIN_URL_PREFIX`, default `admin-denbi`). On all of these the proxy's
+`client_max_body_size` must be a little larger than `logo_max_bytes` (10 MB by
+default), because the request also carries the other form fields; `12m` gives
+enough headroom. With a lower limit, a large upload is refused by nginx with a
+bare HTTP 413 page instead of the application's validation message.
+
+The bundled `nginx/host/service-registry.bi.denbi.de.conf` sets `12m` for
+`/api/`, `/register/` and `/update/`, but keeps the server-wide default of
+`64k` for everything else, including the admin. To allow admin logo uploads with
+that file, add a `location` block for the admin prefix with
+`client_max_body_size 12m;` (see the commented-out admin block in the file).
+
+To check the effective limits on a server:
+
+```bash
+sudo nginx -T 2>/dev/null | grep -nE "server_name|client_max_body_size|location "
+```
 
 ### Persistent storage in production
 

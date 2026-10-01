@@ -499,8 +499,9 @@ class ServiceSubmission(models.Model):
         null=True,
         blank=True,
         help_text=(
-            "Optional service logo (PNG, JPEG, or SVG). "
-            "Max 10 MB. Old logo files are retained on disk when replaced."
+            "Optional service logo (PNG, JPEG, or SVG). Size limits are set in "
+            "config/site.toml [uploads]. Old logo files are retained on disk "
+            "when replaced."
         ),
     )
 

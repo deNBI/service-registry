@@ -45,7 +45,7 @@ A structured registration platform for de.NBI and ELIXIR-DE bioinformatics servi
 
 - :material-image: **Service logo upload**
 
-  Attach a PNG, JPEG, or SVG logo to any service registration — via the web form, the edit form, or the REST API. Images are automatically sanitised (EXIF stripped, SVG scripts removed) before storage.
+  Attach a PNG, JPEG, or SVG logo to any service registration — via the web form, the edit form, or the REST API. Images are processed automatically before storage (PNG/JPEG re-encoded without metadata, SVG reduced to standard drawing content).
 
 </div>
 

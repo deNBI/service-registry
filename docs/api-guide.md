@@ -272,16 +272,26 @@ When uploading a logo, send the request as `multipart/form-data` (`-F` flags in 
 
 | Field      | Direction  | Type           | Notes                                                                                                               |
 | ---------- | ---------- | -------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `logo`     | write-only | file           | Accepted in `multipart/form-data` requests only. Omit to leave the existing logo unchanged.                         |
+| `logo`     | write-only | file           | Accepted in `multipart/form-data` requests only, on create (`POST`) and update (`PATCH`). Omit to leave the existing logo unchanged. |
 | `logo_url` | read-only  | string \| null | Absolute URL to the stored logo file, or `null` if no logo has been uploaded. Returned in all submission responses. |
 
-**Accepted formats:** PNG, JPEG, SVG — max 10 MB (configurable via `logo_max_bytes` in `config/site.toml`).
+**Accepted formats and default limits** (configurable in `config/site.toml` `[uploads]`; the `logo` field description in the OpenAPI schema shows the configured values):
 
-**Security processing applied automatically:**
+| Format     | Limit                                                                 |
+| ---------- | --------------------------------------------------------------------- |
+| PNG / JPEG | `logo_max_bytes` (10 MB) and `logo_max_pixels` (25 megapixels)        |
+| SVG        | `logo_max_svg_bytes` (1 MB)                                           |
+
+A file over these limits, of an unsupported type, or one that cannot be
+processed is rejected with `400 Bad Request` and a validation message for the
+`logo` field; nothing is stored. SVG content outside the rules below is removed
+and the rest of the file is stored.
+
+**Processing applied automatically:**
 
 - Magic-byte type detection (file extension and MIME header are never trusted)
-- JPEG/PNG: re-encoded via Pillow to strip EXIF metadata and verify integrity
-- SVG: parsed with Python's stdlib XML parser (safe on Python 3.12+/Expat 2.7.1, which blocks XXE and entity-expansion attacks), then scrubbed of `<script>` elements, `on*` event-handler attributes, and non-fragment external URLs
+- JPEG/PNG: pixel count read from the header before decoding, then re-encoded via Pillow to strip EXIF metadata and verify integrity
+- SVG: parsed with Python's stdlib XML parser (external entities are not loaded, and text from internal entities goes through the same rules as the rest of the file); the root must be `<svg>`; only standard drawing elements are kept (shapes, text, gradients, patterns, clip paths, masks, filters, styles; embedded bitmap images are removed); `on*` attributes and namespaced attributes other than `xlink:href`, `xml:space` and `xml:lang` are removed; links may only point inside the logo (`#id`); CSS references may also use embedded `data:` resources such as fonts
 - Original filename is discarded; the file is stored under a UUID path (`media/logos/<uuid4>.<ext>`)
 
 Old logos are **not deleted** when a logo is replaced — previous files remain on disk.

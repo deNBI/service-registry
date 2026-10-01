@@ -195,11 +195,15 @@ linking here helps with discoverability and FAIR compliance metadata.
 
 You can optionally upload a logo for your service. This field is not required.
 
-| Property         | Value          |
-| ---------------- | -------------- |
-| Accepted formats | PNG, JPEG, SVG |
-| Maximum size     | 10 MB          |
-| Required         | No             |
+| Property         | Value                                            |
+| ---------------- | ------------------------------------------------ |
+| Accepted formats | PNG, JPEG, SVG                                   |
+| PNG / JPEG       | Up to 10 MB and 25 megapixels (width × height)   |
+| SVG              | Up to 1 MB                                       |
+| Required         | No                                               |
+
+These are the default limits; the form shows the limits configured for this
+registry next to the upload field.
 
 **How to upload:**
 
@@ -210,11 +214,26 @@ You can optionally upload a logo for your service. This field is not required.
 **What happens to uploaded logos:**
 
 - JPEG and PNG files are re-encoded to strip any embedded EXIF metadata
-- SVG files are sanitised to remove scripts, event handlers, and external links
+- SVG files are reduced to standard drawing content: shapes, paths, text,
+  gradients, patterns, clip paths, masks, filters and styles. Anything else
+  (for example embedded HTML, animations, scripts, bitmap images or editor
+  metadata) is removed. Links may only point inside the logo itself; style
+  references may also use embedded `data:` resources such as fonts
 - The original filename is discarded — a unique identifier is assigned internally
 - The logo appears in the admin view and is accessible via the API (`logo_url` field)
 
-To replace a logo, simply upload a new one when editing your submission. Previous logos are retained on disk but replaced for display purposes.
+**Tips for SVG logos:** export a plain SVG (for example "Plain SVG" in Inkscape or
+"SVG" in Illustrator/Figma) with fonts embedded rather than linked. Bitmap
+images inside an SVG are not kept: use vector shapes, or upload the logo as a
+PNG instead.
+An SVG is rejected with a message if it is larger than the SVG limit, if its root
+element is not `<svg>`, if it is nested unusually deeply, if its styles or
+attributes use backslash escapes, or if its styles or attributes use resource
+references in an unsupported form.
+
+To replace a logo, simply upload a new one when editing your submission. Saving
+an edit without choosing a new file keeps the current logo exactly as it is.
+Previous logos are retained on disk but replaced for display purposes.
 
 ---
 

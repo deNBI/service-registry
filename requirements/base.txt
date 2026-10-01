@@ -31,6 +31,7 @@ bleach==6.4.0
 
 # File upload processing
 Pillow==12.3.0        # JPEG/PNG re-encoding and EXIF stripping
+tinycss2==1.5.1       # CSS tokenizer (CSS Syntax spec) for styles in SVG logos
 
 # Utilities
 python-json-logger==4.0.0     # Structured JSON logging
