@@ -10,7 +10,7 @@ psycopg[binary]==3.3.3       # PostgreSQL adapter (psycopg3)
 # Configuration
 
 # REST API
-djangorestframework==3.16.1
+djangorestframework==3.17.2
 drf-spectacular==0.29.0       # OpenAPI 3.1 schema + Swagger UI + ReDoc
 
 # Task queue
