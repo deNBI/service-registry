@@ -129,6 +129,135 @@ class TestSizeLimits:
             validate_and_process_logo(f)
 
 
+def _svg_of_size(size: int) -> bytes:
+    """A valid SVG of exactly ``size`` bytes (padded with a comment)."""
+    head = b'<svg xmlns="http://www.w3.org/2000/svg"><!--'
+    tail = b'--><rect width="1" height="1"/></svg>'
+    return head + b"x" * (size - len(head) - len(tail)) + tail
+
+
+class TestSvgSizeLimit:
+    def test_svg_at_limit_accepted(self, settings):
+        settings.LOGO_MAX_SVG_BYTES = 2048
+        f = _make_upload(_svg_of_size(2048), "logo.svg", "image/svg+xml")
+        assert validate_and_process_logo(f) is not None
+
+    def test_svg_over_limit_rejected(self, settings):
+        settings.LOGO_MAX_SVG_BYTES = 2048
+        f = _make_upload(_svg_of_size(2049), "logo.svg", "image/svg+xml")
+        with pytest.raises(ValidationError, match="SVG logo is too large.*2 KB"):
+            validate_and_process_logo(f)
+
+    def test_limit_applies_to_svg_only(self, settings):
+        settings.LOGO_MAX_SVG_BYTES = 10
+        f = _make_upload(_make_png_bytes(), "logo.png")
+        assert len(_make_png_bytes()) > 10
+        assert validate_and_process_logo(f) is not None
+
+    def test_over_limit_svg_is_rejected_before_parsing(self, settings, monkeypatch):
+        import apps.submissions.logo_utils as logo_utils
+
+        parses = []
+        real_parse = logo_utils._safe_et.parse
+        monkeypatch.setattr(
+            logo_utils._safe_et,
+            "parse",
+            lambda *a, **k: parses.append(1) or real_parse(*a, **k),
+        )
+        settings.LOGO_MAX_SVG_BYTES = 2048
+        f = _make_upload(_svg_of_size(4096), "logo.svg", "image/svg+xml")
+        with pytest.raises(ValidationError):
+            validate_and_process_logo(f)
+        assert parses == []
+
+    def test_default_svg_limit_is_one_megabyte(self):
+        from django.conf import settings as django_settings
+
+        assert django_settings.LOGO_MAX_SVG_BYTES == 1024 * 1024
+
+
+def _make_raster_bytes(fmt: str, size: tuple[int, int]) -> bytes:
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", size, (255, 255, 255)).save(buf, format=fmt)
+    return buf.getvalue()
+
+
+def _png_header_only(width: int, height: int) -> bytes:
+    """A PNG with only IHDR + IEND: claims a size without any pixel data."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(kind + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", crc)
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IEND", b"")
+
+
+class TestLimitMessages:
+    def test_size_message_uses_kilobytes_below_one_megabyte(self, settings):
+        settings.LOGO_MAX_BYTES = 512 * 1024
+        f = _make_upload(b"\x89PNG" + b"0" * (600 * 1024), "logo.png")
+        with pytest.raises(ValidationError, match="512 KB"):
+            validate_and_process_logo(f)
+
+    def test_sizes_are_rounded_to_one_decimal(self):
+        from apps.submissions.logo_utils import _format_size
+
+        assert _format_size(1_500_000) == "1.4 MB"
+        assert _format_size(1024 * 1024) == "1 MB"
+        assert _format_size(10 * 1024 * 1024) == "10 MB"
+        assert _format_size(2048) == "2 KB"
+        assert _format_size(1500) == "1.5 KB"
+
+    def test_huge_image_header_gets_the_size_message(self):
+        # Pillow refuses to open headers this large, so the message has no
+        # dimensions, but it is the size message rather than "corrupt".
+        f = _make_upload(_png_header_only(20_000, 20_000), "logo.png")
+        with pytest.raises(ValidationError, match="larger than the 25 megapixel"):
+            validate_and_process_logo(f)
+
+    def test_corrupt_png_still_gets_the_corrupt_message(self):
+        f = _make_upload(b"\x89PNG\r\n\x1a\n" + b"garbage" * 10, "logo.png")
+        with pytest.raises(ValidationError, match="corrupt or unreadable"):
+            validate_and_process_logo(f)
+
+
+class TestPixelLimits:
+    @pytest.mark.parametrize("fmt", ["PNG", "JPEG"])
+    def test_image_at_pixel_limit_accepted(self, settings, fmt):
+        settings.LOGO_MAX_PIXELS = 100
+        f = _make_upload(_make_raster_bytes(fmt, (10, 10)), f"logo.{fmt.lower()}")
+        assert validate_and_process_logo(f) is not None
+
+    @pytest.mark.parametrize("fmt", ["PNG", "JPEG"])
+    def test_image_over_pixel_limit_rejected(self, settings, fmt):
+        settings.LOGO_MAX_PIXELS = 100
+        f = _make_upload(_make_raster_bytes(fmt, (11, 10)), f"logo.{fmt.lower()}")
+        with pytest.raises(ValidationError, match="11 × 10"):
+            validate_and_process_logo(f)
+
+    def test_over_limit_image_is_rejected_before_decoding(self, settings, monkeypatch):
+        from PIL import ImageFile
+
+        settings.LOGO_MAX_PIXELS = 100
+        f = _make_upload(_make_raster_bytes("PNG", (11, 10)), "logo.png")
+        # ImageFile.load is where Pillow decodes pixel data from a file.
+        loads = []
+        real_load = ImageFile.ImageFile.load
+        monkeypatch.setattr(
+            ImageFile.ImageFile,
+            "load",
+            lambda self: loads.append(1) or real_load(self),
+        )
+        with pytest.raises(ValidationError):
+            validate_and_process_logo(f)
+        assert loads == []
+
+
 # ---------------------------------------------------------------------------
 # JPEG processing
 # ---------------------------------------------------------------------------
@@ -477,3 +606,446 @@ class TestPathTraversal:
 
         paths = {_logo_upload_to(FakeInstance(), "logo.png") for _ in range(10)}
         assert len(paths) == 10  # All unique
+
+
+# ---------------------------------------------------------------------------
+# SVG content rules: root element, element allowlist, CSS references
+# ---------------------------------------------------------------------------
+
+_SVG_NS = "http://www.w3.org/2000/svg"
+_XHTML_NS = "http://www.w3.org/1999/xhtml"
+
+
+def _svg(body: str, extra_ns: str = "") -> str:
+    return f'<svg xmlns="{_SVG_NS}"{extra_ns} width="10" height="10">{body}</svg>'
+
+
+def _process(svg: str) -> str:
+    f = _make_upload(svg.encode("utf-8"), "logo.svg", "image/svg+xml")
+    result = validate_and_process_logo(f)
+    result.file.seek(0)
+    return result.file.read().decode("utf-8")
+
+
+class TestSvgRootElement:
+    def test_non_svg_root_is_rejected(self):
+        doc = f'<?xml version="1.0"?><html xmlns="{_XHTML_NS}"><body/></html>'
+        with pytest.raises(ValidationError, match="SVG"):
+            _process(doc)
+
+    def test_svg_root_without_namespace_is_rejected(self):
+        with pytest.raises(ValidationError, match="SVG"):
+            _process('<svg width="10" height="10"><rect width="1" height="1"/></svg>')
+
+
+class TestSvgElementAllowlist:
+    def test_foreign_object_and_its_content_are_removed(self):
+        out = _process(
+            _svg(
+                f'<foreignObject width="5" height="5"><div xmlns="{_XHTML_NS}">'
+                f'<p>html text</p></div></foreignObject><rect width="1" height="1"/>'
+            )
+        )
+        assert "foreignObject" not in out
+        assert "html text" not in out and "<p" not in out
+        assert "<rect" in out
+
+    def test_xhtml_elements_outside_foreign_object_are_removed(self):
+        out = _process(_svg(f'<h:p xmlns:h="{_XHTML_NS}">html text</h:p><rect/>'))
+        assert "html text" not in out and "<rect" in out
+
+    @pytest.mark.parametrize(
+        "element",
+        [
+            '<animate attributeName="opacity" values="0;1"/>',
+            '<set attributeName="opacity" to="0"/>',
+            '<animateTransform attributeName="transform" type="rotate"/>',
+            '<animateMotion path="M0,0 L1,1"/>',
+        ],
+    )
+    def test_animation_elements_are_removed(self, element):
+        out = _process(_svg(f"<a>{element}<text>t</text></a>"))
+        assert "animate" not in out and "<set" not in out
+        assert "<text>t</text>" in out
+
+    def test_non_svg_namespace_elements_are_removed(self):
+        sodipodi = "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+        out = _process(
+            _svg(
+                '<sodipodi:namedview id="nv"/><rect width="1" height="1"/>',
+                extra_ns=f' xmlns:sodipodi="{sodipodi}"',
+            )
+        )
+        assert "namedview" not in out
+        assert "<rect" in out
+
+
+class TestSvgCssReferences:
+    def test_external_url_in_style_element_is_neutralised(self):
+        out = _process(
+            _svg("<style>rect{fill:url(https://example.org/x)}</style><rect/>")
+        )
+        assert "example.org" not in out
+        assert "<style>" in out
+
+    def test_import_rule_in_style_element_is_removed(self):
+        out = _process(
+            _svg("<style>@import url(https://example.org/a.css);rect{fill:red}</style>")
+        )
+        assert "@import" not in out and "example.org" not in out
+        assert "rect{fill:red}" in out
+
+    def test_external_url_in_style_attribute_is_neutralised(self):
+        out = _process(
+            _svg("<rect style=\"fill:url('https://example.org/x');stroke:red\"/>")
+        )
+        assert "example.org" not in out
+        assert "stroke:red" in out
+
+    def test_fragment_url_is_kept(self):
+        out = _process(
+            _svg('<style>.a{fill:url(#g)}</style><rect style="fill:url( #g )"/>')
+        )
+        assert "url(#g)" in out
+        assert "url( #g )" in out
+
+    def test_embedded_data_font_is_kept(self):
+        css = "@font-face{font-family:F;src:url(data:font/ttf;base64,AAAA)}"
+        out = _process(_svg(f"<style>{css}</style>"))
+        assert "url(data:font/ttf;base64,AAAA)" in out
+
+
+class TestSvgDesignToolExportsPreserved:
+    """Typical Inkscape / Illustrator / Figma output keeps every element that
+    affects how the logo looks."""
+
+    EXPORT = _svg(
+        "<title>Logo</title><desc>d</desc>"
+        "<defs>"
+        "<style>.cls-1{fill:url(#lg);}.cls-2{clip-path:url(#cp);}</style>"
+        '<linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">'
+        '<stop offset="0" stop-color="#000"/><stop offset="1" stop-color="#fff"/>'
+        "</linearGradient>"
+        '<radialGradient id="rg" cx="5" cy="5" r="5" xlink:href="#lg"/>'
+        '<clipPath id="cp"><rect width="10" height="10"/></clipPath>'
+        '<mask id="m"><rect width="10" height="10" fill="#fff"/></mask>'
+        '<pattern id="p" width="2" height="2"><circle cx="1" cy="1" r="1"/></pattern>'
+        '<filter id="f"><feGaussianBlur stdDeviation="1"/><feOffset dx="1"/>'
+        '<feFlood flood-color="#000"/><feComposite operator="in"/>'
+        '<feColorMatrix type="saturate" values="0"/>'
+        "<feMerge><feMergeNode/></feMerge></filter>"
+        '<symbol id="s"><path d="M0 0h1v1z"/></symbol>'
+        '<marker id="mk"><path d="M0 0"/></marker>'
+        "</defs>"
+        '<metadata id="md"/>'
+        '<g class="cls-2" filter="url(#f)" transform="translate(1 1)">'
+        '<path class="cls-1" d="M0 0h10v10H0z"/>'
+        '<circle cx="5" cy="5" r="2"/><ellipse cx="5" cy="5" rx="2" ry="1"/>'
+        '<line x1="0" y1="0" x2="1" y2="1"/><polyline points="0,0 1,1"/>'
+        '<polygon points="0,0 1,1 1,0"/>'
+        '<text x="1" y="9" xml:space="preserve"><tspan>de.NBI</tspan></text>'
+        '<use xlink:href="#s"/><use href="#s"/>'
+        "</g>",
+        extra_ns=' xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 10 10"',
+    )
+
+    def test_round_trip_keeps_every_visual_element(self):
+        import xml.etree.ElementTree as ET
+
+        def tags(doc):
+            return sorted(e.tag for e in ET.fromstring(doc).iter())
+
+        assert tags(_process(self.EXPORT)) == tags(self.EXPORT)
+
+    def test_round_trip_keeps_references_and_text(self):
+        out = _process(self.EXPORT)
+        for kept in ("url(#lg)", "url(#cp)", 'filter="url(#f)"', "de.NBI", 'href="#s"'):
+            assert kept in out
+
+
+class TestSvgCssEscapes:
+    def test_escaped_characters_in_style_element_are_rejected(self):
+        with pytest.raises(ValidationError, match="escape"):
+            _process(_svg("<style>rect{fill:\\75 rl(x)}</style>"))
+
+    def test_escaped_characters_in_style_attribute_are_rejected(self):
+        with pytest.raises(ValidationError, match="escape"):
+            _process(_svg('<rect style="fill:\\75 rl(x)"/>'))
+
+
+class TestSvgRemovalKeepsSurroundingText:
+    """Removing an element must not drop the text that follows it (Visio
+    exports put metadata elements inside <text> before the visible text)."""
+
+    VISIO = ' xmlns:v="http://schemas.microsoft.com/visio/2003/SVGExtensions/"'
+
+    def test_text_after_removed_first_child_is_kept(self):
+        out = _process(
+            _svg("<text><v:paragraph/><v:tabList/>Visible label</text>", self.VISIO)
+        )
+        assert "paragraph" not in out and "tabList" not in out
+        assert "<text>Visible label</text>" in out
+
+    def test_text_after_removed_middle_child_is_kept(self):
+        out = _process(_svg("<text>A<tspan>B</tspan><v:tabList/>C</text>", self.VISIO))
+        assert "<text>A<tspan>B</tspan>C</text>" in out
+
+
+class TestSvgReferencesInAllForms:
+    """References are limited to #fragment / data: wherever CSS is parsed:
+    <style>, the style attribute and presentation attributes."""
+
+    @pytest.mark.parametrize("attr", ["fill", "stroke", "filter", "clip-path", "mask"])
+    def test_external_url_in_presentation_attribute_is_neutralised(self, attr):
+        out = _process(_svg(f'<rect {attr}="url(https://example.org/x)"/>'))
+        assert "example.org" not in out
+
+    def test_fragment_url_in_presentation_attribute_is_kept(self):
+        out = _process(_svg('<g clip-path="url(#cp)"/>'))
+        assert 'clip-path="url(#cp)"' in out
+
+    def test_unclosed_external_url_is_rejected(self):
+        with pytest.raises(ValidationError, match="reference"):
+            _process(_svg("<style>rect{fill:url(https://example.org/x</style>"))
+
+    def test_unclosed_fragment_url_is_rejected(self):
+        # Malformed CSS around a reference is rejected rather than interpreted.
+        with pytest.raises(ValidationError, match="reference"):
+            _process(_svg("<style>rect{fill:url(#g</style>"))
+
+    @pytest.mark.parametrize(
+        "css",
+        [
+            'rect{fill:image-set("https://example.org/x" 1x)}',
+            'rect{fill:-webkit-image-set("https://example.org/x" 1x)}',
+            'rect{fill:src("https://example.org/x")}',
+        ],
+    )
+    def test_string_image_functions_are_rejected(self, css):
+        with pytest.raises(ValidationError, match="reference"):
+            _process(_svg(f"<style>{css}</style>"))
+
+    def test_escaped_characters_in_presentation_attribute_are_rejected(self):
+        with pytest.raises(ValidationError, match="escape"):
+            _process(_svg('<rect fill="\\75 rl(x)"/>'))
+
+    def test_editor_attribute_with_backslash_is_dropped_not_rejected(self):
+        ink = ' xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"'
+        out = _process(_svg('<g inkscape:export-filename="C:\\logo.png"/>', ink))
+        assert "export-filename" not in out and "C:" not in out
+
+
+class TestSvgNamespacedAttributes:
+    """Only xlink:href (fragment links), xml:space and xml:lang are kept from
+    namespaced attributes; everything else is dropped."""
+
+    S = ' xmlns:s="http://www.w3.org/2000/svg"'
+
+    def _reparses(self, out: str) -> None:
+        import xml.etree.ElementTree as ET
+
+        ET.fromstring(out)  # raises on invalid XML (e.g. duplicate attributes)
+
+    def test_svg_prefixed_style_with_external_url_is_dropped(self):
+        out = _process(
+            _svg('<rect s:style="fill:url(https://example.org/x)"/>', self.S)
+        )
+        assert "example.org" not in out
+        self._reparses(out)
+
+    def test_svg_prefixed_style_with_escape_is_dropped(self):
+        out = _process(_svg('<rect s:style="fill:\\75rl(x)"/>', self.S))
+        assert "\\" not in out
+
+    def test_svg_prefixed_duplicate_attribute_keeps_valid_xml(self):
+        out = _process(_svg('<rect fill="red" s:fill="blue"/>', self.S))
+        self._reparses(out)
+        assert 'fill="red"' in out and "blue" not in out
+
+    def test_xml_base_is_dropped(self):
+        out = _process(_svg('<g xml:base="https://example.org/"><rect/></g>'))
+        assert "example.org" not in out
+
+    def test_editor_attributes_are_dropped(self):
+        ink = ' xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"'
+        out = _process(_svg('<g inkscape:label="Layer 1" id="l1"><rect/></g>', ink))
+        assert "Layer 1" not in out and 'id="l1"' in out
+
+    def test_xml_space_and_lang_are_kept(self):
+        out = _process(_svg('<text xml:space="preserve" xml:lang="de">a  b</text>'))
+        assert 'xml:space="preserve"' in out and 'xml:lang="de"' in out
+
+    def test_xlink_fragment_href_is_kept(self):
+        xl = ' xmlns:xlink="http://www.w3.org/1999/xlink"'
+        out = _process(_svg('<use xlink:href="#a"/>', xl))
+        assert 'href="#a"' in out
+
+    def test_ping_attribute_is_dropped(self):
+        out = _process(_svg('<a href="#x" ping="https://example.org/p"><rect/></a>'))
+        assert "example.org" not in out
+
+
+class TestSvgNesting:
+    def test_deeply_nested_svg_is_rejected_with_a_message(self):
+        svg = _svg("<g>" * 5000 + "</g>" * 5000)
+        with pytest.raises(ValidationError, match="nested"):
+            _process(svg)
+
+    def test_normal_nesting_is_accepted(self):
+        out = _process(_svg("<g>" * 50 + "<rect/>" + "</g>" * 50))
+        assert "<rect" in out
+
+
+class TestSvgCssScaling:
+    """CSS reference handling must scale linearly with input size: 4x the
+    input may cost at most ~10x the time (quadratic would be 16x)."""
+
+    @staticmethod
+    def _cost(css: str, stylesheet: bool) -> float:
+        """Best of 5 runs, with garbage collection paused while timing."""
+        import gc
+        import time
+
+        from apps.submissions.logo_utils import _clean_css
+
+        best = float("inf")
+        for _ in range(5):
+            gc.collect()
+            gc.disable()
+            try:
+                start = time.perf_counter()
+                try:
+                    _clean_css(css, stylesheet=stylesheet)
+                except ValidationError:
+                    pass
+                best = min(best, time.perf_counter() - start)
+            finally:
+                gc.enable()
+        return best
+
+    @pytest.mark.parametrize(
+        "make",
+        [
+            lambda n: "url(" + " " * n,
+            lambda n: "url('" + " " * n,
+            lambda n: "url(#a" + " " * n,
+            lambda n: "url(" * (n // 4),
+            lambda n: "url(#a) " * (n // 8),
+            lambda n: "@import " * (n // 8),
+        ],
+        ids=[
+            "unclosed-spaces",
+            "unclosed-quote",
+            "fragment-spaces",
+            "repeated-open",
+            "repeated-fragment",
+            "repeated-import",
+        ],
+    )
+    @pytest.mark.parametrize("stylesheet", [False, True], ids=["attribute", "style"])
+    def test_scales_linearly(self, make, stylesheet):
+        small = self._cost(make(50_000), stylesheet)
+        large = self._cost(make(200_000), stylesheet)
+        assert large < 10 * max(small, 1e-4)
+
+
+class TestSvgCssParsing:
+    """CSS in SVG logos is read with a CSS Syntax-spec tokenizer (tinycss2)."""
+
+    def test_css_without_changes_is_kept_byte_for_byte(self):
+        css = ".a{fill:url( '#g' )}  /* note */ .b{font-family:'Open Sans'}"
+        out = _process(_svg(f"<style>{css}</style>"))
+        assert f"<style>{css}</style>" in out
+
+    def test_quoted_data_reference_is_kept(self):
+        css = "@font-face{font-family:F;src:url('data:font/ttf;base64,AA')}"
+        out = _process(_svg(f"<style>{css}</style>"))
+        assert css in out
+
+    def test_uppercase_external_url_is_neutralised(self):
+        out = _process(_svg("<style>rect{fill:URL(https://example.org/x)}</style>"))
+        assert "example.org" not in out
+
+    def test_quoted_external_url_is_neutralised(self):
+        out = _process(_svg('<style>rect{fill:url( "https://example.org/x" )}</style>'))
+        assert "example.org" not in out
+        assert "rect{fill:none}" in out
+
+    @pytest.mark.parametrize(
+        "css",
+        [
+            'rect{fill:url("https://example.org/x)}',  # unclosed string
+            "rect{fill:url(https://example.org/x y)}",  # bad url
+            'rect{fill:url("#a" x)}',  # extra argument
+            'rect{fill:url("https://ex\nample.org/x")}',  # newline in string
+        ],
+    )
+    def test_malformed_reference_is_rejected(self, css):
+        with pytest.raises(ValidationError, match="reference"):
+            _process(_svg(f"<style>{css}</style>"))
+
+    def test_image_function_is_rejected(self):
+        with pytest.raises(ValidationError, match="reference"):
+            _process(_svg('<style>rect{fill:image("https://example.org/x")}</style>'))
+
+    def test_import_nested_in_at_rule_is_rejected(self):
+        with pytest.raises(ValidationError, match="reference"):
+            _process(_svg("<style>@media screen { @import 'x.css'; }</style>"))
+
+    def test_attribute_text_without_references_is_not_parsed(self):
+        # An apostrophe is an unclosed string in CSS terms; plain text without
+        # any reference must not be rejected for that.
+        out = _process(_svg('<g aria-label="Don\'t panic"><rect/></g>'))
+        assert "Don't panic" in out
+
+    def test_deeply_nested_css_needing_a_change_gives_a_message(self):
+        css = "rect{fill:" + "(" * 5000 + "url(https://example.org/x)}"
+        with pytest.raises(ValidationError):
+            _process(_svg(f"<style>{css}</style>"))
+
+
+class TestSvgPruningScaling:
+    """Removing elements must scale linearly with the number of elements:
+    4x the input may cost at most ~10x the time (quadratic would be 16x)."""
+
+    SVG_NS = "http://www.w3.org/2000/svg"
+
+    @staticmethod
+    def _cost(svg: str) -> float:
+        """Best of 3 runs, with garbage collection paused while timing."""
+        import gc
+        import time
+
+        best = float("inf")
+        for _ in range(3):
+            f = _make_upload(svg.encode(), "logo.svg", "image/svg+xml")
+            gc.collect()
+            gc.disable()
+            try:
+                start = time.perf_counter()
+                validate_and_process_logo(f)
+                best = min(best, time.perf_counter() - start)
+            finally:
+                gc.enable()
+        return best
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # many kept siblings followed by many removed ones
+            lambda n: "<g/>" * n + "<x:a/>" * n,
+            # many removed siblings, each followed by text
+            lambda n: "<text>" + "<x:a/>t" * n + "</text>",
+            # many children inside <style>
+            lambda n: "<style>" + "<g/>" * n + "</style>",
+        ],
+        ids=["kept-then-removed", "removed-with-text", "style-children"],
+    )
+    def test_scales_linearly(self, body, settings):
+        settings.LOGO_MAX_SVG_BYTES = 10 * 1024 * 1024
+
+        def svg(n):
+            return f'<svg xmlns="{self.SVG_NS}" xmlns:x="urn:x"><g>{body(n)}</g></svg>'
+
+        small, large = self._cost(svg(5_000)), self._cost(svg(20_000))
+        assert large < 10 * max(small, 1e-4)

@@ -8,18 +8,18 @@ Entry point:  validate_and_process_logo(file_obj) -> InMemoryUploadedFile
 Supported formats: PNG, JPEG, SVG
 Security measures applied:
   - File size enforcement (configurable via site.toml LOGO_MAX_BYTES)
+  - JPEG/PNG pixel-count limit checked from the header before decoding
+    (configurable via site.toml LOGO_MAX_PIXELS)
+  - SVG size limit checked before parsing (configurable via site.toml
+    LOGO_MAX_SVG_BYTES)
   - Magic-byte type detection (extension/MIME header is never trusted)
   - JPEG/PNG: re-encoded via Pillow to strip EXIF metadata and verify integrity
-  - SVG: parsed via stdlib xml.etree.ElementTree (safe on Python 3.12+ / Expat 2.7.1)
-    then scrubbed of <script> elements, on* event attributes, and non-fragment external hrefs
+  - SVG: parsed via stdlib xml.etree.ElementTree (safe on Python 3.12+ / Expat 2.7.1),
+    root must be an SVG <svg>; only an allowlist of SVG drawing elements is kept;
+    on* event attributes and non-fragment hrefs are dropped; CSS references are
+    limited to same-document fragments and data: URLs
   - UUID filenames are assigned by _logo_upload_to() in models.py; the original
     filename is discarded after this module returns.
-
-Note on SVG security: This implementation covers the most common attack vectors
-(injected scripts, event handlers, external requests). CSS-based side-channels
-(e.g. url() in <style> tags) and exotic browser-quirk vectors are not fully
-mitigated. If stricter guarantees are needed, consider rejecting SVG entirely or
-rendering to raster via cairosvg before storage.
 """
 
 import io
@@ -44,7 +44,19 @@ _FORBIDDEN_ATTRS: frozenset[str] = frozenset(
     {
         "action",
         "formaction",
+        "ping",
         "src",
+    }
+)
+
+# The only namespaced attributes kept (xlink:href is still limited to #fragment
+# links below). All others, including SVG-namespace-prefixed duplicates of plain
+# attributes, xml:base and editor metadata (inkscape:, sodipodi:, ...), are dropped.
+_KEPT_NAMESPACED_ATTRS: frozenset[str] = frozenset(
+    {
+        "{http://www.w3.org/1999/xlink}href",
+        "{http://www.w3.org/XML/1998/namespace}space",
+        "{http://www.w3.org/XML/1998/namespace}lang",
     }
 )
 
@@ -53,6 +65,40 @@ _HREF_ATTRS: frozenset[str] = frozenset({"href", "xlink:href"})
 
 # Regex for event-handler attributes (onclick, onload, onmouseover, …)
 _ON_ATTR_RE = re.compile(r"^on\w+$", re.IGNORECASE)
+
+_SVG_NS = "http://www.w3.org/2000/svg"
+
+# SVG elements kept in uploaded logos: shapes, text, paint servers, clipping,
+# masking, filters and structure. Everything else (other namespaces, and SVG
+# elements outside this list, together with their children) is removed.
+_SVG_ALLOWED_ELEMENTS: frozenset[str] = frozenset(
+    {
+        "a", "circle", "clipPath", "defs", "desc", "ellipse", "feBlend",
+        "feColorMatrix", "feComponentTransfer", "feComposite", "feConvolveMatrix",
+        "feDiffuseLighting", "feDisplacementMap", "feDistantLight", "feDropShadow",
+        "feFlood", "feFuncA", "feFuncB", "feFuncG", "feFuncR", "feGaussianBlur",
+        "feImage", "feMerge", "feMergeNode", "feMorphology", "feOffset",
+        "fePointLight", "feSpecularLighting", "feSpotLight", "feTile",
+        "feTurbulence", "filter", "g", "image", "line", "linearGradient", "marker",
+        "mask", "metadata", "path", "pattern", "polygon", "polyline",
+        "radialGradient", "rect", "stop", "style", "svg", "switch", "symbol",
+        "text", "textPath", "title", "tspan", "use", "view",
+    }
+)  # fmt: skip
+
+# CSS text can only reference a resource through one of these. Text without
+# any of them (and without backslash escapes, which are rejected) is left as is.
+_CSS_REFERENCE_HINT_RE = re.compile(
+    r"url\(|image-set\(|image\(|src\(|@import", re.IGNORECASE
+)
+# CSS functions that reference images by plain string; not accepted.
+_CSS_STRING_REF_FUNCTIONS: frozenset[str] = frozenset(
+    {"image-set", "-webkit-image-set", "image", "src"}
+)
+_CSS_WHITESPACE = " \t\r\n\f"
+
+# Maximum element nesting depth accepted in an uploaded SVG.
+_SVG_MAX_DEPTH = 100
 
 # Matches an SVG root element with an optional namespace prefix, e.g.
 # "<svg ...>" or "<ns0:svg ...>" — used to recognise already-sanitised files.
@@ -64,8 +110,8 @@ _SVG_ROOT_RE = re.compile(r"^<[A-Za-z_][\w.-]*:svg[\s>/]", re.IGNORECASE)
 # ---------------------------------------------------------------------------
 
 
-def _check_size(file_obj) -> None:
-    """Raise ValidationError if the upload exceeds LOGO_MAX_BYTES."""
+def _check_size(file_obj) -> int:
+    """Raise ValidationError if the upload exceeds LOGO_MAX_BYTES; return its size."""
     max_bytes: int = getattr(settings, "LOGO_MAX_BYTES", 10 * 1024 * 1024)
     # file_obj.size is set by Django's upload handler
     size = getattr(file_obj, "size", None)
@@ -77,9 +123,38 @@ def _check_size(file_obj) -> None:
     if size == 0:
         raise ValidationError(_("The uploaded file is empty."))
     if size > max_bytes:
-        mb = max_bytes / (1024 * 1024)
         raise ValidationError(
-            _(f"Logo file is too large. Maximum allowed size is {mb:.0f} MB.")
+            _(
+                "Logo file is too large. Maximum allowed size is "
+                f"{_format_size(max_bytes)}."
+            )
+        )
+    return size
+
+
+def _format_size(size: int) -> str:
+    """1048576 -> "1 MB", 1500000 -> "1.4 MB", 2048 -> "2 KB" (one decimal)."""
+    value, unit = (
+        (size / (1024 * 1024), "MB") if size >= 1024 * 1024 else (size / 1024, "KB")
+    )
+    text = f"{value:.1f}"
+    return f"{text[:-2] if text.endswith('.0') else text} {unit}"
+
+
+def _check_svg_size(size: int) -> None:
+    """Raise ValidationError if an SVG upload exceeds LOGO_MAX_SVG_BYTES.
+
+    SVG processing (XML parsing, allowlist, CSS tokenizing) costs time in
+    proportion to the file size, so SVGs have their own, smaller limit. It is
+    checked before the file is parsed.
+    """
+    max_svg: int = getattr(settings, "LOGO_MAX_SVG_BYTES", 1024 * 1024)
+    if size > max_svg:
+        raise ValidationError(
+            _(
+                "SVG logo is too large. Maximum allowed size for SVG files is "
+                f"{_format_size(max_svg)}."
+            )
         )
 
 
@@ -122,6 +197,41 @@ def _sniff_type(file_obj) -> str:
     )
 
 
+def _check_pixel_count(file_obj) -> None:
+    """Raise ValidationError if the image exceeds LOGO_MAX_PIXELS.
+
+    Only the header is read (Image.open is lazy), so oversized images are
+    rejected before their pixel data is decoded.
+    """
+    from PIL import Image
+
+    max_pixels: int = getattr(settings, "LOGO_MAX_PIXELS", 25_000_000)
+    file_obj.seek(0)
+    try:
+        with Image.open(file_obj) as img:
+            width, height = img.size
+    except Image.DecompressionBombError as exc:
+        # Pillow refuses headers this large before reporting their size.
+        raise ValidationError(
+            _(
+                f"The image is larger than the {max_pixels / 1_000_000:g} "
+                "megapixel maximum. Please upload a smaller version."
+            )
+        ) from exc
+    except Exception:
+        return  # unreadable: reported by the integrity check that follows
+    finally:
+        file_obj.seek(0)
+    if width * height > max_pixels:
+        raise ValidationError(
+            _(
+                f"The image is {width} × {height} pixels, larger than the "
+                f"{max_pixels / 1_000_000:g} megapixel maximum. "
+                "Please upload a smaller version."
+            )
+        )
+
+
 def _strip_exif_jpeg(file_obj) -> bytes:
     """Re-encode a JPEG via Pillow, discarding all EXIF/metadata.
 
@@ -132,6 +242,8 @@ def _strip_exif_jpeg(file_obj) -> bytes:
     - Palette images with a transparency hint are treated as RGBA.
     """
     from PIL import Image, UnidentifiedImageError
+
+    _check_pixel_count(file_obj)
 
     try:
         file_obj.seek(0)
@@ -172,6 +284,8 @@ def _strip_exif_png(file_obj) -> bytes:
     """Re-encode a PNG via Pillow, discarding all metadata chunks."""
     from PIL import Image, UnidentifiedImageError
 
+    _check_pixel_count(file_obj)
+
     try:
         file_obj.seek(0)
         img = Image.open(file_obj)
@@ -192,13 +306,178 @@ def _strip_exif_png(file_obj) -> bytes:
         raise ValidationError(_("Could not process the PNG file.")) from exc
 
 
+def _unsupported_reference() -> ValidationError:
+    return ValidationError(
+        _(
+            "The SVG styles contain a resource reference in a form that is not "
+            "supported. Please export the SVG with embedded resources only."
+        )
+    )
+
+
+def _is_embedded_reference(target: str) -> bool:
+    """True for same-document (#id) and embedded (data:) references."""
+    target = target.strip(_CSS_WHITESPACE)
+    return target.startswith("#") or target[:5].lower() == "data:"
+
+
+def _clean_css(css: str, *, stylesheet: bool = False) -> str:
+    """
+    Limit CSS resource references to #fragment / data: and drop @import rules.
+
+    The text is read with tinycss2 (a CSS Syntax-spec tokenizer). A url() to
+    anything else is replaced with "none"; @import at the top of a stylesheet is
+    removed; parse errors, @import elsewhere, string-based image functions and
+    url() forms other than a single string are rejected. Text is re-serialised
+    only when something was changed, so CSS that needs no change is kept
+    byte for byte. The token walk is iterative (no recursion).
+    """
+    import tinycss2
+    from tinycss2.ast import IdentToken
+
+    if "\\" in css:
+        raise ValidationError(
+            _(
+                "The SVG uses backslash-escaped characters in its styles or "
+                "attributes, which are not supported. Please export the SVG "
+                "without escapes."
+            )
+        )
+    if not _CSS_REFERENCE_HINT_RE.search(css):
+        return css
+
+    if stylesheet:
+        nodes = tinycss2.parse_stylesheet(css, skip_comments=False)
+    else:
+        nodes = tinycss2.parse_component_value_list(css, skip_comments=False)
+
+    changed = False
+    if stylesheet:
+        kept = [
+            n
+            for n in nodes
+            if not (n.type == "at-rule" and n.lower_at_keyword == "import")
+        ]
+        changed = len(kept) != len(nodes)
+        nodes = kept
+
+    pending = [nodes]
+    while pending:
+        group = pending.pop()
+        for index, node in enumerate(group):
+            kind = node.type
+            if kind == "error":
+                raise _unsupported_reference()
+            if kind == "url":
+                if not _is_embedded_reference(node.value):
+                    group[index] = IdentToken(
+                        node.source_line, node.source_column, "none"
+                    )
+                    changed = True
+            elif kind == "function":
+                if node.lower_name in _CSS_STRING_REF_FUNCTIONS:
+                    raise _unsupported_reference()
+                if node.lower_name == "url":
+                    args = [
+                        a
+                        for a in node.arguments
+                        if a.type not in ("whitespace", "comment")
+                    ]
+                    if len(args) != 1 or args[0].type != "string":
+                        raise _unsupported_reference()
+                    if not _is_embedded_reference(args[0].value):
+                        group[index] = IdentToken(
+                            node.source_line, node.source_column, "none"
+                        )
+                        changed = True
+                else:
+                    pending.append(node.arguments)
+            elif kind in ("at-keyword", "at-rule"):
+                keyword = getattr(node, "lower_at_keyword", None) or getattr(
+                    node, "lower_value", ""
+                )
+                if keyword == "import":
+                    raise _unsupported_reference()
+                if kind == "at-rule":
+                    pending.append(node.prelude)
+                    if node.content is not None:
+                        pending.append(node.content)
+            elif kind == "qualified-rule":
+                pending.append(node.prelude)
+                pending.append(node.content)
+            elif kind in ("() block", "[] block", "{} block"):
+                pending.append(node.content)
+
+    if not changed:
+        return css
+    try:
+        return tinycss2.serialize(nodes)
+    except RecursionError as exc:
+        raise ValidationError(
+            _("The SVG styles are nested too deeply to be processed.")
+        ) from exc
+
+
+def _check_depth(root) -> None:
+    """Reject SVGs nested deeper than _SVG_MAX_DEPTH (walked without recursion)."""
+    stack = [(root, 1)]
+    while stack:
+        elem, depth = stack.pop()
+        if depth > _SVG_MAX_DEPTH:
+            raise ValidationError(_("The SVG is nested too deeply to be processed."))
+        stack.extend((child, depth + 1) for child in elem)
+
+
+def _prune_elements(root) -> None:
+    """Remove (with their subtree) elements that are not allowlisted SVG elements.
+
+    The text that follows a removed element (its ElementTree "tail") belongs to
+    the parent, e.g. the visible label after Visio metadata inside <text>, so it
+    is moved to the previous kept sibling's tail or to the parent's text.
+
+    Each parent's children are rebuilt once (linear time; removing children one
+    by one is quadratic) and the moved text is joined once per slot.
+    """
+    parents = [root]
+    while parents:
+        parent = parents.pop()
+        kept = []
+        # Text pieces for the parent's text, then for each kept child's tail.
+        slots: list[list[str]] = [[]]
+        removed = False
+        for child in parent:
+            tag = child.tag if isinstance(child.tag, str) else ""
+            ns, _sep, local = (
+                tag[1:].partition("}") if tag.startswith("{") else ("", "", tag)
+            )
+            if ns == _SVG_NS and local in _SVG_ALLOWED_ELEMENTS:
+                parents.append(child)
+                kept.append(child)
+                slots.append([])
+            else:
+                removed = True
+                if child.tail:
+                    slots[-1].append(child.tail)
+        if not removed:
+            continue
+        if slots[0]:
+            parent.text = (parent.text or "") + "".join(slots[0])
+        for child, moved in zip(kept, slots[1:]):
+            if moved:
+                child.tail = (child.tail or "") + "".join(moved)
+        parent[:] = kept
+
+
 def _sanitise_svg(file_obj) -> bytes:
     """
-    Parse SVG with stdlib xml.etree.ElementTree (safe on Python 3.12+/Expat 2.7.1) then scrub:
-      - All <script> elements (any namespace)
-      - All on* event-handler attributes
-      - href / xlink:href pointing outside the document (non-fragment URLs)
-      - src, action, formaction attributes (potential external-resource leaks)
+    Parse SVG with stdlib xml.etree.ElementTree (safe on Python 3.12+/Expat 2.7.1), then:
+      - require an <svg> root in the SVG namespace
+      - keep only allowlisted SVG elements (see _SVG_ALLOWED_ELEMENTS)
+      - drop namespaced attributes other than xlink:href, xml:space, xml:lang
+      - drop on* event-handler attributes and src/action/formaction/ping
+      - drop href / xlink:href pointing outside the document (non-fragment URLs)
+      - limit CSS (style elements, style and presentation attributes) to
+        #fragment / data: references
     Returns sanitised SVG as UTF-8 bytes.
     """
     try:
@@ -210,38 +489,39 @@ def _sanitise_svg(file_obj) -> bytes:
         ) from exc
 
     root = tree.getroot()
+    if root.tag != f"{{{_SVG_NS}}}svg":
+        raise ValidationError(
+            _(
+                "The file is not an SVG image: the root element must be <svg> "
+                'with xmlns="http://www.w3.org/2000/svg".'
+            )
+        )
 
     # ElementTree does not preserve the default (unprefixed) namespace on
     # serialisation: a clean <svg xmlns="..."> would otherwise round-trip to
     # <ns0:svg xmlns:ns0="...">, which _sniff_type() no longer recognises as
     # SVG. Registering the SVG namespace with an empty prefix keeps the root
     # element as <svg>, making sanitisation idempotent across re-saves.
-    _safe_et.register_namespace("", "http://www.w3.org/2000/svg")
+    _safe_et.register_namespace("", _SVG_NS)
 
-    # Build parent map so we can remove child elements safely
-    parent_map: dict = {}
-    for parent in root.iter():
-        for child in parent:
-            parent_map[child] = parent
+    _check_depth(root)
+    _prune_elements(root)
 
-    # Collect elements to remove (cannot mutate while iterating)
-    to_remove: list = []
-    for elem in root.iter():
-        tag = elem.tag
-        # Strip namespace prefix for tag name comparison
-        local = tag.split("}")[-1].lower() if "}" in tag else tag.lower()
-        if local == "script":
-            to_remove.append(elem)
-
-    for elem in to_remove:
-        parent = parent_map.get(elem)
-        if parent is not None:
-            parent.remove(elem)
+    # A <style> element's CSS is its whole text content; fold any child text
+    # into one string so every part of it goes through _clean_css().
+    for style in root.iter(f"{{{_SVG_NS}}}style"):
+        css = "".join(style.itertext())
+        del style[:]
+        style.text = _clean_css(css, stylesheet=True)
 
     # Scrub dangerous attributes from all remaining elements
     for elem in root.iter():
         attrs_to_delete = []
         for attr, value in elem.attrib.items():
+            if attr.startswith("{") and attr not in _KEPT_NAMESPACED_ATTRS:
+                attrs_to_delete.append(attr)
+                continue
+
             local_attr = attr.split("}")[-1] if "}" in attr else attr
             local_lower = local_attr.lower()
 
@@ -261,6 +541,12 @@ def _sanitise_svg(file_obj) -> bytes:
         for attr in attrs_to_delete:
             del elem.attrib[attr]
 
+        # Un-namespaced attributes (style and presentation attributes such as
+        # fill, filter, clip-path) are parsed as CSS by browsers.
+        for attr, value in elem.attrib.items():
+            if not attr.startswith("{"):
+                elem.attrib[attr] = _clean_css(value)
+
     try:
         svg_str = _et_tostring(root, encoding="unicode")
         return svg_str.encode("utf-8")
@@ -278,17 +564,19 @@ def validate_and_process_logo(file_obj) -> InMemoryUploadedFile:
     Validate and sanitise an uploaded logo file.
 
     Steps:
-      1. Enforce file size limit.
+      1. Enforce the file size limit (LOGO_MAX_BYTES).
       2. Detect type from magic bytes (never trust extension or MIME header).
-      3. Re-encode JPEG/PNG via Pillow (strips EXIF, verifies integrity).
-         Parse and scrub SVG via stdlib xml.etree.ElementTree (blocks XML attacks + event handlers).
+      3. JPEG/PNG: check the pixel count from the header (LOGO_MAX_PIXELS), then
+         re-encode via Pillow (strips EXIF, verifies integrity).
+         SVG: check the SVG size limit (LOGO_MAX_SVG_BYTES), then parse and
+         reduce it to the allowed elements, attributes and CSS references.
       4. Return an InMemoryUploadedFile containing the processed bytes.
 
     Raises django.core.exceptions.ValidationError on any failure.
     The returned file object should be assigned back to the form/serializer field;
     _logo_upload_to() in models.py will generate the final UUID filename.
     """
-    _check_size(file_obj)
+    size = _check_size(file_obj)
     mime_type = _sniff_type(file_obj)
     file_obj.seek(0)
 
@@ -301,6 +589,7 @@ def validate_and_process_logo(file_obj) -> InMemoryUploadedFile:
         content_type = "image/png"
         ext = "png"
     else:  # svg
+        _check_svg_size(size)
         data = _sanitise_svg(file_obj)
         content_type = "image/svg+xml"
         ext = "svg"

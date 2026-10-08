@@ -582,7 +582,8 @@ Submitters can optionally upload a logo for their service during registration or
 | Property     | Value                                                                                        |
 | ------------ | -------------------------------------------------------------------------------------------- |
 | Formats      | PNG, JPEG, SVG                                                                               |
-| Maximum size | 10 MB (configurable — see [`[uploads]` in configuration](configuration.md#uploads))          |
+| PNG / JPEG   | Up to 10 MB and 25 megapixels (configurable — see [`[uploads]`](configuration.md#uploads))   |
+| SVG          | Up to 1 MB (configurable — see [`[uploads]`](configuration.md#uploads))                      |
 | Storage      | `/app/mediafiles/logos/<uuid>.<ext>` inside the container (mounted from `media_data` volume) |
 | Served at    | `/media/logos/<uuid>.<ext>` — via Gunicorn (nginx proxy_passes everything)                   |
 
@@ -590,9 +591,10 @@ Submitters can optionally upload a logo for their service during registration or
 
 Every upload goes through automatic validation before being stored:
 
+- **Size** — PNG/JPEG up to `logo_max_bytes` and `logo_max_pixels` (the pixel count is read from the image header before decoding); SVG up to `logo_max_svg_bytes`
 - **Magic bytes** — the file type is detected from its binary header, not its extension or MIME type
 - **JPEG / PNG** — re-encoded via Pillow to strip EXIF metadata and verify file integrity
-- **SVG** — parsed with Python's stdlib XML parser (safe on Python 3.12+/Expat 2.7.1, which blocks XXE and entity-expansion attacks), then scrubbed of `<script>` elements, `on*` event-handler attributes, and non-fragment external `href` values
+- **SVG** — parsed with Python's stdlib XML parser (external entities are not loaded, and text from internal entities goes through the same rules as the rest of the file); the root must be `<svg>`; only standard drawing elements are kept (embedded bitmap images and editor metadata are removed); `on*` attributes and namespaced attributes other than `xlink:href`, `xml:space` and `xml:lang` are removed; links may only point inside the logo (`#id`); CSS references (read with the [tinycss2](https://pypi.org/project/tinycss2/) CSS parser) may also use embedded `data:` resources such as fonts
 - **Filename** — original filename is discarded; a UUID is assigned before storage
 
 ### Admin usage
