@@ -514,12 +514,9 @@ class SubmissionForm(forms.ModelForm):
         return self.cleaned_data.get("public_contact_email", "").strip()
 
     def clean_logo(self):
-        f = self.cleaned_data.get("logo")
-        if not f:
-            return f  # Optional — None/empty is valid
-        from .logo_utils import validate_and_process_logo
+        from .logo_utils import process_new_logo_upload
 
-        return validate_and_process_logo(f)
+        return process_new_logo_upload(self.cleaned_data.get("logo"))
 
     def clean_data_protection_consent(self) -> bool:
         value = self.cleaned_data.get("data_protection_consent")

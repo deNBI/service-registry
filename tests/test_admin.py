@@ -1533,6 +1533,39 @@ class TestAdminServiceNameEditable:
         assert bound.value() == "Old Admin Name"
 
 
+def _admin_changeform_data(admin_client, sub) -> dict:
+    """A valid admin changeform POST payload built from the instance's
+    current values (logo excluded; inline management forms discovered from
+    the rendered page)."""
+    import re
+    from django.forms.models import model_to_dict
+
+    url = reverse("admin:submissions_servicesubmission_change", args=[sub.pk])
+    html = admin_client.get(url).content.decode()
+    mgmt = {
+        name: val
+        for name, val in re.findall(
+            r'name="([^"]*-(?:TOTAL|INITIAL|MIN_NUM|MAX_NUM)_FORMS)"'
+            r'[^>]*value="([^"]*)"',
+            html,
+        )
+    }
+    assert mgmt, "inline management form not found on admin change page"
+
+    data = {}
+    for field, value in model_to_dict(sub).items():
+        if value is None or value == "":
+            continue
+        if isinstance(value, (list, set, tuple)):
+            # M2M values come back as model instances — post their PKs.
+            data[field] = [getattr(item, "pk", item) for item in value]
+        else:
+            data[field] = value
+    data.pop("logo", None)  # don't re-post the file field
+    data.update(mgmt)
+    return data
+
+
 @pytest.mark.django_db
 class TestAdminServiceNameChangePersists:
     """True end-to-end proof of the admin exemption: an admin renames a
@@ -1540,39 +1573,12 @@ class TestAdminServiceNameChangePersists:
     name persists in the database."""
 
     def test_admin_can_rename_via_changeform(self, admin_client):
-        import re
-        from django.forms.models import model_to_dict
-
         # No API keys → the readonly inline has 0 initial forms.
         sub = ServiceSubmissionFactory(
             service_name="Admin Original Name", biotools_url="", license_note="MIT"
         )
         url = reverse("admin:submissions_servicesubmission_change", args=[sub.pk])
-
-        # Discover the inline management-form field names from the rendered page.
-        html = admin_client.get(url).content.decode()
-        mgmt = {
-            name: val
-            for name, val in re.findall(
-                r'name="([^"]*-(?:TOTAL|INITIAL|MIN_NUM|MAX_NUM)_FORMS)"'
-                r'[^>]*value="([^"]*)"',
-                html,
-            )
-        }
-        assert mgmt, "inline management form not found on admin change page"
-
-        # Build a valid changeform POST from the instance's current values.
-        data = {}
-        for field, value in model_to_dict(sub).items():
-            if value is None or value == "":
-                continue
-            if isinstance(value, (list, set, tuple)):
-                # M2M values come back as model instances — post their PKs.
-                data[field] = [getattr(item, "pk", item) for item in value]
-            else:
-                data[field] = value
-        data.pop("logo", None)  # don't re-post the file field
-        data.update(mgmt)
+        data = _admin_changeform_data(admin_client, sub)
         data["service_name"] = "Admin Renamed Service"
 
         resp = admin_client.post(url, data)

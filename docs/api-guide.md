@@ -272,7 +272,7 @@ When uploading a logo, send the request as `multipart/form-data` (`-F` flags in 
 
 | Field      | Direction  | Type           | Notes                                                                                                               |
 | ---------- | ---------- | -------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `logo`     | write-only | file           | Accepted in `multipart/form-data` requests only. Omit to leave the existing logo unchanged.                         |
+| `logo`     | write-only | file           | Accepted in `multipart/form-data` requests only, on create (`POST`) and update (`PATCH`). Omit to leave the existing logo unchanged. |
 | `logo_url` | read-only  | string \| null | Absolute URL to the stored logo file, or `null` if no logo has been uploaded. Returned in all submission responses. |
 
 **Accepted formats:** PNG, JPEG, SVG — max 10 MB (configurable via `logo_max_bytes` in `config/site.toml`).

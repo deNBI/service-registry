@@ -111,6 +111,12 @@ class ServiceSubmissionAdminForm(forms.ModelForm):
         model = ServiceSubmission
         fields = "__all__"
 
+    def clean_logo(self):
+        # Same checks as the public form and the API, for new uploads only.
+        from .logo_utils import process_new_logo_upload
+
+        return process_new_logo_upload(self.cleaned_data.get("logo"))
+
     def clean(self):
         cleaned = super().clean()
         licenses = cleaned.get("licenses")

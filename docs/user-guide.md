@@ -228,7 +228,8 @@ element is not `<svg>`, if it is nested unusually deeply, if its styles or
 attributes use backslash escapes, or if its styles or attributes use resource
 references in an unsupported form.
 
-To replace a logo, simply upload a new one when editing your submission.
+To replace a logo, simply upload a new one when editing your submission. Saving
+an edit without choosing a new file keeps the current logo exactly as it is.
 Previous logos are retained on disk but replaced for display purposes.
 
 ---

@@ -28,7 +28,7 @@ import re
 import xml.etree.ElementTree as _safe_et  # nosec B405 — Python 3.12 bundles Expat 2.7.1 (safe)
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.files.uploadedfile import InMemoryUploadedFile
+from django.core.files.uploadedfile import InMemoryUploadedFile, UploadedFile
 from django.utils.translation import gettext_lazy as _
 from xml.etree.ElementTree import tostring as _et_tostring
 
@@ -603,3 +603,16 @@ def validate_and_process_logo(file_obj) -> InMemoryUploadedFile:
         size=len(data),
         charset=None,
     )
+
+
+def process_new_logo_upload(value):
+    """
+    Form-field helper: validate and process a freshly uploaded logo.
+
+    Anything else (None, False from the "clear" checkbox, or the already-stored
+    FieldFile that Django hands back when no new file was chosen) is returned
+    unchanged, so saving a record never rewrites or re-checks its stored logo.
+    """
+    if isinstance(value, UploadedFile):
+        return validate_and_process_logo(value)
+    return value

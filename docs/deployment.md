@@ -282,6 +282,27 @@ header (`default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 
 Nginx must pass this header through unchanged: do not add `proxy_hide_header
 Content-Security-Policy` or an `add_header Content-Security-Policy` for `/media/`.
 
+### Request size for uploads
+
+Logos are uploaded through `/register/`, `/update/`, `/api/` and the admin URL
+prefix (`ADMIN_URL_PREFIX`, default `admin-denbi`). On all of these the proxy's
+`client_max_body_size` must be a little larger than `logo_max_bytes` (10 MB by
+default), because the request also carries the other form fields; `12m` gives
+enough headroom. With a lower limit, a large upload is refused by nginx with a
+bare HTTP 413 page instead of the application's validation message.
+
+The bundled `nginx/host/service-registry.bi.denbi.de.conf` sets `12m` for
+`/api/`, `/register/` and `/update/`, but keeps the server-wide default of
+`64k` for everything else, including the admin. To allow admin logo uploads with
+that file, add a `location` block for the admin prefix with
+`client_max_body_size 12m;` (see the commented-out admin block in the file).
+
+To check the effective limits on a server:
+
+```bash
+sudo nginx -T 2>/dev/null | grep -nE "server_name|client_max_body_size|location "
+```
+
 ### Persistent storage in production
 
 Uploaded logos are stored in a named Docker volume (`media_data`) that is mounted at
