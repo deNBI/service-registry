@@ -75,6 +75,7 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_audit_markdown_command.py` | `audit_markdown_descriptions` flagging, diff-centred previews, CSV output and exit status |
 | `test_export_formula_guard.py` | CSV cells that start like a formula get a leading `'` (`csv_safe` in `apps/submissions/csv_utils.py`) |
 | `test_email_plaintext.py` | `render_plaintext()`: plain-text email bodies rendered without HTML escaping |
+| `test_query_counts.py` | List endpoints (API list, admin changelist) issue the same number of queries for 3 and 12 rows: no per-row (N+1) queries |
 
 Run `pytest --collect-only -q` for the current test count; a coverage threshold of ≥ 80% is enforced.
 
