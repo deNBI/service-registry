@@ -450,6 +450,12 @@ uploaded files, so it never processes a logo.
 Saving a record without choosing a new file keeps the stored logo as it is, so
 changes to these rules never rewrite logos that are already stored.
 
+### Limits shown to users
+
+`logo_limits_text()` / `logo_help_text()` build the limit text from the settings.
+It is used by the public form (via the `{logo_limits}` placeholder in
+`form_texts.yaml`), the admin form and the API serializer (OpenAPI schema).
+
 ### Serving uploaded media
 
 `config/urls.py` serves `/media/` through `_serve_media()`, which sets a
@@ -463,7 +469,7 @@ through `<img>`; it applies when a logo URL is opened directly.
 - `tests/test_logo_utils.py` — the processing rules, unit level (including
   linear-scaling checks for the CSS handling and for element removal)
 - `tests/test_logo_upload_routes.py` — the same scenarios through every upload
-  route (registration, edit, API create, API PATCH, admin)
+  route (registration, edit, API create, API PATCH, admin), plus the help text
 - `tests/test_media_serving.py` — the `/media/` response header
 
 ### Adding a new allowed format
@@ -471,7 +477,9 @@ through `<img>`; it applies when a logo URL is opened directly.
 1. Add magic-byte detection to `_sniff_type()` — return a new type string
 2. Add a processing function (strip metadata, verify integrity)
 3. Add the new branch to `validate_and_process_logo()`
-4. Add tests to `tests/test_logo_utils.py`
+4. Add tests to `tests/test_logo_utils.py` and a scenario to
+   `tests/test_logo_upload_routes.py`
+5. Update `logo_limits_text()` and the docs if the format has its own limit
 
 ### Media files in development
 

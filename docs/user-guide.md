@@ -202,6 +202,9 @@ You can optionally upload a logo for your service. This field is not required.
 | SVG              | Up to 1 MB                                       |
 | Required         | No                                               |
 
+These are the default limits; the form shows the limits configured for this
+registry next to the upload field.
+
 **How to upload:**
 
 1. In Section B, click the logo upload field

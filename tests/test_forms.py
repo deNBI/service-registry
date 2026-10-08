@@ -382,15 +382,19 @@ class TestFormTextsYAML:
 
     def test_yaml_overrides_help_text(self):
         from apps.submissions.forms import SubmissionForm, _FORM_TEXTS
+        from apps.submissions.logo_utils import logo_limits_text
 
         form = SubmissionForm()
         for field_name, texts in _FORM_TEXTS.items():
             if field_name not in form.fields:
                 continue
             if texts.get("help"):
-                assert form.fields[field_name].help_text == texts["help"], (
+                # {logo_limits} is expanded to the configured upload limits.
+                expected = texts["help"].replace("{logo_limits}", logo_limits_text())
+                assert form.fields[field_name].help_text == expected, (
                     f"{field_name}: help_text not applied from YAML"
                 )
+                assert "{logo_limits}" not in form.fields[field_name].help_text
 
     def test_tooltip_attribute_set(self):
         from apps.submissions.forms import SubmissionForm, _FORM_TEXTS

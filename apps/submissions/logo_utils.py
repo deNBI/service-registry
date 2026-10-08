@@ -605,6 +605,23 @@ def validate_and_process_logo(file_obj) -> InMemoryUploadedFile:
     )
 
 
+def logo_limits_text() -> str:
+    """The configured upload limits as one sentence fragment, e.g.
+    "PNG or JPEG up to 10 MB and 25 megapixels, or SVG up to 1 MB"."""
+    max_bytes: int = getattr(settings, "LOGO_MAX_BYTES", 10 * 1024 * 1024)
+    max_pixels: int = getattr(settings, "LOGO_MAX_PIXELS", 25_000_000)
+    max_svg: int = min(getattr(settings, "LOGO_MAX_SVG_BYTES", 1024 * 1024), max_bytes)
+    return (
+        f"PNG or JPEG up to {_format_size(max_bytes)} and "
+        f"{max_pixels / 1_000_000:g} megapixels, or SVG up to {_format_size(max_svg)}"
+    )
+
+
+def logo_help_text() -> str:
+    """Help text for logo fields (admin, API, form fallback)."""
+    return f"Optional. {logo_limits_text()}."
+
+
 def process_new_logo_upload(value):
     """
     Form-field helper: validate and process a freshly uploaded logo.

@@ -326,3 +326,40 @@ class TestAdminSpecific:
 # ---------------------------------------------------------------------------
 # Limits shown to users (form, admin and API schema) follow the settings
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestLimitsShownToUsers:
+    @pytest.fixture
+    def limits(self, settings):
+        settings.LOGO_MAX_BYTES = 5 * 1024 * 1024
+        settings.LOGO_MAX_PIXELS = 4_000_000
+        settings.LOGO_MAX_SVG_BYTES = 512 * 1024
+
+    EXPECTED = "PNG or JPEG up to 5 MB and 4 megapixels, or SVG up to 512 KB"
+
+    def test_public_form_help_text(self, limits):
+        from apps.submissions.forms import SubmissionForm
+
+        assert self.EXPECTED in str(SubmissionForm().fields["logo"].help_text)
+
+    def test_register_page_shows_limits(self, limits, client):
+        resp = client.get(reverse("submissions:register"))
+        assert self.EXPECTED in resp.content.decode()
+
+    def test_admin_form_help_text(self, limits):
+        from apps.submissions.admin import ServiceSubmissionAdminForm
+
+        form = ServiceSubmissionAdminForm(instance=_existing_submission())
+        assert self.EXPECTED in str(form.fields["logo"].help_text)
+
+    def test_api_serializer_help_text(self, limits):
+        from apps.api.serializers import SubmissionDetailSerializer
+
+        field = SubmissionDetailSerializer().fields["logo"]
+        assert self.EXPECTED in str(field.help_text)
+
+    def test_openapi_schema_describes_limits(self, limits, client):
+        resp = client.get("/api/schema/", {"format": "json"})
+        assert resp.status_code == 200
+        assert self.EXPECTED in resp.content.decode()

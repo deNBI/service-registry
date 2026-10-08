@@ -111,6 +111,13 @@ class ServiceSubmissionAdminForm(forms.ModelForm):
         model = ServiceSubmission
         fields = "__all__"
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .logo_utils import logo_help_text
+
+        if "logo" in self.fields:
+            self.fields["logo"].help_text = logo_help_text()
+
     def clean_logo(self):
         # Same checks as the public form and the API, for new uploads only.
         from .logo_utils import process_new_logo_upload
