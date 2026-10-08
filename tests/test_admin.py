@@ -8,6 +8,7 @@ and comprehensive CSV/JSON exports.
 import csv
 import io
 import json
+import re
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -21,6 +22,50 @@ from tests.factories import (
     BioToolsRecordFactory,
     ServiceSubmissionFactory,
 )
+
+
+def css_rules(css: str) -> list[tuple[list[str], dict[str, str]]]:
+    """(selectors, declarations) of every style rule in `css`, including those
+    nested in @media blocks. Comments are dropped and whitespace normalised."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    rules = []
+    for sel_list, block in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        decls = {}
+        for decl in block.split(";"):
+            if ":" in decl:
+                k, v = decl.split(":", 1)
+                decls[k.strip()] = " ".join(v.split())
+        rules.append(([" ".join(s.split()) for s in sel_list.split(",")], decls))
+    return rules
+
+
+def css_media_blocks(css: str) -> dict[str, str]:
+    """Body of every top-level @media block in `css`, keyed by its condition
+    with whitespace normalised; blocks sharing a condition are concatenated."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    blocks: dict[str, str] = {}
+    for m in re.finditer(r"@media([^{]+)\{", css):
+        depth, i = 1, m.end()
+        while depth and i < len(css):
+            depth += {"{": 1, "}": -1}.get(css[i], 0)
+            i += 1
+        cond = " ".join(m.group(1).split())
+        blocks[cond] = blocks.get(cond, "") + css[m.end() : i - 1]
+    return blocks
+
+
+def css_specificity(selector: str) -> tuple[int, int, int]:
+    """(ids, classes/attributes/pseudo-classes, elements) of a simple CSS
+    selector; enough for the flat admin selectors the tests compare."""
+    sel = re.sub(
+        r"::?[\w-]+(\([^)]*\))?",
+        lambda m: " .x" if m.group(0)[1] != ":" else "",
+        selector,
+    )
+    ids = len(re.findall(r"#[\w-]+", sel))
+    classes = len(re.findall(r"\.[\w-]+|\[[^\]]*\]", sel))
+    elements = len(re.findall(r"(?:^|[\s>+~])([a-zA-Z][\w-]*)", sel))
+    return ids, classes, elements
 
 
 # ---------------------------------------------------------------------------
@@ -1580,3 +1625,157 @@ class TestAdminServiceNameChangePersists:
 
         sub.refresh_from_db()
         assert sub.service_name == "Admin Renamed Service"
+
+
+@pytest.mark.django_db
+class TestAdminTextareaResize:
+    """The native resize handle works by writing an inline ``height``, so no
+    stylesheet may pin or cap the height of admin textareas."""
+
+    @staticmethod
+    def _page_rules(admin_client):
+        import re
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        html = admin_client.get(_change_url(sub)).content.decode()
+        css = "".join(re.findall(r"<style[^>]*>(.*?)</style>", html, re.DOTALL))
+        return css_rules(css)
+
+    def test_admin_styles_do_not_pin_textarea_height(self, admin_client):
+        """An ``!important`` height beats the handle's inline style, so the
+        handle shows but dragging it does nothing."""
+        rules = [
+            (s, d) for s, d in self._page_rules(admin_client) if "textarea" in str(s)
+        ]
+        assert rules
+        for sels, decls in rules:
+            for prop in ("height", "min-height", "max-height"):
+                assert "!important" not in decls.get(prop, ""), f"{sels}: {prop}"
+
+    def test_admin_lifts_the_responsive_textarea_height_cap(self, admin_client):
+        """Django's responsive.css caps textareas at 120px below 1024px wide,
+        which stops the handle there; the admin override must out-rank it."""
+        from django.contrib.staticfiles import finders
+
+        with open(finders.find("admin/css/responsive.css"), encoding="utf-8") as fh:
+            django_caps = [
+                sel
+                for sels, decls in css_rules(fh.read())
+                if decls.get("max-height", "none") != "none"
+                for sel in sels
+                if "textarea" in sel
+            ]
+        ours = [
+            sel
+            for sels, decls in self._page_rules(admin_client)
+            if decls.get("max-height") == "none"
+            for sel in sels
+            if "textarea" in sel
+        ]
+        assert django_caps and ours
+        assert max(map(css_specificity, ours)) > max(map(css_specificity, django_caps))
+
+
+class TestAdminTabletLayout:
+    """Between 768px and ~1280px Django's flex rows keep ``min-width: auto``,
+    so a wide control (long option text, the 610px textarea, the
+    filter_horizontal picker) pushes past its row and ``.form-row``'s
+    ``overflow: hidden`` clips it."""
+
+    BAND = "(min-width: 768px) and (max-width: 1024px)"
+
+    @staticmethod
+    def _page_css(admin_client):
+        import re
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        html = admin_client.get(_change_url(sub)).content.decode()
+        return "".join(re.findall(r"<style[^>]*>(.*?)</style>", html, re.DOTALL))
+
+    @staticmethod
+    def _django_css(name):
+        from django.contrib.staticfiles import finders
+
+        with open(finders.find(f"admin/css/{name}"), encoding="utf-8") as fh:
+            return fh.read()
+
+    @staticmethod
+    def _by_selector(rules):
+        out = {}
+        for sels, decls in rules:
+            for sel in sels:
+                out.setdefault(sel, {}).update(decls)
+        return out
+
+    def test_flex_wrappers_can_shrink_to_the_row(self, admin_client):
+        ours = self._by_selector(css_rules(self._page_css(admin_client)))
+        for sel in (
+            ".form-multiline > div",
+            ".related-widget-wrapper",
+            ".field-key_management_panel div.readonly",
+            ".field-sibling_key_panel div.readonly",
+        ):
+            assert ours.get(sel, {}).get("min-width") == "0", sel
+
+    def test_controls_are_capped_to_the_row(self, admin_client):
+        ours = self._by_selector(css_rules(self._page_css(admin_client)))
+        for ctl in ("select", "textarea", "input[type=file]"):
+            decls = ours.get(f".aligned .form-row {ctl}", {})
+            assert decls.get("min-width") == "0", ctl
+            assert decls.get("max-width") == "100%", ctl
+
+    def test_pickers_stack_in_the_tablet_band_like_djangos_phone_layout(
+        self, admin_client
+    ):
+        """Mirror Django's own <=767px picker rules, except the list height:
+        the admin already sets its own (10em) for every width.
+
+        widgets.css (imported by forms.css) loads after the admin <style>, so
+        each copied rule must out-rank the widgets.css rule for the same
+        element; Django's copy only wins because responsive.css loads last."""
+        ours = self._by_selector(
+            css_rules(css_media_blocks(self._page_css(admin_client))[self.BAND])
+        )
+        phone = css_media_blocks(self._django_css("responsive.css"))[
+            "(max-width: 767px)"
+        ]
+        picker_rules = [
+            (sel, decls)
+            for sels, decls in css_rules(phone)
+            for sel in sels
+            if (sel == ".selector" or "selector-" in sel)
+        ]
+        desktop = [
+            sel
+            for name in ("widgets.css", "forms.css")
+            for sels, _ in css_rules(self._django_css(name))
+            for sel in sels
+        ]
+        assert len(picker_rules) >= 5
+        for sel, decls in picker_rules:
+            mine = [s for s in ours if s.endswith(sel) and ours[s] == decls]
+            assert mine, sel
+            rivals = [s for s in desktop if s.split()[-1] == sel.split()[-1]]
+            assert rivals, sel
+            assert css_specificity(mine[0]) > max(map(css_specificity, rivals)), sel
+
+    def test_picker_filter_input_uses_djangos_tablet_rule_on_desktop(
+        self, admin_client
+    ):
+        """Without a percentage width the filter input keeps each picker
+        column >= 228px wide, which clips the chosen column at 1025-1100px."""
+        sel = ".selector .selector-filter input"
+        tablet = self._by_selector(
+            css_rules(
+                css_media_blocks(self._django_css("responsive.css"))[
+                    "(max-width: 1024px)"
+                ]
+            )
+        )[sel]
+        ours = self._by_selector(
+            css_rules(
+                css_media_blocks(self._page_css(admin_client))["(min-width: 1025px)"]
+            )
+        )[sel]
+        for prop in ("width", "flex"):
+            assert ours[prop] == tablet[prop], prop
