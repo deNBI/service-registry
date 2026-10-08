@@ -6,6 +6,8 @@ from django.http import Http404
 from django.shortcuts import render
 from django.urls import reverse
 
+from apps.submissions.markdown_render import prime_descriptions
+
 from .filters import CatalogueQueryParams
 from .selectors import get_approved_services, get_filter_options, group_services
 
@@ -39,6 +41,14 @@ def _paginate(qs, page: int, per_page: int):
         return paginator.page(paginator.num_pages)
 
 
+def _prime_descriptions(params, page_obj, grouped) -> None:
+    """Fetch the shown services' rendered descriptions in one cache read."""
+    services = (
+        [s for _, group in grouped for s in group] if grouped else page_obj.object_list
+    )
+    prime_descriptions(services, "html" if params.view == "list" else "text")
+
+
 def catalogue_view(request):
     if not _catalogue_enabled():
         raise Http404
@@ -49,6 +59,7 @@ def catalogue_view(request):
     qs = get_approved_services(**params.to_selector_kwargs())
     page_obj = _paginate(qs, params.page, config["per_page"])
     grouped = group_services(list(qs), params.group_by) if params.group_by else None
+    _prime_descriptions(params, page_obj, grouped)
 
     ctx = {
         "params": params,
@@ -74,6 +85,7 @@ def catalogue_grid_view(request):
     qs = get_approved_services(**params.to_selector_kwargs())
     page_obj = _paginate(qs, params.page, config["per_page"])
     grouped = group_services(list(qs), params.group_by) if params.group_by else None
+    _prime_descriptions(params, page_obj, grouped)
 
     ctx = {
         "params": params,

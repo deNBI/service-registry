@@ -4,7 +4,7 @@ CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
 
 
 def csv_safe(value):
-    """Neutralise spreadsheet formula injection in an exported CSV cell.
+    """Keep spreadsheet apps from evaluating an exported CSV cell as a formula.
 
     Strings starting with a formula trigger (``= + - @``, tab or CR) get a
     leading ``'`` so spreadsheet apps treat them as text. Markdown bullet

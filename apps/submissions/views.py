@@ -659,7 +659,9 @@ def validate_field(request: HttpRequest) -> HttpResponse:
 # ---------------------------------------------------------------------------
 
 
-@ratelimit(key="ip", rate=settings.RATE_LIMIT_VALIDATE, method="POST", block=False)
+@ratelimit(
+    key="user_or_ip", rate=settings.RATE_LIMIT_PREVIEW, method="POST", block=False
+)
 @require_POST
 def markdown_preview_view(request: HttpRequest) -> HttpResponse:
     """
@@ -674,9 +676,11 @@ def markdown_preview_view(request: HttpRequest) -> HttpResponse:
     Empty/whitespace-only input returns a 'Nothing to preview' placeholder.
     404 when the markdown_descriptions feature flag is off.
 
-    Rate limiting is non-blocking: the editor JS shows any non-2xx response
-    as a generic "Preview unavailable", so a throttled request gets a 200
-    fragment with the specific inline message instead.
+    Rate limited on RATE_LIMIT_PREVIEW per signed-in user (so admins do not
+    share a bucket with public visitors behind the same address), else per
+    client IP. Non-blocking: the editor JS shows any non-2xx response as a
+    generic "Preview unavailable", so a throttled request gets a 200 fragment
+    with the specific inline message instead.
     """
     if not markdown_enabled():
         raise Http404

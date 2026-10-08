@@ -1,4 +1,4 @@
-"""Spreadsheet formula-injection guard for the admin CSV export."""
+"""CSV export: cells that start like a spreadsheet formula get a leading '."""
 
 import ast
 import csv

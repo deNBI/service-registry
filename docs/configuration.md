@@ -369,11 +369,12 @@ RATE_LIMIT_UPDATE=20/h          # Key-entry and edit form submissions (POST /upd
 RATE_LIMIT_API=60/m             # REST API (authenticated users)
 RATE_LIMIT_CHALLENGE=60/h       # ALTCHA challenge generation (GET /captcha/)
 RATE_LIMIT_BIOTOOLS=60/h        # bio.tools prefill/search proxy (GET /biotools/*)
-RATE_LIMIT_VALIDATE=120/h       # Inline field validation (POST /register/validate/) and Markdown preview (POST /markdown-preview/)
+RATE_LIMIT_VALIDATE=120/h       # Inline field validation (POST /register/validate/)
+RATE_LIMIT_PREVIEW=120/h        # Markdown description preview (POST /markdown-preview/); per signed-in user, else per IP
 ```
 
 !!! warning "Limits are bucketed per real client IP"
-    Every limit is keyed on the real client IP, not `REMOTE_ADDR`
+    The django-ratelimit limits (all of the above except `RATE_LIMIT_API`, which DRF applies per authenticated user or API key, and `RATE_LIMIT_PREVIEW` for signed-in users) are keyed on the real client IP, not `REMOTE_ADDR`
     (`RATELIMIT_IP_META_KEY = apps.submissions.http_utils.get_client_ip`, which
     reads `X-Real-IP` → `X-Forwarded-For` → `REMOTE_ADDR`). Behind a reverse
     proxy the proxy **must** set `X-Real-IP` to the client address (see the

@@ -261,7 +261,7 @@ def test_submission_description_updated_at_busts_cache(md_on):
 def test_submission_description_key_and_ttl(md_on, monkeypatch):
     calls = []
     monkeypatch.setattr(
-        mr.cache, "set", lambda k, v, timeout: calls.append((k, timeout))
+        mr.cache, "set_many", lambda d, timeout: calls.extend((k, timeout) for k in d)
     )
     mr.render_submission_description(_sub("x", pk=7))
     assert calls == [(f"md:{mr.RENDER_FINGERPRINT}:html:7:{_TS_US}", mr.MD_CACHE_TTL)]
@@ -297,15 +297,10 @@ def test_snippet_is_cached(md_on):
 def test_snippet_key_and_ttl(md_on, monkeypatch):
     calls = []
     monkeypatch.setattr(
-        mr.cache, "set", lambda k, v, timeout: calls.append((k, timeout))
+        mr.cache, "set_many", lambda d, timeout: calls.extend((k, timeout) for k in d)
     )
     mr.submission_description_snippet(_sub("x", pk=7))
-    # The snippet is derived from the rendered HTML, which is cached on the
-    # way (shared with the list view), then the text itself.
-    assert calls == [
-        (f"md:{mr.RENDER_FINGERPRINT}:html:7:{_TS_US}", mr.MD_CACHE_TTL),
-        (f"md:{mr.RENDER_FINGERPRINT}:text:7:{_TS_US}", mr.MD_CACHE_TTL),
-    ]
+    assert calls == [(f"md:{mr.RENDER_FINGERPRINT}:text:7:{_TS_US}", mr.MD_CACHE_TTL)]
 
 
 def test_snippet_fingerprint_change_forces_fresh(md_on, monkeypatch):
@@ -337,7 +332,18 @@ def test_headings_do_not_trigger_removed_notice():
 
 @pytest.mark.parametrize(
     "src",
-    ["[r](/relative)", "[p](//evil.example)", "[f](#frag)", "[d](data:text/html,x)"],
+    [
+        "[r](/relative)",
+        "[p](//evil.example)",
+        "[f](#frag)",
+        "[d](data:text/html,x)",
+        # A scheme without '//' and a host is not an absolute link.
+        "[h](https:e.org)",
+        "[h](http:/x)",
+        "[h](https:///x)",
+        "[h](https:\\\\e.org)",
+        "[m](mailto:)",
+    ],
 )
 def test_schemeless_and_blocked_hrefs_are_dropped(src):
     out = str(render_markdown(src))
@@ -351,6 +357,7 @@ def test_schemeless_and_blocked_hrefs_are_dropped(src):
         ("[ok](https://e.org)", "https://e.org"),
         ("[ok](HTTPS://e.org)", "HTTPS://e.org"),
         ("[m](mailto:a@b.c)", "mailto:a@b.c"),
+        ("[p](https://e.org:8080/p?q=1#f)", "https://e.org:8080/p?q=1#f"),
     ],
 )
 def test_allowed_schemes_keep_href(src, href):

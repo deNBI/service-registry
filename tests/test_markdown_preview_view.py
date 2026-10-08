@@ -2,8 +2,8 @@
 Write/Preview description editor.
 
 The endpoint renders through the shared render_markdown pipeline, is gated on
-the markdown_descriptions feature flag (404 when off) and is per-IP
-rate-limited on RATE_LIMIT_VALIDATE like validate_field, but non-blocking: a
+the markdown_descriptions feature flag (404 when off) and is rate-limited on
+RATE_LIMIT_PREVIEW per signed-in user, else per IP, but non-blocking: a
 throttled request gets a 200 with an inline message because the editor JS
 shows any non-2xx response as a generic "Preview unavailable".
 """
@@ -149,7 +149,7 @@ def test_preview_is_rate_limited_with_friendly_message(
     shows non-2xx as a generic error), and the bucket is keyed on the real client IP (X-Real-IP)."""
     cache.clear()
     try:
-        limit = int(django_settings.RATE_LIMIT_VALIDATE.split("/")[0])
+        limit = int(django_settings.RATE_LIMIT_PREVIEW.split("/")[0])
         payload = {"service_description": "**bold**"}
         ip_a, ip_b = "203.0.113.9", "203.0.113.10"
         for _ in range(limit):
@@ -165,6 +165,49 @@ def test_preview_is_rate_limited_with_friendly_message(
         assert b"<strong>bold</strong>" in resp.content
     finally:
         cache.clear()  # don't leak the counter into other tests
+
+
+@override_settings(RATELIMIT_ENABLE=True)
+def test_signed_in_preview_bucket_is_separate_from_the_ip_bucket(
+    client, md_on, frozen_ratelimit_clock, django_user_model
+):
+    """A signed-in user (an admin using the editor) is counted on their own
+    bucket, so public visitors behind the same address cannot use it up, and
+    the bucket follows the user, not the address."""
+    cache.clear()
+    try:
+        limit = int(django_settings.RATE_LIMIT_PREVIEW.split("/")[0])
+        payload = {"service_description": "**bold**"}
+        ip = "203.0.113.9"
+        for _ in range(limit + 1):
+            client.post(URL, payload, HTTP_X_REAL_IP=ip)
+        assert (
+            b"Too many previews" in client.post(URL, payload, HTTP_X_REAL_IP=ip).content
+        )
+
+        client.force_login(django_user_model.objects.create_user("editor"))
+        for _ in range(limit):
+            resp = client.post(URL, payload, HTTP_X_REAL_IP=ip)
+            assert b"<strong>bold</strong>" in resp.content
+        resp = client.post(URL, payload, HTTP_X_REAL_IP="203.0.113.10")
+        assert b"Too many previews" in resp.content
+    finally:
+        cache.clear()
+
+
+@override_settings(RATELIMIT_ENABLE=True)
+def test_preview_and_validation_have_separate_buckets(
+    client, md_on, frozen_ratelimit_clock
+):
+    cache.clear()
+    try:
+        limit = int(django_settings.RATE_LIMIT_VALIDATE.split("/")[0])
+        for _ in range(limit + 1):
+            client.post("/register/validate/", {"field": "service_name"})
+        resp = client.post(URL, {"service_description": "**bold**"})
+        assert b"<strong>bold</strong>" in resp.content
+    finally:
+        cache.clear()
 
 
 def test_preview_accepts_service_description_field_name(client, md_on):

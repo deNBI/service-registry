@@ -3,15 +3,15 @@
 Single source of truth: every surface (catalogue, API, editor preview, admin)
 renders through render_markdown() so output is identical everywhere.
 
-The parser is markdown-it-py (CommonMark). It runs in linear time and caps
-nesting depth, so no input within the description length limit can pin a
-worker or exhaust the stack (Python-Markdown took minutes on 5,000 backticks
-and raised RecursionError on deeply nested lists).
+The parser is markdown-it-py (CommonMark) with a nesting cap; its render time
+grows linearly with input size for the slow-to-parse inputs tested in
+tests/test_markdown_robustness.py.
 """
 
 import hashlib
 import html as _html
 import importlib.metadata
+import logging
 from html.parser import HTMLParser
 import re
 from pathlib import Path
@@ -21,6 +21,8 @@ from django.conf import settings
 from django.core.cache import cache
 from django.utils.safestring import SafeString, mark_safe
 from markdown_it import MarkdownIt
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_TAGS = [
     "p",
@@ -37,14 +39,18 @@ ALLOWED_TAGS = [
     "h6",
 ]
 ALLOWED_PROTOCOLS = ["http", "https", "mailto"]
-_ALLOWED_HREF_RE = re.compile(r"(https?:|mailto:)", re.IGNORECASE)
+# An absolute web URL ('https://' followed by a host) or a non-empty
+# mailto:. 'https:x.org' or 'http:/x' are not: browsers resolve them as
+# relative or host-less links.
+_ALLOWED_HREF_RE = re.compile(r"(https?://[^/\\?#\s]|mailto:[^\s])", re.IGNORECASE)
 _OL_START_RE = re.compile(r"\d{1,9}")
 
 
 def _allowed_a_attr(tag: str, name: str, value: str) -> bool:
-    """bleach attribute filter for <a>: keep title; keep href only with an
-    explicit http/https/mailto scheme. bleach's protocol check alone lets
-    scheme-less hrefs ('/x', '//host', '#frag') through."""
+    """bleach attribute filter for <a>: keep title; keep href only when it is
+    an absolute http(s) URL with a host or a non-empty mailto:. bleach's
+    protocol check alone lets scheme-less hrefs ('/x', '//host', '#frag')
+    and host-less ones ('https:x.org') through."""
     if name == "title":
         return True
     if name == "href":
@@ -140,7 +146,7 @@ def _visible_text(fragment: str) -> str:
 def _harden_anchors(html: str) -> str:
     """Finish anchors bleach has already filtered. No autolinking of bare text.
 
-    An anchor whose href bleach dropped (blocked or scheme-less link) is
+    An anchor whose href bleach dropped (blocked, scheme-less or host-less link) is
     unwrapped to its inner text rather than left as a dead <a>. An anchor
     with no VISIBLE text is unwrapped too, so no text-less link remains.
     Visible text means tags stripped, entities decoded, whitespace including
@@ -241,8 +247,8 @@ def render_with_notice(text: str) -> tuple[SafeString, bool]:
     """Return (safe_html, removed) for the description editor's Preview tab.
 
     removed is True when sanitization dropped content the user wrote: a link
-    lost its href (blocked javascript:/data: protocol or no explicit
-    http/https/mailto scheme; such anchors are unwrapped to text), a
+    lost its href (a blocked scheme, or not an absolute http(s) URL with a
+    host or a non-empty mailto:; such anchors are unwrapped to text), a
     Markdown-generated disallowed tag (code, image, horizontal rule) was
     stripped, or content nested deeper than MAX_NESTING was skipped. The
     baseline is _md_to_html, whose output contains only Markdown-generated
@@ -346,6 +352,61 @@ def _cache_key(kind: str, submission) -> str:
     return f"md:{RENDER_FINGERPRINT}:{kind}:{submission.pk}:{ts}"
 
 
+def _render_kind(kind: str, raw: str) -> str:
+    """Uncached rendering: sanitized HTML ("html") or card snippet ("text")."""
+    html = str(render_markdown(raw))
+    return html if kind == "html" else _html_to_text(html, SNIPPET_LIMIT)
+
+
+def prime_descriptions(submissions, kind: str) -> None:
+    """Attach the flag-on rendering of `kind` ("html" for the list view,
+    "text" for card snippets) to each submission, with one cache read for all
+    of them and at most one write for the misses.
+
+    The cache only saves work: if it fails (for example Redis is down), the
+    descriptions are rendered without it and the page still loads.
+    Unsaved submissions have no stable key and are rendered uncached.
+    """
+    if not markdown_enabled():
+        return
+    subs = {id(s): s for s in submissions if s.pk is not None}.values()
+    keys = {id(s): _cache_key(kind, s) for s in subs}
+    try:
+        found = cache.get_many(list(keys.values())) if keys else {}
+    except Exception as exc:
+        logger.warning(
+            "description cache read failed (%s); rendering uncached",
+            type(exc).__name__,
+        )
+        found = None
+    misses = {}
+    for s in subs:
+        key = keys[id(s)]
+        value = (found or {}).get(key)
+        if value is None:
+            value = misses[key] = _render_kind(kind, s.service_description or "")
+        if not hasattr(s, "_md_rendered"):
+            s._md_rendered = {}
+        s._md_rendered[kind] = (key, value)
+    if misses and found is not None:
+        try:
+            cache.set_many(misses, timeout=MD_CACHE_TTL)
+        except Exception as exc:
+            logger.warning("description cache write failed (%s)", type(exc).__name__)
+
+
+def _rendered(submission, kind: str) -> str:
+    """Flag-on rendering of `kind` for one submission: the value attached by
+    prime_descriptions() when it is still current, otherwise primed now."""
+    if submission.pk is None:
+        return _render_kind(kind, submission.service_description or "")
+    key, value = getattr(submission, "_md_rendered", {}).get(kind, (None, None))
+    if key != _cache_key(kind, submission):
+        prime_descriptions([submission], kind)
+        key, value = submission._md_rendered[kind]
+    return value
+
+
 def render_submission_description(submission) -> str:
     """Flag-aware, cached rendering for a submission's description.
 
@@ -357,30 +418,17 @@ def render_submission_description(submission) -> str:
     raw = submission.service_description or ""
     if not markdown_enabled():
         return decode_legacy_entities(raw)
-    key = _cache_key("html", submission)
-    cached = cache.get(key)
-    if cached is not None:
-        return mark_safe(cached)
-    html = render_markdown(raw)
-    cache.set(key, str(html), timeout=MD_CACHE_TTL)
-    return html
+    return mark_safe(_rendered(submission, "html"))
 
 
 def submission_description_snippet(submission) -> str:
     """Flag-aware, cached plain-text card snippet for a submission.
 
     Flag off: the plain text with legacy entities decoded. Flag on: the same
-    text markdown_to_text(raw) gives, derived from the (cached) rendered HTML
-    so the Markdown is parsed once for both the card and the list view.
-    Always a plain str for the template to autoescape.
+    text markdown_to_text(raw) gives. Always a plain str for the template to
+    autoescape.
     """
     raw = submission.service_description or ""
     if not markdown_enabled():
         return decode_legacy_entities(raw)
-    key = _cache_key("text", submission)
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
-    text = _html_to_text(str(render_submission_description(submission)), SNIPPET_LIMIT)
-    cache.set(key, text, timeout=MD_CACHE_TTL)
-    return text
+    return _rendered(submission, "text")

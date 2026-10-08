@@ -251,7 +251,7 @@ The command is read-only (a single query, no database or cache writes). Each fla
 | Reason            | Meaning                                                                                                         |
 | ----------------- | --------------------------------------------------------------------------------------------------------------- |
 | `text_changed`    | The visible text would differ once rendered (e.g. `*` or `_` pairs become emphasis, a line starting with `# ` (hash and space) becomes a heading and loses the `#`, a line starting with `- ` becomes a list item even directly under a line of text). A paragraph starting `1990.` becomes a list numbered from 1990, but its visible text is unchanged, so it is not flagged |
-| `content_removed` | Sanitization would drop content: code, an image, a horizontal rule, lists nested more than nine levels deep (or quotes about twenty), or a link other than `http`, `https` or `mailto` (a blocked scheme such as `javascript:`, or a relative link such as `/about`) |
+| `content_removed` | Sanitization would drop content: code, an image, a horizontal rule, lists nested more than nine levels deep (or quotes about twenty), or a link that is not a full `https://`, `http://` or `mailto:` address (a blocked scheme such as `javascript:`, or a relative link such as `/about`) |
 
 Legacy rows containing HTML entities such as `&gt;` are not flagged, because every surface already displays them as the intended characters. Headings are supported, so a `#` heading is reported only as `text_changed`. The command ends with `N row(s) flagged.` and, when any row is flagged, exits non-zero with `Flagged rows found; fix them in the admin before enabling markdown_descriptions.`, so it can gate a deployment script. `--csv PATH` also writes `id,service_name,status,reasons` for the flagged rows, with the same spreadsheet formula guard as the CSV export (see below).
 
@@ -446,8 +446,8 @@ Both formats include all submission fields:
 | bio.tools (structured) | `biotools_functions`, `biotools_publications`, `biotools_documentation`, `biotools_download`, `biotools_links` — JSON strings in CSV, arrays of objects in JSON                                  |
 | bio.tools (sync)       | `biotools_last_synced_at` — ISO datetime of last successful sync, or empty                                                                                                                       |
 
-!!! note "CSV formula-injection guard"
-In the CSV export, any text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'` so spreadsheet applications treat it as text instead of a formula. A description that starts with a Markdown bullet therefore appears as `'- item`. The JSON export and the API return the raw values unchanged.
+!!! note "CSV cells that start like a formula"
+    In the CSV export, any text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'` so spreadsheet applications treat it as text instead of a formula. This applies to every column: a description that starts with a Markdown bullet appears as `'- item`, and a phone number written as `+49 ...` appears as `'+49 ...`. The JSON export and the API return the raw values unchanged.
 
 !!! note "JSON export uses a nested submitter object"
 In the JSON export, submitter fields are grouped under a `"submitter"` key:

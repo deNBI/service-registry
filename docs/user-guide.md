@@ -48,7 +48,7 @@ bioinformatics service for inclusion in the [de.NBI services catalogue](https://
    | Bullet (`- item`) and numbered (`1. item`) lists                             | Tables and strikethrough (`~~text~~`) (shown as plain text)                         |
    | Links written as `[label](https://example.com)` or `[label](mailto:...)`     | Bare URLs and `<https://...>` (shown as plain text, not turned into links)          |
    | Blockquotes (`> quoted text`)                                                | Raw HTML (shown as literal text, never executed)                                    |
-   | Line breaks (a single newline starts a new line)                             | Links other than `http`, `https` and `mailto`, including relative links such as `/about` (the link is removed, the label kept) |
+   | Line breaks (a single newline starts a new line)                             | Links other than full `https://...`, `http://...` and `mailto:...` addresses, including relative links such as `/about` (the link is removed, the label kept) |
 
    A few details:
 
@@ -56,7 +56,7 @@ bioinformatics service for inclusion in the [de.NBI services catalogue](https://
    - Web links open in a new tab. `mailto:` links open your mail client instead, without a new tab. A link with no visible text (for example a badge whose image is removed) is dropped.
    - To nest a list, indent the nested items with 4 spaces.
    - A line that starts with `#` and a space becomes a heading (`#1` stays as written). A line that starts with `- ` becomes a list item, even directly under a line of text. A paragraph that starts with a number and a full stop (such as `1990. We started`) becomes a list numbered from that number. Put a backslash in front to keep the text as written: `\# Title`, `\- item`, `1990\. We started`.
-   - The preview shows a notice when content was removed: images, code, horizontal rules, lists nested more than nine levels deep (or quotes nested about twenty deep), or links other than `http`, `https` and `mailto` (including relative links).
+   - The preview shows a notice when content was removed: images, code, horizontal rules, lists nested more than nine levels deep (or quotes nested about twenty deep), or links that are not full `https://`, `http://` or `mailto:` addresses (including relative links).
 
 3. Click **Submit Registration**.
 
