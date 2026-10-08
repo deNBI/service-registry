@@ -62,6 +62,7 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_biotools.py` | bio.tools client (HTTP mocks), sync logic, tasks, signals, views |
 | `test_management_commands.py` | `sync_edam`, `sync_biotools` management commands, template tags, context processor |
 | `test_logo_utils.py` | `validate_and_process_logo()` — magic bytes, size limits, EXIF stripping, SVG sanitisation, XML attack prevention (XXE/billion-laughs), path traversal |
+| `test_media_serving.py` | `/media/` response policy header; files served unchanged; site pages keep the site policy |
 | `test_template_tags.py` | `linkify_description` filter — named links, bare URLs, paragraph/line breaks, XSS escaping |
 
 Total: **~450 tests** (enforced ≥ 80% coverage threshold).

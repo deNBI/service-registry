@@ -273,8 +273,14 @@ docker compose logs web --tail 50
 
 Submitters can upload a logo image (PNG, JPEG, or SVG) with each service registration.
 Uploaded files are stored under `mediafiles/logos/<uuid>.<ext>` inside the container and
-served by Gunicorn via Django's `django.views.static.serve` — the host Nginx simply
-proxies all requests through, so no special Nginx `location /media/` block is needed.
+served by Gunicorn via Django's `django.views.static.serve`. The host Nginx proxies
+these requests through; the bundled config's `location /media/` block only adds
+cache headers.
+
+Django serves uploaded media with its own restrictive `Content-Security-Policy`
+header (`default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; sandbox`).
+Nginx must pass this header through unchanged: do not add `proxy_hide_header
+Content-Security-Policy` or an `add_header Content-Security-Policy` for `/media/`.
 
 ### Persistent storage in production
 
