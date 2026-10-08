@@ -357,9 +357,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
 
     @admin.display(description="License(s)")
     def licenses_summary(self, obj):
-        # .all() reads the prefetch from get_queryset (values_list() would issue
-        # one query per changelist row).
-        ids = [lic.license_id for lic in obj.licenses.all()]
+        ids = list(obj.licenses.values_list("license_id", flat=True))
         if ids:
             shown = ", ".join(ids[:3])
             if len(ids) > 3:
