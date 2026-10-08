@@ -292,10 +292,10 @@ enough headroom. With a lower limit, a large upload is refused by nginx with a
 bare HTTP 413 page instead of the application's validation message.
 
 The bundled `nginx/host/service-registry.bi.denbi.de.conf` sets `12m` for
-`/api/`, `/register/` and `/update/`, but keeps the server-wide default of
-`64k` for everything else, including the admin. To allow admin logo uploads with
-that file, add a `location` block for the admin prefix with
-`client_max_body_size 12m;` (see the commented-out admin block in the file).
+`/api/`, `/register/`, `/update/` and `/admin-denbi/`, and keeps a server-wide
+default of `64k` for everything else. Its admin `location` uses the default
+prefix: if you change `ADMIN_URL_PREFIX`, change that `location` path to match,
+otherwise admin logo uploads over 64 KB are refused by nginx.
 
 To check the effective limits on a server:
 

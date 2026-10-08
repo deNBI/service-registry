@@ -64,6 +64,7 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_logo_utils.py` | `validate_and_process_logo()` — magic bytes, size, pixel and SVG size limits, EXIF stripping, SVG element allowlist and CSS reference rules (incl. linear-scaling checks), XML entity handling, path traversal |
 | `test_logo_upload_routes.py` | The same logo scenarios through every upload route (registration, edit, API create, API PATCH, admin); stored logos kept on save; limits shown in form, admin and API schema |
 | `test_media_serving.py` | `/media/` response policy header; files served unchanged; site pages keep the site policy |
+| `test_nginx_conf.py` | The bundled host nginx vhost raises the 64k body limit to 12m on every upload location (`/api/`, `/register/`, `/update/` and the default admin prefix) |
 | `test_migrations_complete.py` | Every model change has a migration (`makemigrations --check` reports nothing pending) |
 | `test_template_tags.py` | `linkify_description` filter — named links, bare URLs, paragraph/line breaks, XSS escaping |
 
