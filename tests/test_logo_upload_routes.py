@@ -264,6 +264,16 @@ class TestEveryUploadRoute:
         assert not ok
         assert sub is None or not sub.logo
 
+    def test_svg_wrapping_a_bitmap_is_rejected(self, env, route):
+        svg = (
+            b'<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">'
+            b'<image width="4" height="4" href="data:image/png;base64,iVBORw0KGgo="/>'
+            b"</svg>"
+        )
+        ok, sub = route(env, _upload("logo.svg", svg, "image/svg+xml"))
+        assert not ok
+        assert sub is None or not sub.logo
+
     def test_image_over_pixel_limit_is_rejected(self, env, route):
         env.settings.LOGO_MAX_PIXELS = 100
         ok, sub = route(env, _upload("logo.png", _png((11, 10)), "image/png"))

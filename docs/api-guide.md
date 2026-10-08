@@ -291,7 +291,7 @@ and the rest of the file is stored.
 
 - Magic-byte type detection (file extension and MIME header are never trusted)
 - JPEG/PNG: pixel count read from the header before decoding, then re-encoded via Pillow to strip EXIF metadata and verify integrity
-- SVG: parsed with Python's stdlib XML parser (external entities are not loaded, and text from internal entities goes through the same rules as the rest of the file); the root must be `<svg>`; only standard drawing elements are kept (shapes, text, gradients, patterns, clip paths, masks, filters, styles; embedded bitmap images are removed); `on*` attributes and namespaced attributes other than `xlink:href`, `xml:space` and `xml:lang` are removed; links may only point inside the logo (`#id`); CSS references may also use embedded `data:` resources such as fonts
+- SVG: parsed with Python's stdlib XML parser (external entities are not loaded, and text from internal entities goes through the same rules as the rest of the file); the root must be `<svg>`; only standard drawing elements are kept (shapes, text, gradients, patterns, clip paths, masks, filters, styles); an SVG containing a bitmap image (`<image>`) or other content from outside the file is rejected; `on*` attributes and namespaced attributes other than `xlink:href`, `xml:space` and `xml:lang` are removed; links may only point inside the logo (`#id`); CSS references may also use embedded `data:` resources such as fonts
 - Original filename is discarded; the file is stored under a UUID path (`media/logos/<uuid4>.<ext>`)
 
 Old logos are **not deleted** when a logo is replaced — previous files remain on disk.

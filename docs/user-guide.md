@@ -216,20 +216,22 @@ registry next to the upload field.
 - JPEG and PNG files are re-encoded to strip any embedded EXIF metadata
 - SVG files are reduced to standard drawing content: shapes, paths, text,
   gradients, patterns, clip paths, masks, filters and styles. Anything else
-  (for example embedded HTML, animations, scripts, bitmap images or editor
-  metadata) is removed. Links may only point inside the logo itself; style
+  (for example embedded HTML, animations, scripts or editor metadata) is
+  removed. Links may only point inside the logo itself; style
   references may also use embedded `data:` resources such as fonts
 - The original filename is discarded — a unique identifier is assigned internally
 - The logo appears in the admin view and is accessible via the API (`logo_url` field)
 
 **Tips for SVG logos:** export a plain SVG (for example "Plain SVG" in Inkscape or
-"SVG" in Illustrator/Figma) with fonts embedded rather than linked. Bitmap
-images inside an SVG are not kept: use vector shapes, or upload the logo as a
-PNG instead.
+"SVG" in Illustrator/Figma) with fonts embedded rather than linked. An
+SVG that only wraps a bitmap image (a PNG or JPEG saved "as SVG") is rejected:
+upload the bitmap itself as a PNG or JPEG instead, or use a vector-only SVG.
 An SVG is rejected with a message if it is larger than the SVG limit, if its root
-element is not `<svg>`, if it is nested unusually deeply, if its styles or
-attributes use backslash escapes, or if its styles or attributes use resource
-references in an unsupported form.
+element is not `<svg>`, if it is nested unusually deeply, if it contains a
+bitmap image or other content taken from outside the file (only links may point
+elsewhere; they are removed), or if its styles or attributes use resource
+references in an unsupported form. The file may start with an XML declaration,
+a comment or a DOCTYPE before the `<svg>` element.
 
 To replace a logo, simply upload a new one when editing your submission. Saving
 an edit without choosing a new file keeps the current logo exactly as it is.

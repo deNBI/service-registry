@@ -764,13 +764,40 @@ class TestSvgDesignToolExportsPreserved:
 
 
 class TestSvgCssEscapes:
-    def test_escaped_characters_in_style_element_are_rejected(self):
-        with pytest.raises(ValidationError, match="escape"):
-            _process(_svg("<style>rect{fill:\\75 rl(x)}</style>"))
+    """CSS escapes are decoded by the tokenizer (tinycss2) as a browser does,
+    so an escaped name gets the same rules as a plain one, and text whose
+    escapes need no change is kept byte for byte."""
 
-    def test_escaped_characters_in_style_attribute_are_rejected(self):
-        with pytest.raises(ValidationError, match="escape"):
-            _process(_svg('<rect style="fill:\\75 rl(x)"/>'))
+    def test_escaped_url_in_style_element_is_neutralised(self):
+        out = _process(_svg("<style>rect{fill:\\75 rl(https://e.org/x)}</style>"))
+        assert "e.org" not in out and "rect{fill:none}" in out
+
+    def test_escaped_url_in_style_attribute_is_neutralised(self):
+        out = _process(_svg('<rect style="fill:u\\72 l(https://e.org/x)"/>'))
+        assert "e.org" not in out and 'style="fill:none"' in out
+
+    def test_escaped_fragment_url_is_kept_as_written(self):
+        out = _process(_svg('<rect fill="u\\rl(#g)"/>'))
+        assert 'fill="u\\rl(#g)"' in out
+
+    def test_escaped_import_is_removed(self):
+        out = _process(
+            _svg('<style>@\\69mport "https://e.org/a.css"; rect{fill:red}</style>')
+        )
+        assert "e.org" not in out and "rect{fill:red}" in out
+
+    def test_escaped_string_image_function_is_rejected(self):
+        with pytest.raises(ValidationError, match="reference"):
+            _process(_svg("<rect style=\"fill:image-s\\65t('x.png')\"/>"))
+
+    def test_escaped_font_family_is_kept(self):
+        font = 'font-family="&quot;\\5FAE\\8F6F\\96C5\\9ED1&quot;"'
+        out = _process(_svg(f"<text {font}>A</text>"))
+        assert font in out
+
+    def test_backslash_in_label_is_kept(self):
+        out = _process(_svg('<g aria-label="C:\\logos\\a"><rect/></g>'))
+        assert 'aria-label="C:\\logos\\a"' in out
 
 
 class TestSvgRemovalKeepsSurroundingText:
@@ -825,9 +852,9 @@ class TestSvgReferencesInAllForms:
         with pytest.raises(ValidationError, match="reference"):
             _process(_svg(f"<style>{css}</style>"))
 
-    def test_escaped_characters_in_presentation_attribute_are_rejected(self):
-        with pytest.raises(ValidationError, match="escape"):
-            _process(_svg('<rect fill="\\75 rl(x)"/>'))
+    def test_escaped_url_in_presentation_attribute_is_neutralised(self):
+        out = _process(_svg('<rect fill="\\75 rl(https://e.org/x)"/>'))
+        assert "e.org" not in out and 'fill="none"' in out
 
     def test_editor_attribute_with_backslash_is_dropped_not_rejected(self):
         ink = ' xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"'
@@ -932,6 +959,9 @@ class TestSvgCssScaling:
             lambda n: "url(" * (n // 4),
             lambda n: "url(#a) " * (n // 8),
             lambda n: "@import " * (n // 8),
+            lambda n: "\\72 " * (n // 4),
+            lambda n: "u\\72 l(" * (n // 7),
+            lambda n: "'" + "\\" * n,
         ],
         ids=[
             "unclosed-spaces",
@@ -940,6 +970,9 @@ class TestSvgCssScaling:
             "repeated-open",
             "repeated-fragment",
             "repeated-import",
+            "repeated-escape",
+            "repeated-escaped-open",
+            "string-of-backslashes",
         ],
     )
     @pytest.mark.parametrize("stylesheet", [False, True], ids=["attribute", "style"])
@@ -1049,3 +1082,82 @@ class TestSvgPruningScaling:
 
         small, large = self._cost(svg(5_000)), self._cost(svg(20_000))
         assert large < 10 * max(small, 1e-4)
+
+
+class TestSvgContentFromOutsideTheFile:
+    """A reference outside the file is removed; on anything but a link that
+    would leave the element empty (a wrapped bitmap would be stored as a blank
+    logo), so the upload is rejected with a message instead."""
+
+    XL = ' xmlns:xlink="http://www.w3.org/1999/xlink"'
+    PNG = "data:image/png;base64,iVBORw0KGgo="
+
+    @pytest.mark.parametrize("attr", ["href", "xlink:href"])
+    def test_wrapped_bitmap_is_rejected(self, attr):
+        with pytest.raises(ValidationError, match="bitmap image"):
+            _process(
+                _svg(f'<image width="10" height="10" {attr}="{self.PNG}"/>', self.XL)
+            )
+
+    def test_linked_bitmap_is_rejected(self):
+        with pytest.raises(ValidationError, match="bitmap image"):
+            _process(_svg('<image href="https://e.org/logo.png"/>'))
+
+    def test_fe_image_from_outside_is_rejected(self):
+        body = '<filter id="f"><feImage href="https://e.org/x.png"/></filter>'
+        with pytest.raises(ValidationError, match=r"bitmap image \(<feImage>\)"):
+            _process(_svg(body))
+
+    def test_use_of_another_file_is_rejected(self):
+        with pytest.raises(ValidationError, match=r"outside the file \(<use>\)"):
+            _process(_svg('<use href="other.svg#shape"/>'))
+
+    def test_outside_link_is_removed_and_the_logo_kept(self):
+        out = _process(_svg('<a href="https://e.org"><rect width="1" height="1"/></a>'))
+        assert "e.org" not in out and '<rect width="1" height="1" />' in out
+
+    @pytest.mark.parametrize("tag", ["use", "image"])
+    def test_fragment_references_are_kept(self, tag):
+        out = _process(_svg(f'<rect id="s"/><{tag} href="#s"/>'))
+        assert f'<{tag} href="#s" />' in out
+
+
+class TestSvgPrologue:
+    """An SVG may start with an XML declaration, a comment or a DOCTYPE before
+    its <svg> element (Illustrator and Inkscape exports do)."""
+
+    BODY = f'<svg xmlns="{_SVG_NS}"><rect width="1" height="1"/></svg>'
+    DOCTYPE = (
+        '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" '
+        '"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">'
+    )
+
+    @pytest.mark.parametrize(
+        "prologue",
+        [
+            "<!-- Generator: an editor -->",
+            DOCTYPE,
+            "<!-- Generator: an editor -->\n" + DOCTYPE + "\n",
+            '<?xml version="1.0"?><!-- c -->' + DOCTYPE,
+            "\ufeff<!-- c -->",
+        ],
+        ids=["comment", "doctype", "comment_doctype", "decl", "bom_comment"],
+    )
+    def test_accepted(self, prologue):
+        out = _process(prologue + self.BODY)
+        assert '<rect width="1" height="1" />' in out
+        assert "<!--" not in out and "DOCTYPE" not in out
+
+    def test_lowercase_doctype_gets_the_xml_parse_message(self):
+        # XML requires "DOCTYPE" in capitals: the file reaches the parser and
+        # gets its message instead of "Unsupported file type".
+        with pytest.raises(ValidationError, match="could not be parsed"):
+            _process("<!doctype svg>" + self.BODY)
+
+    def test_other_xml_after_a_comment_is_not_an_svg(self):
+        with pytest.raises(ValidationError, match="root element must be <svg>"):
+            _process("<!-- c --><note>text</note>")
+
+    def test_html_document_is_rejected(self):
+        with pytest.raises(ValidationError):
+            _process("<!DOCTYPE html><html><body><p>x</body></html>")

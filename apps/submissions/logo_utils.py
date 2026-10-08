@@ -16,8 +16,9 @@ Security measures applied:
   - JPEG/PNG: re-encoded via Pillow to strip EXIF metadata and verify integrity
   - SVG: parsed via stdlib xml.etree.ElementTree (safe on Python 3.12+ / Expat 2.7.1),
     root must be an SVG <svg>; only an allowlist of SVG drawing elements is kept;
-    on* event attributes and non-fragment hrefs are dropped; CSS references are
-    limited to same-document fragments and data: URLs
+    on* event attributes are dropped; a non-fragment href is dropped on <a> and
+    rejects the file on any other element (e.g. a wrapped bitmap <image>); CSS
+    references are limited to same-document fragments and data: URLs
   - UUID filenames are assigned by _logo_upload_to() in models.py; the original
     filename is discarded after this module returns.
 """
@@ -87,7 +88,8 @@ _SVG_ALLOWED_ELEMENTS: frozenset[str] = frozenset(
 )  # fmt: skip
 
 # CSS text can only reference a resource through one of these. Text without
-# any of them (and without backslash escapes, which are rejected) is left as is.
+# any of them, and without a backslash (which can hide one of them in an
+# escape), is left as is.
 _CSS_REFERENCE_HINT_RE = re.compile(
     r"url\(|image-set\(|image\(|src\(|@import", re.IGNORECASE
 )
@@ -183,11 +185,14 @@ def _sniff_type(file_obj) -> str:
     else:
         sample_str = sample
     stripped = sample_str.lstrip()
+    # An SVG may start with an XML declaration, a comment (e.g. an editor's
+    # "Generator" note) or a DOCTYPE before the <svg> root; the parser and the
+    # root check in _sanitise_svg() decide whether it really is one.
     # Accept an optional namespace prefix on the root tag (e.g. <ns0:svg ...>),
     # which legacy records sanitised before the default-namespace fix carry.
     if (
-        stripped.startswith("<?xml")
-        or stripped.startswith("<svg")
+        stripped.startswith(("<?xml", "<!--", "<svg"))
+        or stripped[:9].lower() == "<!doctype"
         or _SVG_ROOT_RE.match(stripped)
     ):
         return "svg"
@@ -335,15 +340,10 @@ def _clean_css(css: str, *, stylesheet: bool = False) -> str:
     import tinycss2
     from tinycss2.ast import IdentToken
 
-    if "\\" in css:
-        raise ValidationError(
-            _(
-                "The SVG uses backslash-escaped characters in its styles or "
-                "attributes, which are not supported. Please export the SVG "
-                "without escapes."
-            )
-        )
-    if not _CSS_REFERENCE_HINT_RE.search(css):
+    # The plain-text check below cannot see escaped names ('u\72 l(' is
+    # url(), '@\69mport' is @import), so text with a backslash is always
+    # tokenized: tinycss2 decodes escapes in names and values.
+    if "\\" not in css and not _CSS_REFERENCE_HINT_RE.search(css):
         return css
 
     if stylesheet:
@@ -468,6 +468,37 @@ def _prune_elements(root) -> None:
         parent[:] = kept
 
 
+def _reject_outside_reference(elem) -> None:
+    """Reject an element whose content comes from outside the file.
+
+    Such references are removed, which would leave the element empty: an
+    <image> wrapping a PNG or JPEG (a common way to export a bitmap logo as
+    "SVG") would be stored as a blank logo. Only a link (<a>) keeps working
+    without its href, so it is the one element whose reference is dropped
+    silently.
+    """
+    local = elem.tag.rpartition("}")[2]
+    if local == "a":
+        return
+    if local in ("image", "feImage"):
+        raise ValidationError(
+            _(
+                "The SVG contains a bitmap image (<%(tag)s>), which is not "
+                "supported in SVG logos. Please upload the bitmap as a PNG or "
+                "JPEG file instead, or use a vector-only SVG."
+            )
+            % {"tag": local}
+        )
+    raise ValidationError(
+        _(
+            "The SVG uses content from outside the file (<%(tag)s>), which is "
+            "not supported. Please export the SVG with all content inside the "
+            "file."
+        )
+        % {"tag": local}
+    )
+
+
 def _sanitise_svg(file_obj) -> bytes:
     """
     Parse SVG with stdlib xml.etree.ElementTree (safe on Python 3.12+/Expat 2.7.1), then:
@@ -475,7 +506,8 @@ def _sanitise_svg(file_obj) -> bytes:
       - keep only allowlisted SVG elements (see _SVG_ALLOWED_ELEMENTS)
       - drop namespaced attributes other than xlink:href, xml:space, xml:lang
       - drop on* event-handler attributes and src/action/formaction/ping
-      - drop href / xlink:href pointing outside the document (non-fragment URLs)
+      - drop href / xlink:href pointing outside the document on <a>, and
+        reject the file when any other element has one (_reject_outside_reference)
       - limit CSS (style elements, style and presentation attributes) to
         #fragment / data: references
     Returns sanitised SVG as UTF-8 bytes.
@@ -536,6 +568,7 @@ def _sanitise_svg(file_obj) -> bytes:
             if local_lower in ("href", "xlink:href") or attr in _HREF_ATTRS:
                 # Allow same-document fragment references (#id), block everything else
                 if value and not value.strip().startswith("#"):
+                    _reject_outside_reference(elem)
                     attrs_to_delete.append(attr)
 
         for attr in attrs_to_delete:
