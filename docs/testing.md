@@ -63,8 +63,16 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_management_commands.py` | `sync_edam`, `sync_biotools` management commands, template tags, context processor |
 | `test_logo_utils.py` | `validate_and_process_logo()` — magic bytes, size limits, EXIF stripping, SVG sanitisation, XML attack prevention (XXE/billion-laughs), path traversal |
 | `test_template_tags.py` | `linkify_description` filter — named links, bare URLs, paragraph/line breaks, XSS escaping |
+| `test_markdown_*.py`, `test_catalogue_markdown_render.py`, `test_api_markdown.py`, `test_admin_markdown.py` | Markdown descriptions: render/sanitize pipeline (heading shift, link filtering), removal of disallowed markup, cross-surface consistency, template filters, preview endpoint, Write/Preview editor markup, counter limits and WCAG AA text contrast of the editor CSS (`test_markdown_editor_render.py`), API `service_description_html`, admin editor widget and the view-only rendered row |
+| `test_markdown_robustness.py` | Markdown engine on slow-to-parse input: each of the max-length inputs tested scales linearly (4x input must cost under 10x, a load- and coverage-independent check; Python-Markdown, tried during development, measured 14-29x) and finishes, nesting cap reported as removed, ordered-list `start` filter |
+| `test_markdown_cache.py` | Description cache: one cache read per catalogue page, a service shown in two groups rendered once, pages and single renders still work with the cache unreachable |
+| `test_markdown_output_matrix.py` | Exact output of every description surface (catalogue, API, admin, preview, emails, exports, audit) for both flag states and each input class |
+| `test_field_partials.py` | `field.html` composed of `field_label.html` / `field_widget.html` / `field_feedback.html` (the fieldset branch reuses the widget and feedback partials): label or legend, inline-validation wrapper and error markup, with and without errors |
+| `test_audit_markdown_command.py` | `audit_markdown_descriptions` flagging, diff-centred previews, CSV output and exit status |
+| `test_export_formula_guard.py` | CSV cells that start like a formula get a leading `'` (`csv_safe` in `apps/submissions/csv_utils.py`) |
+| `test_email_plaintext.py` | `render_plaintext()`: plain-text email bodies rendered without HTML escaping |
 
-Total: **~450 tests** (enforced ≥ 80% coverage threshold).
+Run `pytest --collect-only -q` for the current test count; a coverage threshold of ≥ 80% is enforced.
 
 ---
 

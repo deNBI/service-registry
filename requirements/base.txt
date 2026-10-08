@@ -10,7 +10,7 @@ psycopg[binary]==3.3.3       # PostgreSQL adapter (psycopg3)
 # Configuration
 
 # REST API
-djangorestframework==3.16.1
+djangorestframework==3.17.2
 drf-spectacular==0.29.0       # OpenAPI 3.1 schema + Swagger UI + ReDoc
 
 # Task queue
@@ -28,6 +28,7 @@ altcha==1.0.0                 # CAPTCHA — self-hosted proof-of-work challenge 
 
 # HTML sanitisation (XSS prevention on free-text inputs)
 bleach==6.4.0
+markdown-it-py==4.0.0         # CommonMark parser for service descriptions (with a nesting cap)
 
 # File upload processing
 Pillow==12.3.0        # JPEG/PNG re-encoding and EXIF stripping

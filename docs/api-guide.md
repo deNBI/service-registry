@@ -194,6 +194,23 @@ curl https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
 `GET /api/v1/submissions/{id}/` — requires `ApiKey`. Returns your own submission in full detail.
 Returns 403 if the key does not belong to this submission.
 
+**Description fields.** `service_description` is the raw text as submitted (only line endings, Unicode normalisation and leading/trailing whitespace are normalised): plain text that may contain Markdown and any characters, including `<`, `>` and `&` and text that looks like HTML tags (rows saved by older versions of the web form may hold HTML entities such as `&gt;` instead). It is not HTML: HTML-escape it wherever you insert it into a page, or use `service_description_html`, which is always safe to insert. The detail response (this endpoint, and the create and update responses) also includes a read-only `service_description_html`:
+
+- It is always safe HTML, ready to insert into a page.
+- When Markdown rendering is enabled on the server, it is the sanitized rendered HTML (CommonMark): paragraphs, line breaks, bold/italic, lists (an ordered list may carry a numeric `start` attribute), blockquotes, headings and links. Headings are shifted down three levels, so it may contain `h4`, `h5` and `h6` (`#` becomes `h4`, `##` `h5`, `###` and deeper `h6`) but never `h1` to `h3`. Only absolute `http://` or `https://` links with a host and non-empty `mailto:` links are kept; other links (including relative ones and host-less ones such as `https:example.org`) are reduced to their text, and so are links with no visible text. Kept links carry `rel="nofollow noopener noreferrer"`; `http`/`https` links also get `target="_blank"`, `mailto` links do not.
+- When it is disabled, it is the plain text HTML-escaped once, with no paragraph or line-break markup.
+
+Descriptions saved before Markdown support was released may contain HTML entities such as `&gt;` in the raw `service_description` (the old web form escaped its input); newer rows are raw. `service_description_html` decodes those entities in both cases, so a legacy `x &gt; 5` displays as `x > 5`, never as a literal `&gt;`: with Markdown enabled it is rendered as above, and with Markdown disabled the decoded plain text is escaped exactly once. Consumers that display descriptions should prefer `service_description_html` over the raw field.
+
+`service_description_html` is not included in the list endpoint (`GET /api/v1/submissions/`) and is ignored if sent in a `POST` or `PATCH`. Length validation applies to the raw `service_description`.
+
+```json
+{
+  "service_description": "Aligns **short reads**.\n\n- fast\n- accurate",
+  "service_description_html": "<p>Aligns <strong>short reads</strong>.</p>\n<ul>\n<li>fast</li>\n<li>accurate</li>\n</ul>"
+}
+```
+
 ---
 
 ### Update a submission
@@ -470,6 +487,7 @@ header and in error bodies. Use it when reporting issues.
 | `internal_contact_email`  | required   | never        | Write-only; stored for admin use only                                            |
 | `primary_maturity_tag`    | ignored    | yes          | Read-only in API; set by admins via backend. See [Maturity Tags](#maturity-tags) |
 | `secondary_maturity_tags` | ignored    | yes          | Read-only in API; set by admins via backend. See [Maturity Tags](#maturity-tags) |
+| `service_description_html` | ignored   | detail only  | Read-only; safe HTML rendering of `service_description`. See [Retrieve a submission](#retrieve-a-submission) |
 | `submission_ip`           | —          | never        | Server-generated; not exposed via API                                            |
 | `user_agent_hash`         | —          | never        | Server-generated; not exposed via API                                            |
 

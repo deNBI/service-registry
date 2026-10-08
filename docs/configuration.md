@@ -114,7 +114,10 @@ license_name = "MIT"
 biotools_prefill  = true   # Show bio.tools prefill banner on the form
 edam_annotations  = true   # Show EDAM ontology fields on the form
 catalogue         = false  # Enable the public Registry Catalogue at /catalogue/
+markdown_descriptions = false  # Render service descriptions as Markdown
 ```
+
+`markdown_descriptions` (default `false`) renders `service_description` as sanitized Markdown in the catalogue, the admin and the API `service_description_html` field, and turns the description field on the forms and in the admin into the **Write** | **Preview** editor. With the flag off every surface shows the plain, autoescaped text. In both flag states every display surface (catalogue, API `service_description_html`, notification emails) decodes HTML entities stored by the old escaping web form exactly once, so a legacy `x &gt; 5` reads `x > 5` (see [the API guide](api-guide.md#retrieve-a-submission)). Run `python manage.py audit_markdown_descriptions` before enabling it in production (see [Markdown descriptions rollout](rollout.md#markdown-descriptions-rollout)). Like all `site.toml` changes, it takes effect after `docker compose restart web worker beat`.
 
 ### Registry Catalogue
 
@@ -367,10 +370,11 @@ RATE_LIMIT_API=60/m             # REST API (authenticated users)
 RATE_LIMIT_CHALLENGE=60/h       # ALTCHA challenge generation (GET /captcha/)
 RATE_LIMIT_BIOTOOLS=60/h        # bio.tools prefill/search proxy (GET /biotools/*)
 RATE_LIMIT_VALIDATE=120/h       # Inline field validation (POST /register/validate/)
+RATE_LIMIT_PREVIEW=120/h        # Markdown description preview (POST /markdown-preview/); per signed-in user, else per IP
 ```
 
 !!! warning "Limits are bucketed per real client IP"
-    Every limit is keyed on the real client IP, not `REMOTE_ADDR`
+    The django-ratelimit limits (all of the above except `RATE_LIMIT_API`, which DRF applies per authenticated user or API key, and `RATE_LIMIT_PREVIEW` for signed-in users) are keyed on the real client IP, not `REMOTE_ADDR`
     (`RATELIMIT_IP_META_KEY = apps.submissions.http_utils.get_client_ip`, which
     reads `X-Real-IP` → `X-Forwarded-For` → `REMOTE_ADDR`). Behind a reverse
     proxy the proxy **must** set `X-Real-IP` to the client address (see the

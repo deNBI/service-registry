@@ -12,65 +12,8 @@ import pytest
 from django import forms
 from django.core.files.uploadedfile import SimpleUploadedFile
 
-from tests.factories import PIFactory, ServiceCategoryFactory, ServiceCenterFactory
-
-
-def _base_form_data(overrides=None):
-    """Return a dict of minimal valid POST data for SubmissionForm."""
-    from django.utils import timezone
-
-    cat = ServiceCategoryFactory()
-    center = ServiceCenterFactory()
-    pi = PIFactory()
-
-    data = {
-        # Section A
-        "date_of_entry": timezone.now().date().isoformat(),
-        "submitter_first_name": "Test",
-        "submitter_last_name": "Researcher",
-        "submitter_affiliation": "Test University",
-        "register_as_elixir": False,
-        # Section B
-        "service_name": "Test Service",
-        "service_description": "A detailed description of the test service exceeding fifty characters minimum.",
-        "year_established": 2020,
-        "service_categories": [cat.pk],
-        "is_toolbox": False,
-        "toolbox_name": "",
-        "user_knowledge_required": "",
-        "publications_pmids": "12345678",
-        # Section C
-        "responsible_pis": [pi.pk],
-        "associated_partner_note": "",
-        "host_institute": "Test Institute",
-        "service_center": center.pk,
-        "public_contact_email": "public@example.com",
-        "internal_contact_name": "Test Contact, Institute",
-        "internal_contact_email": "internal@example.com",
-        "internal_contact_email_confirm": "internal@example.com",
-        # Section D
-        "website_url": "https://example.com",
-        "terms_of_use_url": "https://example.com/tos",
-        "licenses": [],
-        "license_note": "Other",
-        "github_url": "",
-        "biotools_url": "",
-        "fairsharing_url": "",
-        "other_registry_url": "",
-        # Section E
-        "kpi_monitoring": "yes",
-        "kpi_start_year": "2021",
-        # Section F
-        "keywords_uncited": "",
-        "keywords_seo": "",
-        "survey_participation": True,
-        "comments": "",
-        # Section G
-        "data_protection_consent": True,
-    }
-    if overrides:
-        data.update(overrides)
-    return data
+from tests.factories import PIFactory
+from tests.helpers import base_form_data as _base_form_data
 
 
 @pytest.mark.django_db

@@ -1,0 +1,10 @@
+{% if empty %}
+  <p class="md-editor__empty">Nothing to preview.</p>
+{% elif error %}
+  <div class="md-editor__alert" role="alert">{{ error }}</div>
+{% else %}
+  {% if removed %}
+    <div class="md-editor__alert" role="status">Some formatting was removed: images, code, horizontal rules, very deep nesting and links that do not start with http://, https:// or mailto: are not supported.</div>
+  {% endif %}
+  <div class="md-rendered">{{ html }}</div>
+{% endif %}

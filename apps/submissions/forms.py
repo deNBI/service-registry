@@ -35,6 +35,7 @@ from .models import (
     _DOI_RE,
     _PMID_RE,
 )
+from .validation import normalize_newlines
 from .widgets import (
     EdamAutocompleteWidget,
     AffiliationComboboxWidget,
@@ -486,7 +487,12 @@ class SubmissionForm(forms.ModelForm):
         return value
 
     def clean_service_description(self) -> str:
-        value = _sanitise(self.cleaned_data.get("service_description", ""))
+        value = self.cleaned_data.get("service_description", "")
+        # Do NOT HTML-escape: description stores raw Markdown; safety is enforced
+        # by the output sanitizer (render_markdown). Keep LF line endings (the
+        # browser's CRLF would otherwise count double and make an untouched
+        # edit look like a change), NFC and strip only.
+        value = unicodedata.normalize("NFC", normalize_newlines(value)).strip()
         if len(value) < DESCRIPTION_MIN_LENGTH:
             raise ValidationError(
                 _(f"Description must be at least {DESCRIPTION_MIN_LENGTH} characters.")

@@ -16,9 +16,22 @@ def validate_year_established(value: int) -> None:
         )
 
 
+def normalize_newlines(value: str) -> str:
+    """Canonical LF line endings: CRLF and lone CR become LF.
+
+    Browsers submit every textarea with CRLF, JSON clients usually send LF.
+    Storing, measuring and diffing text through this keeps the same text
+    identical on every channel (so an untouched web edit is not a change).
+    """
+    return value.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def validate_description_length(value: str, min_len: int, max_len: int) -> None:
-    """Raise DjangoValidationError if description is outside the allowed length."""
-    stripped = (value or "").strip()
+    """Raise DjangoValidationError if description is outside the allowed length.
+
+    A line break counts as one character on every channel (see
+    normalize_newlines)."""
+    stripped = normalize_newlines(value or "").strip()
     if stripped and len(stripped) < min_len:
         raise DjangoValidationError(
             f"Service description must be at least {min_len} characters."

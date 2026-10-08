@@ -291,6 +291,8 @@ RATE_LIMIT_UPDATE = env("RATE_LIMIT_UPDATE", "20/h")
 RATE_LIMIT_CHALLENGE = env("RATE_LIMIT_CHALLENGE", "60/h")
 RATE_LIMIT_BIOTOOLS = env("RATE_LIMIT_BIOTOOLS", "60/h")  # bio.tools proxy endpoints
 RATE_LIMIT_VALIDATE = env("RATE_LIMIT_VALIDATE", "120/h")  # inline field validation
+# Description editor preview: per signed-in user (admins), else per IP.
+RATE_LIMIT_PREVIEW = env("RATE_LIMIT_PREVIEW", "120/h")
 
 # ---------------------------------------------------------------------------
 # ALTCHA — self-hosted proof-of-work CAPTCHA

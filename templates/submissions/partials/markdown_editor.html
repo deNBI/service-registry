@@ -1,0 +1,5 @@
+<div class="mb-3{% if field.errors %} has-error{% endif %}" id="field-wrapper-{{ field.html_name }}">
+  {% include "submissions/partials/field_label.html" %}
+  {% include "submissions/partials/markdown_editor_box.html" with field_id=field.id_for_label %}
+  {% include "submissions/partials/field_feedback.html" %}
+</div>
