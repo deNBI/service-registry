@@ -90,8 +90,9 @@ def _assert_untouched(sub, notify):
     [
         DESC,
         "  " + DESC + "\n",  # surrounding whitespace is stripped on save
+        DESC.replace("\n", "\r\n"),  # browser/Windows line endings
     ],
-    ids=["identical", "padded"],
+    ids=["identical", "padded", "crlf"],
 )
 def test_resending_the_stored_description_keeps_approval(
     exempt, notify, no_reset, sent
