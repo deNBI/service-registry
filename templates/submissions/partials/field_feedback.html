@@ -1,0 +1,19 @@
+{# Field help text and the #field-errors-<name> validation error target. #}
+{# Context: field, required, optional help_override (same as field.html). #}
+  {# Help text #}
+  {% with help=help_override|default:field.help_text %}
+  {% if help %}
+  <div class="form-text text-muted">{{ help }}</div>
+  {% endif %}
+  {% endwith %}
+
+  {# Validation errors #}
+  <div id="field-errors-{{ field.html_name }}">
+    {% if field.errors %}
+    {% for error in field.errors %}
+    <div class="invalid-feedback d-block" role="alert">
+      <strong>⚠ {{ error }}</strong>
+    </div>
+    {% endfor %}
+    {% endif %}
+  </div>

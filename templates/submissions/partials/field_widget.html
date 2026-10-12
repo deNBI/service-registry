@@ -1,0 +1,23 @@
+{# Field widget inside the HTMX inline-validation wrapper; marks inputs is-invalid on error. #}
+{# Context: field, required, optional help_override (same as field.html). #}
+  {# Render the widget — HTMX validates on change #}
+  <div hx-post="{% url 'submissions:validate_field' %}"
+       hx-trigger="change"
+       hx-include="[name='{{ field.html_name }}']"
+       hx-vals='{"field": "{{ field.html_name }}"}'
+       hx-target="#field-errors-{{ field.html_name }}"
+       hx-swap="innerHTML">
+    {% if field.errors %}
+      {{ field.as_widget }}
+      <script>
+        (function(){
+          var w = document.getElementById('field-wrapper-{{ field.html_name }}');
+          if(w) w.querySelectorAll('input,select,textarea').forEach(function(el){
+            el.classList.add('is-invalid');
+          });
+        })();
+      </script>
+    {% else %}
+      {{ field }}
+    {% endif %}
+  </div>

@@ -1051,6 +1051,7 @@ select.edam-autocomplete { display: none !important; }
   margin: 0.5rem 0 0;
   padding-top: 0.375rem;
   border-top: 1px solid var(--gray-200);
+  overflow-wrap: anywhere;
 }
 
 /* ── Empty state ── */
@@ -1083,4 +1084,167 @@ select.edam-autocomplete { display: none !important; }
   border-radius: var(--radius-lg);
   padding: 1.25rem;
   background: white;
+}
+
+/* ---------------------------------------------------------------------------
+   Markdown description editor (register + edit forms)
+   The box carries the field border and focus ring (same look as .form-control);
+   the textarea inside is borderless so it reads as one control.
+   --------------------------------------------------------------------------- */
+.md-editor__box {
+  border: 1.5px solid var(--gray-200);
+  border-radius: var(--radius);
+  background: #fff;
+  overflow: hidden;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.md-editor__box:focus-within {
+  border-color: var(--g);
+  box-shadow: var(--focus-ring);
+}
+.has-error .md-editor__box,
+.md-editor__box:has(.is-invalid) {
+  border-color: var(--red);
+  box-shadow: var(--focus-ring-err);
+}
+.md-editor__tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0.3rem 0.5rem 0;
+  background: var(--gray-50);
+  border-bottom: 1px solid var(--gray-200);
+}
+.md-editor__tab {
+  padding: 0.3rem 0.85rem;
+  font-size: 0.8125rem;
+  color: var(--gray-600);
+  background: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+.md-editor__tab:hover { color: var(--g-dark); }
+.md-editor__tab:focus-visible { outline: 2px solid var(--g); outline-offset: -2px; }
+.md-editor__tab[aria-selected="true"] {
+  margin-bottom: -1px;
+  background: #fff;
+  border-color: var(--gray-200);
+  color: var(--g-deeper);
+  font-weight: 600;
+  box-shadow: inset 0 2px 0 var(--g);
+}
+.md-editor__panel .form-control,
+.md-editor__panel textarea,
+.md-editor__panel .form-control:focus,
+.md-editor__panel textarea:focus,
+.md-editor__panel .form-control.is-invalid,
+.mb-3.has-error .md-editor__panel .form-control {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  outline: none;
+}
+/* The box shows the error state; drop Bootstrap's invalid icon and its padding. */
+.md-editor__panel .form-control.is-invalid {
+  background-image: none;
+  padding-right: 0.75rem;
+}
+.md-editor__preview {
+  padding: 0.6rem 0.75rem;
+  overflow-wrap: anywhere;
+}
+.md-editor__preview:focus-visible { outline: 2px solid var(--g); outline-offset: -2px; }
+/* Placeholder ("Nothing to preview." / "Loading preview…"): gray-600 on
+   white is 7.56:1 (WCAG AA). No busy pulse: at 0.75 opacity it would drop
+   to 4.00:1, below 4.5:1. */
+.md-editor__empty { margin: 0; color: var(--gray-600); font-style: italic; }
+.md-editor__alert {
+  margin-bottom: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8125rem;
+  color: #92400e;
+  background: var(--amber-light);
+  border: 1px solid var(--amber-border);
+  border-radius: var(--radius-sm);
+}
+/* Rendered description Markdown: ONE rule set for the catalogue list view
+   (.catalogue-list-desc-text.md-rendered) and the editor preview, so the
+   preview shows exactly what the catalogue will. Sizes are relative (em) to
+   the container's text size, so the hierarchy is the same in both. */
+.md-rendered p, .md-rendered ul, .md-rendered ol, .md-rendered blockquote { margin: 0 0 0.5rem; }
+.md-rendered ul, .md-rendered ol { padding-left: 1.25rem; }
+.md-rendered blockquote { padding-left: 0.75rem; border-left: 3px solid var(--gray-200); color: var(--gray-600); }
+.md-rendered h4, .md-rendered h5, .md-rendered h6 {
+  margin: 0.75em 0 0.35em;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--charcoal);
+}
+.md-rendered h4 { font-size: 1.17em; }
+.md-rendered h5 { font-size: 1.08em; }
+.md-rendered h6 { font-size: 1em; }
+.md-rendered > :first-child { margin-top: 0; }
+.md-rendered > :last-child { margin-bottom: 0; }
+.md-editor__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--gray-600);
+}
+.md-editor__help-toggle { padding: 0; background: none; border: 0; color: var(--g-dark); }
+.md-editor__help-toggle:hover { text-decoration: underline; }
+.md-editor__help-toggle:focus-visible { outline: 2px solid var(--g); outline-offset: 2px; border-radius: var(--radius-sm); }
+.md-editor__help-toggle::after { content: " \25BE"; }
+.md-editor__help-toggle[aria-expanded="true"]::after { content: " \25B4"; }
+.md-editor__count { margin-left: auto; font-variant-numeric: tabular-nums; }
+/* Same dark amber as .md-editor__alert: --amber (#d97706) is only 3.19:1 on
+   the white form card; #92400e is 7.09:1 (WCAG AA). */
+.md-editor__count.is-warn { color: #92400e; }
+.md-editor__count.is-error { color: var(--red); font-weight: 600; }
+.md-editor__help {
+  margin-top: 0.4rem;
+  font-size: 0.78rem;
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+}
+.md-editor__help-table { width: 100%; border-collapse: collapse; }
+.md-editor__help-table td { padding: 0.25rem 0.6rem; border-top: 1px solid var(--gray-100); }
+.md-editor__help-table tr:first-child td { border-top: 0; }
+.md-editor__help-table code,
+.md-editor__help-note code {
+  padding: 0 0.25rem;
+  font-family: var(--mono);
+  color: var(--charcoal);
+  background: #fff;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+}
+.md-editor__help-h4 { font-weight: 600; }
+.md-editor__help-h5 { font-weight: 600; font-size: 0.9em; }
+/* Bootstrap's link hover blue: the default link blue (used by the preview's
+   links on white) is only 4.31:1 on the --gray-50 help panel; this is 6.16:1. */
+.md-editor__help-link {
+  color: rgba(var(--bs-link-hover-color-rgb), var(--bs-link-opacity, 1));
+  text-decoration: underline;
+}
+.md-editor__help-quote { padding-left: 0.4rem; border-left: 3px solid var(--gray-200); color: var(--gray-600); }
+.md-editor__help-note { margin: 0; padding: 0.35rem 0.6rem; color: var(--gray-600); border-top: 1px solid var(--gray-100); }
+@media (max-width: 575.98px) {
+  .md-editor__footer { flex-wrap: wrap; }
+  /* Each row's four cells (syntax | result | syntax | result) become two
+     lines of syntax | result pairs. */
+  .md-editor__help-table,
+  .md-editor__help-table tbody { display: block; }
+  .md-editor__help-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    border-top: 1px solid var(--gray-100);
+  }
+  .md-editor__help-table tr:first-child { border-top: 0; }
+  .md-editor__help-table td { display: block; border-top: 0; }
+  .md-editor__help-table code { overflow-wrap: anywhere; }
 }

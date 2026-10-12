@@ -29,6 +29,7 @@ from django.utils.translation import gettext_lazy as _
 
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
 from apps.submissions.validation import (
+    normalize_newlines,
     validate_description_length as _validate_desc,
     validate_kpi_start_year as _validate_kpi,
     validate_toolbox_name as _validate_toolbox,
@@ -74,12 +75,13 @@ def _sanitise_text(value: str) -> str:
     """
     Sanitise free-text input:
       - Strip null bytes (prevent DB errors and log injection)
+      - Normalise line endings to LF (browsers submit CRLF, API clients LF)
       - Normalise to Unicode NFC (prevent homoglyph attacks)
       - Strip leading/trailing whitespace
     """
     if not value:
         return value
-    value = value.replace("\x00", "")
+    value = normalize_newlines(value.replace("\x00", ""))
     value = unicodedata.normalize("NFC", value)
     return value.strip()
 

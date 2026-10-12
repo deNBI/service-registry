@@ -205,10 +205,16 @@ class APIKeyFactory(DjangoModelFactory):
         Create a key and return (instance, plaintext).
         Use this in auth tests where you need the actual plaintext.
         """
+        unknown = set(kwargs) - {"submission", "label", "created_by", "scope"}
+        if unknown:
+            # Fail loudly instead of silently creating a different key (a
+            # dropped scope="read" once produced a write key).
+            raise TypeError(f"create_with_plaintext() got unsupported {unknown}")
         submission = kwargs.get("submission") or ServiceSubmissionFactory()
         key_obj, plaintext = SubmissionAPIKey.create_for_submission(
             submission=submission,
             label=kwargs.get("label", "Test key"),
             created_by=kwargs.get("created_by", "submitter"),
+            scope=kwargs.get("scope", "write"),
         )
         return key_obj, plaintext

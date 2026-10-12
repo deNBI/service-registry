@@ -1,4 +1,4 @@
-{% load static catalogue_tags %}
+{% load static catalogue_tags markdown_tags %}
 {% catalogue_service_url service as service_url %}
 
 <div class="card h-100 catalogue-card">
@@ -38,7 +38,7 @@
     </div>
 
     {# ── Description ── #}
-    <p class="text-muted small catalogue-description mb-3">{{ service.service_description }}</p>
+    <p class="text-muted small catalogue-description mb-3">{{ service|md_snippet }}</p>
 
     {# ── Category badges ── #}
     {% with cats=service.service_categories.all %}

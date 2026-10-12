@@ -13,7 +13,15 @@ from django.templatetags.static import static
 from django.utils.html import format_html, urlize
 from django.utils.safestring import mark_safe
 
+from apps.submissions.models import DESCRIPTION_MAX_LENGTH, DESCRIPTION_MIN_LENGTH
+
 register = template.Library()
+
+
+@register.simple_tag
+def description_length_limits():
+    """Description length limits for client-side hints (single source of truth)."""
+    return {"min": DESCRIPTION_MIN_LENGTH, "max": DESCRIPTION_MAX_LENGTH}
 
 
 @register.simple_tag

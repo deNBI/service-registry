@@ -16,6 +16,7 @@ from django.urls import reverse
 from apps.submissions.models import SubmissionChangeLog
 
 from tests.factories import APIKeyFactory, ServiceSubmissionFactory
+from tests.helpers import edit_form_data
 
 
 def _make_png_bytes() -> bytes:
@@ -429,48 +430,8 @@ class TestEditView:
         assert resp.status_code == 200
         assert sub.service_name.encode() in resp.content
 
-    def _edit_form_data(self, sub, **overrides):
-        """Build a complete POST payload for the edit view from a submission instance."""
-        data = {
-            "date_of_entry": sub.date_of_entry.isoformat(),
-            "submitter_first_name": sub.submitter_first_name,
-            "submitter_last_name": sub.submitter_last_name,
-            "submitter_affiliation": sub.submitter_affiliation,
-            "register_as_elixir": str(sub.register_as_elixir),
-            "service_name": sub.service_name,
-            "service_description": sub.service_description,
-            "year_established": sub.year_established,
-            "service_categories": [c.pk for c in sub.service_categories.all()],
-            "is_toolbox": str(sub.is_toolbox),
-            "toolbox_name": sub.toolbox_name or "",
-            "user_knowledge_required": sub.user_knowledge_required or "",
-            "publications_pmids": sub.publications_pmids or "",
-            "responsible_pis": [p.pk for p in sub.responsible_pis.all()],
-            "associated_partner_note": sub.associated_partner_note or "",
-            "host_institute": sub.host_institute,
-            "service_center": sub.service_center.pk,
-            "public_contact_email": sub.public_contact_email,
-            "internal_contact_name": sub.internal_contact_name,
-            "internal_contact_email": sub.internal_contact_email,
-            "internal_contact_email_confirm": sub.internal_contact_email,
-            "website_url": sub.website_url,
-            "terms_of_use_url": sub.terms_of_use_url,
-            "licenses": [lic.pk for lic in sub.licenses.all()],
-            "license_note": sub.license_note or "",
-            "github_url": sub.github_url or "",
-            "biotools_url": sub.biotools_url or "",
-            "fairsharing_url": sub.fairsharing_url or "",
-            "other_registry_url": sub.other_registry_url or "",
-            "kpi_monitoring": sub.kpi_monitoring,
-            "kpi_start_year": sub.kpi_start_year or "",
-            "keywords_uncited": sub.keywords_uncited or "",
-            "keywords_seo": sub.keywords_seo or "",
-            "survey_participation": str(sub.survey_participation),
-            "comments": sub.comments or "",
-            "data_protection_consent": str(sub.data_protection_consent),
-        }
-        data.update(overrides)
-        return data
+    # Complete POST payload for the edit view (shared builder).
+    _edit_form_data = staticmethod(edit_form_data)
 
     def _setup_edit_session(self, client, sub):
         key_obj, _ = APIKeyFactory.create_with_plaintext(submission=sub)

@@ -1,0 +1,193 @@
+/*
+ * Markdown description editor (Write | Preview) in the ServiceSubmission
+ * admin change form, plus the read-only rendered description shown to
+ * view-only staff (.field-description_rendered .md-rendered).
+ *
+ * The admin loads neither Bootstrap nor registry.css; Django admin CSS
+ * variables keep light and dark themes working. `form .aligned` prefixes
+ * beat Django's `form .aligned ul/li` list resets from forms.css.
+ */
+
+/* Amber counter warning. --message-warning-bg is a background colour (#ffc
+ * in light mode), unreadable as text, so define a readable pair here and
+ * follow the admin's theme switch (OS preference or the theme toggle). */
+:root,
+html[data-theme="light"] { --md-editor-warn-fg: #8a5300; }
+@media (prefers-color-scheme: dark) {
+  :root { --md-editor-warn-fg: #f0b35a; }
+  html[data-theme="light"] { --md-editor-warn-fg: #8a5300; }
+}
+html[data-theme="dark"] { --md-editor-warn-fg: #f0b35a; }
+
+/* No Bootstrap here: make `hidden` win over the display rules below until
+ * static/js/markdown-editor.js reveals the enhancement controls. */
+.md-editor[hidden],
+.md-editor [hidden] { display: none !important; }
+
+.md-editor { flex: 1 1 auto; min-width: 0; max-width: 60rem; }
+.md-editor__box {
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--body-bg);
+  overflow: hidden;
+}
+.md-editor__box:focus-within { border-color: var(--link-fg); }
+.md-editor__tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px 0;
+  background: var(--darkened-bg);
+  border-bottom: 1px solid var(--hairline-color);
+}
+.md-editor__tab {
+  margin: 0;
+  padding: 4px 12px;
+  font-size: 0.8125rem;
+  color: var(--link-fg);
+  background: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+}
+.md-editor__tab:hover { color: var(--body-fg); }
+.md-editor__tab[aria-selected="true"] {
+  margin-bottom: -1px;
+  color: var(--body-fg);
+  font-weight: 600;
+  background: var(--body-bg);
+  border-color: var(--hairline-color);
+  box-shadow: inset 0 2px 0 var(--link-fg);
+}
+.md-editor__tab:focus-visible,
+.md-editor__preview:focus-visible { outline: 2px solid var(--link-fg); outline-offset: -2px; }
+
+/* The box carries the border; the textarea inside reads as one control.
+ * #content-main outranks the admin's fixed .vLargeTextField widths
+ * (e.g. `.colM .aligned .vLargeTextField { width: 610px }`). */
+#content-main .md-editor__panel textarea,
+form .aligned .md-editor__panel textarea,
+.md-editor__panel textarea {
+  display: block;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  outline: none;
+}
+.md-editor__preview { min-height: 3rem; padding: 6px 10px; overflow-wrap: anywhere; }
+/* Placeholder ("Nothing to preview." / "Loading preview…"): quiet color on
+   --body-bg is 5.74:1 light, 12.15:1 dark (WCAG AA). No busy pulse: at 0.75
+   opacity the light theme would drop to 3.36:1, below 4.5:1. */
+.md-editor__empty { margin: 0; color: var(--body-quiet-color); font-style: italic; }
+.md-editor__alert {
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  color: var(--body-fg);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--darkened-bg);
+}
+
+/* Rendered Markdown: editor preview and the view-only readonly row. */
+.md-rendered { overflow-wrap: anywhere; }
+.md-rendered p,
+.md-rendered blockquote { margin: 0 0 6px; padding: 0; }
+form .aligned .md-rendered ul,
+form .aligned .md-rendered ol,
+.md-rendered ul,
+.md-rendered ol { margin: 0 0 6px; padding-left: 1.5rem; }
+form .aligned .md-rendered ul li,
+.md-rendered ul li { list-style: disc; margin: 0; padding: 0; }
+form .aligned .md-rendered ol li,
+.md-rendered ol li { list-style: decimal; margin: 0; padding: 0; }
+.md-rendered blockquote {
+  padding-left: 8px;
+  border-left: 3px solid var(--body-quiet-color);
+  color: var(--body-quiet-color);
+}
+.md-rendered h4,
+.md-rendered h5,
+.md-rendered h6 {
+  margin: 0.75em 0 0.35em;
+  padding: 0;
+  font-weight: 600;
+  color: var(--body-fg);
+  background: none;
+  text-transform: none;
+}
+/* Same relative scale as registry.css .md-rendered (catalogue + public preview). */
+.md-rendered h4 { font-size: 1.17em; }
+.md-rendered h5 { font-size: 1.08em; }
+.md-rendered h6 { font-size: 1em; }
+.md-rendered > :first-child { margin-top: 0; }
+.md-rendered > :last-child { margin-bottom: 0; }
+
+.md-editor__footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--body-quiet-color);
+}
+.md-editor__help-toggle {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--link-fg);
+  cursor: pointer;
+  font-size: inherit;
+}
+.md-editor__help-toggle:hover { text-decoration: underline; }
+.md-editor__help-toggle:focus-visible { outline: 2px solid var(--link-fg); outline-offset: 2px; }
+.md-editor__help-toggle::after { content: " \25BE"; }
+.md-editor__help-toggle[aria-expanded="true"]::after { content: " \25B4"; }
+.md-editor__count { margin-left: auto; font-variant-numeric: tabular-nums; }
+.md-editor__count.is-warn { color: var(--md-editor-warn-fg); }
+.md-editor__count.is-error { color: var(--error-fg); font-weight: 600; }
+.md-editor__help {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--body-fg);
+  border: 1px solid var(--hairline-color);
+  border-radius: 4px;
+  background: var(--darkened-bg);
+}
+.md-editor__help-table { width: 100%; border-collapse: collapse; border: 0; }
+/* Drop the admin's zebra striping (base.css `tr:nth-child(odd/even)`). */
+.md-editor__help-table tr { background: none; }
+.md-editor__help-table td {
+  padding: 3px 8px;
+  font-size: inherit;
+  vertical-align: middle;
+  border-top: 1px solid var(--hairline-color);
+  border-bottom: 0;
+}
+.md-editor__help-table tr:first-child td { border-top: 0; }
+.md-editor__help-table code,
+.md-editor__help-note code {
+  padding: 0 3px;
+  color: var(--body-fg);
+  background: var(--body-bg);
+  border: 1px solid var(--hairline-color);
+  border-radius: 3px;
+}
+.md-editor__help-h4,
+.md-editor__help-h5 { font-weight: 600; }
+.md-editor__help-link { color: var(--link-fg); text-decoration: underline; }
+.md-editor__help-quote { padding-left: 6px; border-left: 3px solid var(--body-quiet-color); }
+.md-editor__help-note {
+  margin: 0;
+  padding: 4px 8px;
+  font-size: inherit;
+  border-top: 1px solid var(--hairline-color);
+  color: var(--body-quiet-color);
+}

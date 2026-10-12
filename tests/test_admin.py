@@ -21,6 +21,7 @@ from tests.factories import (
     BioToolsRecordFactory,
     ServiceSubmissionFactory,
 )
+from tests.helpers import edit_form_payload as _edit_form_payload
 
 
 # ---------------------------------------------------------------------------
@@ -29,14 +30,10 @@ from tests.factories import (
 
 
 @pytest.fixture
-def admin_client(db):
-    User = get_user_model()
-    user = User.objects.create_superuser(
-        username="testadmin", password="adminpass123", email="admin@example.com"
-    )
-    c = Client()
-    c.force_login(user)
-    return c
+def admin_client(superuser_client):
+    # Module-local name kept for the many tests below; the shared fixture
+    # lives in tests/conftest.py.
+    return superuser_client
 
 
 def _changelist_url():
@@ -661,59 +658,6 @@ class TestExportJSON:
 
 def _change_url(sub):
     return reverse("admin:submissions_servicesubmission_change", args=[sub.pk])
-
-
-def _edit_form_payload(sub, **overrides):
-    """Minimal admin change-view POST payload for a ServiceSubmission."""
-    payload = {
-        "date_of_entry": sub.date_of_entry.isoformat(),
-        "submitter_first_name": sub.submitter_first_name,
-        "submitter_last_name": sub.submitter_last_name,
-        "submitter_affiliation": sub.submitter_affiliation,
-        "register_as_elixir": "False",
-        "service_name": sub.service_name,
-        "service_description": sub.service_description,
-        "year_established": str(sub.year_established),
-        "service_categories": [c.pk for c in sub.service_categories.all()],
-        "is_toolbox": "False",
-        "toolbox_name": "",
-        "user_knowledge_required": sub.user_knowledge_required or "",
-        "publications_pmids": sub.publications_pmids,
-        "responsible_pis": [p.pk for p in sub.responsible_pis.all()],
-        "associated_partner_note": "",
-        "host_institute": sub.host_institute,
-        "service_center": sub.service_center.pk,
-        "public_contact_email": sub.public_contact_email,
-        "internal_contact_name": sub.internal_contact_name,
-        "internal_contact_email": sub.internal_contact_email,
-        "website_url": sub.website_url,
-        "terms_of_use_url": sub.terms_of_use_url,
-        "licenses": [lic.pk for lic in sub.licenses.all()],
-        "license_note": sub.license_note or "",
-        "github_url": sub.github_url or "",
-        "biotools_url": sub.biotools_url or "",
-        "fairsharing_url": sub.fairsharing_url or "",
-        "other_registry_url": sub.other_registry_url or "",
-        "kpi_monitoring": sub.kpi_monitoring,
-        "kpi_start_year": sub.kpi_start_year or "",
-        "keywords_uncited": sub.keywords_uncited or "",
-        "keywords_seo": sub.keywords_seo or "",
-        "survey_participation": "True",
-        "comments": sub.comments or "",
-        "data_protection_consent": "True",
-        # Required Django admin hidden fields
-        "_save": "Save",
-        "api_keys-TOTAL_FORMS": "0",
-        "api_keys-INITIAL_FORMS": "0",
-        "api_keys-MIN_NUM_FORMS": "0",
-        "api_keys-MAX_NUM_FORMS": "0",
-        "edam_topics": [],
-        "edam_operations": [],
-        "primary_maturity_tag": sub.primary_maturity_tag or "",
-        "secondary_maturity_tags": sub.secondary_maturity_tags or [],
-    }
-    payload.update(overrides)
-    return payload
 
 
 @pytest.mark.django_db
