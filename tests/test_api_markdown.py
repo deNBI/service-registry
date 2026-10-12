@@ -315,11 +315,10 @@ def test_owner_patch_response_and_follow_up_get_agree(api_flag):
     assert again["service_description_html"] == _expected_html(api_flag)
 
 
-def test_api_patch_of_other_field_keeps_crlf_row_unchanged_in_the_diff(api_flag):
+def test_api_resend_of_crlf_row_is_not_a_change(api_flag):
     """A row stored with CRLF (old web-form rows) is re-stored with LF on the
-    next save, but that is not a description change: no description diff is
-    logged. (Whether the status resets follows the API's documented rule:
-    any submitted non-exempt field resets it, changed or not.)"""
+    next save, but that is not a description change: nothing is logged and
+    the approved service stays approved (reset only on a real change)."""
     from apps.submissions.models import ServiceSubmission, SubmissionChangeLog
 
     crlf = "Line one of the description.\r\nLine two, long enough overall."
@@ -333,12 +332,13 @@ def test_api_patch_of_other_field_keeps_crlf_row_unchanged_in_the_diff(api_flag)
     assert resp.status_code == 200, resp.content
     sub.refresh_from_db()
     assert sub.service_description == crlf.replace("\r\n", "\n")
+    assert sub.status == "approved"
     logged = [
         ch["field"]
         for log in SubmissionChangeLog.objects.filter(submission=sub)
         for ch in log.changes
     ]
-    assert "service_description" not in logged
+    assert logged == []
 
 
 def test_key_factory_honours_scope_and_rejects_unknown_arguments():
