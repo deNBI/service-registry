@@ -195,6 +195,10 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
         # (The view surfaces a warning so the client knows it was not applied.)
         if self.instance is not None:
             self.fields["service_name"].read_only = True
+        if "logo" in self.fields:
+            from apps.submissions.logo_utils import logo_help_text
+
+            self.fields["logo"].help_text = logo_help_text()
 
     class Meta:
         model = ServiceSubmission

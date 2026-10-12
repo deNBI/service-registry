@@ -6,7 +6,7 @@ de.NBI Service Registration Platform — Root URL Configuration
 from django.conf import settings
 from django.contrib import admin
 from django.urls import include, path, re_path
-from django.views.static import serve as _serve_media
+from django.views.static import serve as _static_serve
 
 from drf_spectacular.views import (
     SpectacularAPIView,
@@ -49,6 +49,22 @@ urlpatterns = [
     path("health/", include("apps.submissions.health_urls")),
 ]
 
+# Policy for uploaded media opened directly in the browser. A logo is a
+# self-contained image: it needs its own inline styles and data: resources,
+# nothing else. Pages showing logos via <img> are not affected by this header.
+_MEDIA_CSP = (
+    "default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
+    "font-src data:; sandbox"
+)
+
+
+def _serve_media(request, path):
+    response = _static_serve(request, path, document_root=settings.MEDIA_ROOT)
+    # Set here so the site-wide CSPMiddleware leaves it in place.
+    response["Content-Security-Policy"] = _MEDIA_CSP
+    return response
+
+
 # Serve uploaded media files (logos) through Gunicorn.
 # Logos are non-sensitive brand assets destined for the public de.NBI catalogue.
 # Paths are UUID-based (/media/logos/<uuid4>.ext) — not enumerable without first
@@ -57,6 +73,5 @@ urlpatterns += [
     re_path(
         r"^media/(?P<path>.*)$",
         _serve_media,
-        kwargs={"document_root": settings.MEDIA_ROOT},
     ),
 ]

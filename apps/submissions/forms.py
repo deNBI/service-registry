@@ -131,7 +131,7 @@ class SubmissionForm(forms.ModelForm):
     logo = forms.FileField(
         label=_("Service logo"),
         required=False,
-        help_text=_("Optional. PNG, JPEG, or SVG. Maximum 10 MB."),
+        help_text="",  # set in __init__ from the configured limits
         widget=forms.FileInput(
             attrs={
                 "class": "form-control",
@@ -345,6 +345,10 @@ class SubmissionForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        from .logo_utils import logo_help_text, logo_limits_text
+
+        # Fallback when form_texts.yaml has no logo help text.
+        self.fields["logo"].help_text = logo_help_text()
         # Auto-populate date_of_entry with today if not already set
         if not self.instance.pk and not self.data.get("date_of_entry"):
             self.fields["date_of_entry"].initial = date.today()
@@ -430,7 +434,10 @@ class SubmissionForm(forms.ModelForm):
         for field_name, field_obj in self.fields.items():
             texts = _FORM_TEXTS.get(field_name, {})
             if texts.get("help"):
-                field_obj.help_text = texts["help"]
+                # {logo_limits} expands to the configured logo upload limits.
+                field_obj.help_text = texts["help"].replace(
+                    "{logo_limits}", logo_limits_text()
+                )
             if texts.get("label"):
                 field_obj.label = texts["label"]
             field_obj.tooltip = texts.get("tooltip", "").strip()
@@ -514,12 +521,9 @@ class SubmissionForm(forms.ModelForm):
         return self.cleaned_data.get("public_contact_email", "").strip()
 
     def clean_logo(self):
-        f = self.cleaned_data.get("logo")
-        if not f:
-            return f  # Optional — None/empty is valid
-        from .logo_utils import validate_and_process_logo
+        from .logo_utils import process_new_logo_upload
 
-        return validate_and_process_logo(f)
+        return process_new_logo_upload(self.cleaned_data.get("logo"))
 
     def clean_data_protection_consent(self) -> bool:
         value = self.cleaned_data.get("data_protection_consent")

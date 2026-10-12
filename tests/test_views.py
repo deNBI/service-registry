@@ -1027,6 +1027,48 @@ class TestEditView:
         assert sub.secondary_maturity_tags == ["unstable"]
         assert sub.logo  # logo was saved
 
+    def _sub_with_stored_logo(self, settings, tmp_path, name, content):
+        from django.core.files.base import ContentFile
+
+        settings.MEDIA_ROOT = tmp_path
+        settings.ALTCHA_HMAC_KEY = ""
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        sub = ServiceSubmissionFactory(status="approved", biotools_url="")
+        sub.logo.save(name, ContentFile(content))
+        return sub
+
+    def test_edit_without_new_logo_keeps_stored_logo_file(
+        self, client, settings, tmp_path
+    ):
+        """An edit that does not upload a logo must leave the stored file alone:
+        same path, same bytes, and no extra copy written to disk."""
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>'
+        sub = self._sub_with_stored_logo(settings, tmp_path, "x.svg", svg)
+        before = sub.logo.name
+        self._setup_edit_session(client, sub)
+        data = self._edit_form_data(sub, comments="comment-only edit")
+        resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
+        assert resp.status_code == 302
+        sub.refresh_from_db()
+        assert sub.logo.name == before
+        assert (tmp_path / before).read_bytes() == svg
+        assert len(list((tmp_path / "logos").iterdir())) == 1
+
+    def test_edit_without_new_logo_does_not_revalidate_stored_logo(
+        self, client, settings, tmp_path
+    ):
+        """A stored logo that current upload rules would not accept (e.g. one
+        stored before a rule change) must not block unrelated edits."""
+        sub = self._sub_with_stored_logo(
+            settings, tmp_path, "legacy.png", b"not an image"
+        )
+        self._setup_edit_session(client, sub)
+        data = self._edit_form_data(sub, comments="comment-only edit")
+        resp = client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
+        assert resp.status_code == 302
+        sub.refresh_from_db()
+        assert sub.comments == "comment-only edit"
+
     def test_edit_approved_logo_upload_plus_non_exempt_resets_status(
         self, client, settings
     ):

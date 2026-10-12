@@ -92,3 +92,24 @@ def test_rate_limit_is_enforced_and_keyed_on_real_client_ip(client):
         assert client.post(URL, payload, HTTP_X_REAL_IP=client_b).status_code == 200
     finally:
         cache.clear()  # don't leak the counter into other tests
+
+
+@pytest.mark.django_db
+def test_uploaded_files_are_not_processed(client, monkeypatch):
+    """Inline validation never handles files (browsers do not send them from
+    the HTMX request), so a file posted here directly must not be processed."""
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    import apps.submissions.logo_utils as logo_utils
+
+    calls = []
+    monkeypatch.setattr(
+        logo_utils, "validate_and_process_logo", lambda f: calls.append(f) or f
+    )
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>'
+    resp = client.post(
+        URL,
+        {"field": "logo", "logo": SimpleUploadedFile("logo.svg", svg, "image/svg+xml")},
+    )
+    assert resp.status_code == 200
+    assert calls == []

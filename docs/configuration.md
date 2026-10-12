@@ -167,11 +167,19 @@ Overridden by `ADMIN_URL_PREFIX` in `.env`. Changes the URL of the Django admin 
 ```toml
 [uploads]
 logo_max_bytes = 10_485_760
+logo_max_pixels = 25_000_000
+logo_max_svg_bytes = 1_048_576
 ```
 
 | Key              | Default            | Description                                                                                                                        |
 | ---------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `logo_max_bytes` | `10485760` (10 MB) | Maximum allowed size in bytes for service logo uploads. Reduce to tighten limits. Requires a web container restart after changing. |
+| `logo_max_pixels` | `25000000` (25 MP) | Maximum PNG/JPEG logo size in pixels (width × height), checked before the image is decoded. Requires a web container restart after changing. |
+| `logo_max_svg_bytes` | `1048576` (1 MB) | Maximum allowed size in bytes for SVG logo uploads (also bound by `logo_max_bytes`). SVGs are parsed and checked element by element, so processing time grows with their size; this keeps it short. Checked before the file is parsed. Requires a web container restart after changing. |
+
+The limits are shown to users next to the logo field and in the API schema. The
+registration form text can embed them with the `{logo_limits}` placeholder in
+`apps/submissions/form_texts.yaml`.
 
 ### `[submission]` — Submission lifecycle
 

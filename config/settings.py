@@ -209,6 +209,13 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ---------------------------------------------------------------------------
 # Maximum logo file size in bytes. Configurable in config/site.toml [uploads].
 LOGO_MAX_BYTES: int = _sc_uploads.get("logo_max_bytes", 10 * 1024 * 1024)
+# Maximum PNG/JPEG logo size in pixels (width × height). Configurable in
+# config/site.toml [uploads].
+LOGO_MAX_PIXELS: int = _sc_uploads.get("logo_max_pixels", 25_000_000)
+# Maximum SVG logo size in bytes (SVGs are parsed and checked element by
+# element, so they have a smaller limit). Configurable in config/site.toml
+# [uploads].
+LOGO_MAX_SVG_BYTES: int = _sc_uploads.get("logo_max_svg_bytes", 1024 * 1024)
 
 # Fields that do not trigger a status reset when edited on an approved service.
 # Configurable in config/site.toml [submission] no_reset_fields.

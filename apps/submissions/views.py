@@ -627,10 +627,10 @@ def validate_field(request: HttpRequest) -> HttpResponse:
         return HttpResponse(status=400)
 
     # Create form with only this field's data to trigger its validation.
-    # request.FILES is included for correctness, but note that HTMX inline
-    # validation cannot carry file data (browsers don't serialise file inputs
-    # in XHR requests), so FileField validation via this endpoint is a no-op.
-    form = SubmissionForm(request.POST, request.FILES)
+    # Files are deliberately not passed: HTMX inline validation cannot carry
+    # file data (browsers don't serialise file inputs in XHR requests), and the
+    # logo is validated when the form is actually submitted.
+    form = SubmissionForm(request.POST)
     form.is_valid()  # Populates form.errors
 
     field = form.fields.get(field_name)

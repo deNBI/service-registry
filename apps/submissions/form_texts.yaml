@@ -115,7 +115,9 @@ publications_pmids:
   tooltip: "List all related publications. PMIDs preferred and required for ELIXIR impact assessment. Separate multiple entries by commas. If your service is a consulting offering or does not yet have a valid publication for other reasons, please enter 1234567."
 
 logo:
-  help: "Optional service logo. Accepted formats: PNG, JPEG, SVG. Maximum 10 MB."
+  # {logo_limits} is replaced with the limits configured in config/site.toml
+  # [uploads], e.g. "PNG or JPEG up to 10 MB and 25 megapixels, or SVG up to 1 MB".
+  help: "Optional service logo: {logo_limits}."
   tooltip: "Upload a logo to represent your service."
 
 # ── Section C — Responsibilities ─────────────────────────────────────────────

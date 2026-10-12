@@ -582,18 +582,35 @@ Submitters can optionally upload a logo for their service during registration or
 | Property     | Value                                                                                        |
 | ------------ | -------------------------------------------------------------------------------------------- |
 | Formats      | PNG, JPEG, SVG                                                                               |
-| Maximum size | 10 MB (configurable — see [`[uploads]` in configuration](configuration.md#uploads))          |
+| PNG / JPEG   | Up to 10 MB and 25 megapixels (configurable — see [`[uploads]`](configuration.md#uploads))   |
+| SVG          | Up to 1 MB (configurable — see [`[uploads]`](configuration.md#uploads))                      |
 | Storage      | `/app/mediafiles/logos/<uuid>.<ext>` inside the container (mounted from `media_data` volume) |
 | Served at    | `/media/logos/<uuid>.<ext>` — via Gunicorn (nginx proxy_passes everything)                   |
 
-### Security processing
+### Upload processing
 
-Every upload goes through automatic validation before being stored:
+Every newly uploaded file goes through the same validation, whether it arrives
+through the registration form, the edit form, the REST API or this admin:
 
+- **Size** — PNG/JPEG up to `logo_max_bytes` and `logo_max_pixels` (the pixel count is read from the image header before decoding); SVG up to `logo_max_svg_bytes`
 - **Magic bytes** — the file type is detected from its binary header, not its extension or MIME type
 - **JPEG / PNG** — re-encoded via Pillow to strip EXIF metadata and verify file integrity
-- **SVG** — parsed with Python's stdlib XML parser (safe on Python 3.12+/Expat 2.7.1, which blocks XXE and entity-expansion attacks), then scrubbed of `<script>` elements, `on*` event-handler attributes, and non-fragment external `href` values
+- **SVG** — parsed with Python's stdlib XML parser (external entities are not loaded, and text from internal entities goes through the same rules as the rest of the file); the root must be `<svg>`; only standard drawing elements are kept (editor metadata is removed); an SVG containing a bitmap image (`<image>`) or other content from outside the file is rejected; `on*` attributes and namespaced attributes other than `xlink:href`, `xml:space` and `xml:lang` are removed; links may only point inside the logo (`#id`); CSS references (read with the [tinycss2](https://pypi.org/project/tinycss2/) CSS parser) may also use embedded `data:` resources such as fonts
 - **Filename** — original filename is discarded; a UUID is assigned before storage
+
+Saving a submission without choosing a new file keeps the stored logo exactly
+as it is: stored logos are never re-processed, so rule changes do not alter
+logos that are already in place.
+
+Uploaded files are served with their own restrictive `Content-Security-Policy`
+header (sandboxed, no scripts, only embedded resources). Pages that show logos
+through `<img>`, such as the catalogue and this admin, are not affected by it.
+
+!!! note "Request size limit in the reverse proxy"
+    The reverse proxy must accept request bodies a little larger than
+    `logo_max_bytes` on the admin URL prefix as well, otherwise it refuses large
+    admin uploads (HTTP 413) before the application sees them. See
+    [Deployment → Request size for uploads](deployment.md#request-size-for-uploads).
 
 ### Admin usage
 

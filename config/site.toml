@@ -194,6 +194,17 @@ url_prefix = "admin-denbi"
 # After changing, restart the web container: docker compose restart web
 logo_max_bytes = 10_485_760
 
+# Maximum PNG/JPEG logo size in pixels (width × height), checked before the
+# image is decoded. Default: 25 megapixels (e.g. 5000 × 5000).
+# After changing, restart the web container: docker compose restart web
+logo_max_pixels = 25_000_000
+
+# Maximum allowed size in bytes for SVG logo uploads (also bound by
+# logo_max_bytes). SVGs are parsed and checked element by element, so they
+# have a smaller limit. Default: 1 MB.
+# After changing, restart the web container: docker compose restart web
+logo_max_svg_bytes = 1_048_576
+
 
 # -----------------------------------------------------------------------------
 # [submission] — Submission lifecycle settings
