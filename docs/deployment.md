@@ -4,7 +4,7 @@ icon: material/rocket-launch
 
 # Deployment Guide
 
-> **Configuration:** see [Configuration Reference](configuration.md) for all settings including branding, contact email, and feature flags. — de.NBI Service Registration Platform
+For operators who install and update the registry. For a local development stack, see [Development Setup](development.md). Day-to-day operation is covered in the [Operator Guide](operator/index.md).
 
 ## Prerequisites
 
@@ -21,51 +21,26 @@ See [Configuration Reference](configuration.md) for all settings including `.env
 
 ---
 
-## Quick Start (Development)
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/deNBI/service-registry.git
-cd service-registry
-
-# 2. Configure environment
-cp .env.example .env
-# Edit .env — set SECRET_KEY, DB_PASSWORD, REDIS_PASSWORD
-
-# 3. Build and start services
-#    Migrations run automatically on container start.
-#    On a fresh database, EDAM (~3,400 terms) is seeded automatically (~30 s).
-make build
-make dev
-
-# 4. Create the first admin user
-make superuser
-
-# 5. Visit http://localhost:8000
-```
-
----
-
 ## Production Deployment
 
 !!! note "Ansible-managed production"
-The de.NBI production environment is deployed via Ansible. The Ansible role
-(`roles/registry/templates/docker-compose.yml.j2`) generates the authoritative
-production compose file and manages `.env` via vault. The steps below describe
-the infrastructure assumptions — consult the Ansible role for the actual
-deployment procedure.
+    The de.NBI production environment is deployed via Ansible. The Ansible role
+    (`roles/registry/templates/docker-compose.yml.j2`) generates the authoritative
+    production compose file and manages `.env` via vault. The steps below describe
+    the infrastructure assumptions — consult the Ansible role for the actual
+    deployment procedure.
 
 ### Architecture
 
 | Component                      | How deployed                                                                                                              |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| Django (Gunicorn)              | Docker container — image from `crate.bi.denbi.de/denbi/denbi-service-registry:stable`                                     |
+| Django (Gunicorn)              | Docker container — image from the private registry; name and tag are set in the Ansible role (outside this repository). `ci_build_push.sh` pushes `<REGISTRY_HOST>/denbi/denbi-registry:<IMAGE_TAG>` by default, so the Ansible side must use the name and tag that were pushed |
 | Celery worker + beat           | Docker containers — same image                                                                                            |
 | Redis                          | Docker container — broker + rate-limit cache                                                                              |
 | PostgreSQL                     | External managed instance — not a Docker container                                                                        |
 | Nginx + TLS                    | Host-managed — terminates HTTPS, proxies to Gunicorn on port 8000                                                         |
 | `config/site.toml`             | Bind-mounted from `/data/denbi-service-registry/config/site.toml` — rebranding requires no image rebuild                  |
-| `mediafiles/` (uploaded logos) | Named Docker volume `media_data` mounted at `/app/mediafiles` — must persist across container restarts and image upgrades |
+| `mediafiles/` (uploaded logos) | Volume mounted at `/app/mediafiles` in the `web` container (`media_data` in `docker-compose.prod.yml`) — must persist across container restarts and image upgrades |
 
 ### Step 1 — Configure environment
 
@@ -92,6 +67,7 @@ EMAIL_FROM=no-reply@denbi.de
 
 ADMIN_URL_PREFIX=your-secret-admin-path
 FORWARDED_ALLOW_IPS=<nginx-server-ip>
+ALTCHA_HMAC_KEY=<generate: python -c "import secrets; print(secrets.token_hex(32))">
 ```
 
 ### Step 2 — TLS and Nginx
@@ -112,25 +88,27 @@ certbot certonly --standalone -d service-registry.bi.denbi.de
 ### Step 3 — Start production services
 
 ```bash
-docker compose up -d
-docker compose exec web python manage.py createsuperuser
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec web python manage.py createsuperuser
 ```
 
+On the Ansible-managed host the generated compose file is used instead; note that the repository's `docker-compose.prod.yml` overlay cannot remove the bundled `db` service, so with the overlay alone a local PostgreSQL container also starts.
+
 !!! info "Migrations, group sync, and EDAM seeding are automatic"
-The `web` container entrypoint runs `manage.py migrate --noinput` before starting,
-then immediately runs `manage.py setup_groups` to keep the three admin role groups
-(`Registry Viewer`, `Registry Editor`, `Registry Manager`) in sync with the codebase.
-On a fresh database, migrations also seed the EDAM ontology (~3,400 terms, ~30 s).
-Worker and beat containers set `SKIP_MIGRATE=true` so they do not race web on startup.
+    The `web` container entrypoint runs `manage.py migrate --noinput` before starting,
+    then immediately runs `manage.py setup_groups` to keep the three admin role groups
+    (`Registry Viewer`, `Registry Editor`, `Registry Manager`) in sync with the codebase.
+    On a fresh database, migrations also seed the EDAM ontology (about 3,500 terms, about 30 s).
+    Worker and beat containers set `SKIP_MIGRATE=true` so they do not race web on startup.
 
 !!! info "Static files are baked into the image"
-`collectstatic` runs at Docker build time — no separate `collectstatic` step needed.
+    `collectstatic` runs at Docker build time — no separate `collectstatic` step needed.
 
 !!! warning "SKIP_MIGRATE on worker and beat"
-The Ansible-generated compose must set `SKIP_MIGRATE: "true"` in the environment
-of `worker` and `beat` services. Without this, all three containers race to run
-migrations simultaneously on a fresh database, causing a PostgreSQL `UniqueViolation`
-error. The `web` service is the sole migration runner.
+    The Ansible-generated compose must set `SKIP_MIGRATE: "true"` in the environment
+    of `worker` and `beat` services. Without this, all three containers race to run
+    migrations simultaneously on a fresh database, causing a PostgreSQL `UniqueViolation`
+    error. The `web` service is the sole migration runner.
 
 ---
 
@@ -144,7 +122,7 @@ To run migrations manually (e.g. to pre-apply before a rolling restart):
 
 ```bash
 docker compose exec web python manage.py migrate
-# or via Makefile (dev overlay):
+# or via Makefile (base compose + docker-compose.prod.yml):
 make prod-migrate
 ```
 
@@ -152,101 +130,10 @@ Migrations are tracked in version control under `apps/*/migrations/`. Never edit
 
 ---
 
-## Initial Data (Fixtures)
+## Initial Data
 
-Seed the PI list and service centres:
-
-```bash
-docker compose exec web python manage.py loaddata apps/registry/fixtures/initial_pis.json
-docker compose exec web python manage.py loaddata apps/registry/fixtures/initial_centres.json
-```
-
-(Fixture files to be created separately with the full de.NBI PI list.)
-
----
-
-## EDAM Ontology Seeding
-
-The EDAM ontology (~3,400 terms) powers the Topic and Operation dropdowns on the
-registration form. The application handles seeding in three ways — no manual step
-is required on a standard first deployment.
-
-### Automatic seeding on first migrate
-
-When `manage.py migrate` runs against a **fresh database** (empty `EdamTerm` table),
-it automatically downloads and imports EDAM from `EDAM_OWL_URL`. This happens as
-a `post_migrate` signal — you will see progress output at the end of `migrate`:
-
-```
-[edam] EdamTerm table is empty — running initial EDAM sync.
-[edam] This downloads ~3 MB from edamontology.org and may take ~30 seconds.
-[edam] Loading EDAM from: https://edamontology.org/EDAM_stable.owl
-...
-[edam] Auto-seed complete — 3471 terms loaded (EDAM 1.25).
-```
-
-On subsequent `migrate` runs (e.g. applying a new migration), the table is not
-empty so the signal is a no-op.
-
-### Ongoing automatic updates
-
-Celery beat runs a full EDAM sync **every 30 days** automatically. EDAM releases
-are infrequent (~1–2 per year) so monthly is more than sufficient.
-
-### Manual sync
-
-Force a sync at any time via:
-
-- **Admin UI**: Go to **EDAM Ontology → EDAM Terms** and click **↻ Sync EDAM from upstream**.
-  The sync runs as a background Celery task; refresh the page after ~30 seconds.
-
-- **CLI**:
-  ```bash
-  docker compose exec web python manage.py sync_edam
-  ```
-
-Verify the current state:
-
-```bash
-docker compose exec web python manage.py shell -c \
-  "from apps.edam.models import EdamTerm; t = EdamTerm.objects.first(); print(EdamTerm.objects.count(), 'terms, version', t.edam_version)"
-```
-
-### Air-gapped / firewall-restricted servers
-
-If the server cannot reach edamontology.org, download the OWL file on another machine
-and copy it across:
-
-```bash
-# On a machine with internet access:
-curl -o EDAM.owl https://edamontology.org/EDAM_stable.owl
-# Copy EDAM.owl to the server, then:
-```
-
-Either set the path permanently in `.env`:
-
-```bash
-EDAM_OWL_URL=/app/EDAM.owl
-```
-
-Or pass it once to the management command:
-
-```bash
-docker compose exec web python manage.py sync_edam --url /app/EDAM.owl
-```
-
-The auto-seed on first migrate also respects `EDAM_OWL_URL`, so an air-gapped
-deployment works without any code changes.
-
----
-
-## Network Requirements
-
-| Destination        | Port | When needed                       | Purpose                |
-| ------------------ | ---- | --------------------------------- | ---------------------- |
-| `bio.tools`        | 443  | On form submission + daily        | bio.tools API sync     |
-| `edamontology.org` | 443  | Manual `sync_edam` runs only      | EDAM ontology download |
-| Your SMTP server   | 587  | On every submission/status change | Email notifications    |
+- **EDAM terms and SPDX licences** are downloaded automatically by the first `migrate` on an empty database (about 30 seconds) and refreshed every 30 days. Air-gapped servers, manual syncs and the outbound network access the server needs are described in [Reference Data and Ontology Sync](operator/data-sync.md).
+- **Service categories, service centres and PIs** are entered in the admin (**Reference Data**), through the [Admin REST API](admin/api.md#reference-data-categories-service-centres-pis), or in bulk from a spreadsheet with `scripts/import_reference_data.py` ([Bulk import](operator/data-sync.md#bulk-import-of-pis-categories-and-service-centres)). The repository ships no fixture files for them.
 
 ---
 
@@ -256,7 +143,7 @@ In the Ansible-managed production environment, Ansible handles image pulls and c
 restarts. For manual updates:
 
 ```bash
-# Pull the new image (Ansible sets image tag to :stable)
+# Pull the new image (the tag comes from the compose file Ansible generates)
 docker compose pull
 
 # Restart containers — web entrypoint applies pending migrations automatically
@@ -306,7 +193,7 @@ sudo nginx -T 2>/dev/null | grep -nE "server_name|client_max_body_size|location 
 ### Persistent storage in production
 
 Uploaded logos are stored in a named Docker volume (`media_data`) that is mounted at
-`/app/mediafiles` in both the `web`, `worker`, and `beat` containers. The volume is
+`/app/mediafiles` in the `web` container, the only service that reads or writes logos. The volume is
 declared in `docker-compose.prod.yml`:
 
 ```yaml
@@ -323,7 +210,7 @@ To store logos on the host filesystem (recommended for backups), replace the nam
 volume with a bind mount in your Ansible Compose template:
 
 ```yaml
-# web / worker / beat service
+# web service
 volumes:
   - /data/denbi-service-registry/media:/app/mediafiles
 
@@ -340,62 +227,9 @@ curl -I https://service-registry.bi.denbi.de/media/logos/<uuid>.png
 
 ---
 
-## Navbar Logo (Branding)
+## Branding
 
-To display your organisation's logo in the site navbar:
-
-1. Place your organisation logo file at `static/img/logo.png` (or `.svg`, `.jpg`)
-2. Rebuild static files: `make collectstatic`
-
-Or set `LOGO_URL` in `.env` to point to any image URL:
-
-```bash
-# Local static file (after collectstatic)
-LOGO_URL=/static/img/logo.png
-
-# External URL
-LOGO_URL=https://www.denbi.de/images/logos/denbi-logo.png
-```
-
-Recommended logo height is 38px. The image renders in the top-left of the navbar
-alongside the site name text.
-
----
-
-## Backup
-
-### Database
-
-```bash
-# Backup
-docker compose exec db pg_dump -U denbi denbi_registry > backup_$(date +%Y%m%d).sql
-
-# Restore
-docker compose exec -T db psql -U denbi denbi_registry < backup_20260306.sql
-```
-
-### Media files (uploaded logos)
-
-If using a bind mount (`/data/denbi-service-registry/media`), include the directory in
-your standard host backup. If using a named Docker volume, export it before an upgrade:
-
-```bash
-# Export named volume to a tar archive
-docker run --rm \
-  -v denbi_service_registry_media_data:/data \
-  -v $(pwd):/backup \
-  alpine tar czf /backup/media_backup_$(date +%Y%m%d).tar.gz -C /data .
-
-# Restore
-docker run --rm \
-  -v denbi_service_registry_media_data:/data \
-  -v $(pwd):/backup \
-  alpine tar xzf /backup/media_backup_20260322.tar.gz -C /data
-```
-
-### Redis
-
-Redis holds only transient Celery queue data and does not need persistent backup.
+The navbar logo, favicon and site name are set in `config/site.toml`; see [Configuration → Deploying for a different organisation](configuration.md#deploying-for-a-different-organisation). Backups of the database and the uploaded logos are described in [Backups](operator/backups.md).
 
 ---
 
@@ -408,7 +242,8 @@ Redis holds only transient Celery queue data and does not need persistent backup
 - [ ] HSTS preload submitted to [hstspreload.org](https://hstspreload.org)
 - [ ] `ADMIN_URL_PREFIX` changed from default `admin-denbi`
 - [ ] `ALLOWED_HOSTS` set to production hostname only
-- [ ] All containers running as non-root (`docker compose ps` → verify USER column)
+- [ ] `ALTCHA_HMAC_KEY` set (otherwise the CAPTCHA is skipped)
+- [ ] Containers run as non-root: `docker compose exec web id -u` does not print `0`
 - [ ] `pip-audit` passes: `make audit`
 - [ ] Health checks passing: `curl https://service-registry.bi.denbi.de/health/ready/`
 - [ ] Test email notification by submitting a test form
@@ -418,48 +253,4 @@ Redis holds only transient Celery queue data and does not need persistent backup
 
 ## Troubleshooting
 
-**Web service not starting:**
-
-```bash
-docker compose logs web
-# Common causes: missing SECRET_KEY, DB_PASSWORD, or REDIS_PASSWORD in .env
-# The startup error will name the missing variable explicitly
-```
-
-**Database authentication failure:**
-
-```bash
-# Verify what password Django is using
-docker compose exec web python -c "
-from django.conf import settings
-d = settings.DATABASES['default'].copy()
-d['PASSWORD'] = '***'
-print(d)
-"
-# Production: DB_HOST points to the external PostgreSQL instance — verify DB_HOST,
-# DB_PORT, DB_USER, and DB_PASSWORD in .env match the external server's credentials.
-# Development: make sure DB_PASSWORD in .env matches the password the DB volume was
-# initialised with. If unsure, wipe the volume and start fresh: make nuke
-```
-
-**Emails not sending:**
-
-```bash
-docker compose logs worker
-docker compose exec worker python -c \
-  "from django.core.mail import send_mail; send_mail('test','test','from@example.com',['to@example.com'])"
-```
-
-**Rate limit 429 errors in testing:**
-
-```bash
-# Increase limits in .env:
-RATE_LIMIT_SUBMIT=1000/h
-RATE_LIMIT_UPDATE=1000/h
-```
-
-**EDAM dropdowns empty:**
-
-```bash
-docker compose exec web python manage.py sync_edam
-```
+See [Troubleshooting](operator/troubleshooting.md) in the Operator Guide.

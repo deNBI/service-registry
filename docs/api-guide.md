@@ -2,93 +2,32 @@
 icon: material/api
 ---
 
-# API Guide
+# Using the API
 
-The de.NBI Service Registration Platform REST API allows programmatic access to service registrations.
+For service owners who want to register or update their service from a script instead of the web form. You can only read and change **your own** submission with the API key you received at registration. Registry staff: the endpoints that need an Admin API key are in the [Admin REST API](admin/api.md).
 
 Interactive documentation is available at:
 
 - **Swagger UI**: `/api/docs/`
 - **ReDoc**: `/api/redoc/`
-- **OpenAPI schema** (JSON): `/api/schema/`
+- **OpenAPI schema**: `/api/schema/` (YAML; `/api/schema/?format=json` for JSON)
 
-Both Swagger UI (swagger-ui-dist 5.18.2) and ReDoc (2.2.0) assets are vendored locally in `static/` — no CDN or external requests are made when loading the docs pages.
-
----
-
-## Authentication
-
-Two authentication schemes are supported.
-
-### Admin API Key (scoped, independent of user accounts)
-
-`Authorization: AdminKey <key>`
-
-Machine-to-machine keys that are **independent of any staff user account** and carry
-an explicit scope. Create as many as needed — one per consumer, rotate individually.
-
-| Scope  | HTTP methods allowed                | Typical use case                               |
-| ------ | ----------------------------------- | ---------------------------------------------- |
-| `read` | GET / HEAD / OPTIONS only           | Public-facing website, dashboard, read-only CI |
-| `full` | All methods (GET/POST/PATCH/DELETE) | Trusted back-end integration                   |
-
-**Why use a `read` scope key?**
-
-If you give a `read` key to a third-party website that renders registry data, leaking
-the key is low-risk: the worst-case outcome is that someone reads data that might
-already be public. They **cannot** modify submissions, create or delete reference
-data, or access any field that the serialisers exclude from responses (`submission_ip`, etc.).
-
-**Creating a key** (see [Admin Guide → Admin API Keys](admin-guide.md#admin-api-keys)):
-
-1. Log in to `/admin-denbi/`
-2. Go to **API → Admin API Keys → Add Admin API Key**
-3. Enter a label (e.g. `Public website`) and choose the scope
-4. Save — the full plaintext key appears once. Copy it now.
-
-**Using it:**
-
-```bash
-# Read-only access — safe to embed in a public application
-curl https://service-registry.bi.denbi.de/api/v1/submissions/ \
-  -H "Authorization: AdminKey <your-key>"
-
-# Attempt to write with a read-scope key → 403 Forbidden
-curl -X POST https://service-registry.bi.denbi.de/api/v1/categories/ \
-  -H "Authorization: AdminKey <read-key>" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "New"}'
-# → {"detail": "This key is read-only. Use a full-access Admin API Key to modify data."}
-```
-
-**Revoking a key:**
-
-Set **Is active** to unchecked in the admin UI. The record is retained for audit
-purposes; the key immediately stops authenticating.
+The schema lists every field with its type, length limit and description.
 
 ---
 
-### Submission API Key
+## Your API key
 
 `Authorization: ApiKey <key>`
 
-Issued when a service is registered (via the web form or `POST /api/v1/submissions/`).
-Scoped to a single submission. The plaintext key is shown **once** — store it securely.
-
-Two scopes are available (set by admins via the API Key admin):
+You receive the key once, when you register (in the web form's confirmation page, or in the `api_key` field of the `POST` response). It belongs to one submission. Store it securely: it is not e-mailed and cannot be shown again. If you lose it, see [Lost your API key?](user-guide.md#lost-your-api-key).
 
 | Scope   | REST API    | Web edit form (`/update/edit/<submission_id>/`) |
-| ------- | ----------- | ------------------------------- |
-| `read`  | GET only    | View form (GET), cannot submit  |
-| `write` | GET + PATCH | View and submit changes         |
+| ------- | ----------- | ----------------------------------------------- |
+| `read`  | GET only    | View the form, cannot save                      |
+| `write` | GET + PATCH | View and save changes                           |
 
-Scope is enforced consistently in both the REST API and the web edit form.
-
-**Note:** The `scope` field on `SubmissionAPIKey` defaults to `write`. Read-only keys can only be set via the standalone Submission API Keys list view in the admin.
-A `read` key stored in the update session can load the pre-populated form
-for inspection but any POST attempt is rejected and redirected to the key-entry page.
-
-**Using it:**
+The key you receive at registration has **write** scope. The registry team can issue additional keys, including read-only ones, on request.
 
 ```bash
 curl https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
@@ -99,9 +38,80 @@ curl https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
 
 ## Endpoints
 
+| Method  | URL                               | Auth                     | Purpose                         |
+| ------- | --------------------------------- | ------------------------ | ------------------------------- |
+| `POST`  | `/api/v1/submissions/`            | None                     | Register a new service          |
+| `GET`   | `/api/v1/submissions/{id}/`       | `ApiKey`                 | Read your submission            |
+| `PATCH` | `/api/v1/submissions/{id}/`       | `ApiKey` (write scope)   | Update your submission          |
+| `GET`   | `/api/v1/edam/`                   | None                     | List EDAM terms                 |
+| `GET`   | `/api/v1/edam/{accession}/`       | None                     | One EDAM term                   |
+| `GET`   | `/api/v1/biotools/{biotools_id}/` | None                     | The bio.tools record of an approved service |
+
 ### Register a service
 
-`POST /api/v1/submissions/` — no authentication required. Submits a new service registration.
+`POST /api/v1/submissions/` — no authentication. Send JSON, or `multipart/form-data` if you include a logo.
+
+**Required fields**
+
+| Field                    | Type             | Notes                                                                                   |
+| ------------------------ | ---------------- | --------------------------------------------------------------------------------------- |
+| `date_of_entry`          | date             | `YYYY-MM-DD`                                                                            |
+| `service_name`           | string (300)     | Cannot be changed later                                                                 |
+| `service_description`    | string           | 50 to 5,000 characters                                                                  |
+| `year_established`       | integer          | Between 1900 and the current year                                                       |
+| `service_category_ids`   | list of integers | Category ids                                                                            |
+| `service_center_id`      | UUID             | Service centre id                                                                       |
+| `responsible_pi_ids`     | list of UUIDs    | PI ids                                                                                  |
+| `host_institute`         | string (300)     |                                                                                         |
+| `public_contact_email`   | string (2000)    | E-mail address or `https://` support URL, intended for public display (de.NBI services page) |
+| `internal_contact_name`  | string (200)     | For the registry office only; never returned by the API                                 |
+| `internal_contact_email` | e-mail           | Receives the registry's e-mails; never returned by the API                              |
+| `website_url`            | URL              | `https://` only                                                                         |
+| `terms_of_use_url`       | URL              | `https://` only                                                                         |
+| `publications_pmids`     | string           | Comma-separated PMIDs or DOIs, at most 50                                               |
+| `kpi_monitoring`         | string           | `yes` or `planned`                                                                      |
+| `data_protection_consent`| boolean          | Must be `true`; never returned by the API                                               |
+
+**Conditional rules**
+
+- `toolbox_name` is required when `is_toolbox` is `true`.
+- `kpi_start_year` is required when `kpi_monitoring` is `yes`.
+- `associated_partner_note` is required when one of the `responsible_pi_ids` is the "Associated partner" entry.
+- At least one entry in `licenses` or a non-empty `license_note` is required. This is checked on registration and on every `PATCH` (against the stored values for fields you do not send).
+
+**Optional fields** include `submitter_first_name`, `submitter_last_name`, `submitter_affiliation`, `register_as_elixir`, `is_toolbox`, `toolbox_name`, `user_knowledge_required`, `edam_topic_ids`, `edam_operation_ids` (see below), `licenses` (SPDX identifiers such as `"MIT"`), `license_note`, `github_url` (`https://github.com/…`), `biotools_url` (`https://bio.tools/…`), `fairsharing_url` (`https://fairsharing.org/…`), `other_registry_url`, `kpi_start_year`, `keywords_uncited`, `keywords_seo`, `survey_participation`, `comments` and `logo`. The schema at `/api/docs/` has the full list.
+
+**Where the ids come from.** Category, service centre and PI ids are listed by endpoints that need an Admin API key, so they are not available to you directly. Ask the registry office ([contact](user-guide.md#questions)) for the ids you need. Once your submission exists, its `GET` response shows the ids of the categories, centre and PIs you chose. `edam_topic_ids` and `edam_operation_ids` take the registry's internal numeric term ids, which the public EDAM endpoint does not return; the simplest way to set EDAM terms is the web edit form.
+
+**Example:**
+
+```bash
+curl -X POST https://service-registry.bi.denbi.de/api/v1/submissions/ \
+  -H "Content-Type: application/json" \
+  -d @submission.json
+```
+
+```json
+{
+  "date_of_entry": "2026-10-12",
+  "service_name": "Example Aligner",
+  "service_description": "Example Aligner maps short sequencing reads to a reference genome and reports alignment statistics.",
+  "year_established": 2021,
+  "service_category_ids": [1],
+  "service_center_id": "<service-centre-uuid>",
+  "responsible_pi_ids": ["<pi-uuid>"],
+  "host_institute": "Example University",
+  "public_contact_email": "support@example.org",
+  "internal_contact_name": "Jane Doe, Example University",
+  "internal_contact_email": "jane.doe@example.org",
+  "website_url": "https://example.org/aligner",
+  "terms_of_use_url": "https://example.org/aligner/terms",
+  "publications_pmids": "12345678",
+  "licenses": ["MIT"],
+  "kpi_monitoring": "planned",
+  "data_protection_consent": true
+}
+```
 
 **Response (201):**
 
@@ -116,83 +126,25 @@ curl https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
 }
 ```
 
----
-
-### List all submissions
-
-`GET /api/v1/submissions/` — requires admin API Key. Returns paginated full detail for all submissions.
-
-**Query parameters:**
-
-| Parameter            | Example                       | Description                                                                                   |
-| -------------------- | ----------------------------- | --------------------------------------------------------------------------------------------- |
-| `status`             | `?status=approved`            | Filter by status (`draft`, `submitted`, `under_review`, `approved`, `rejected`, `deprecated`) |
-| `service_center`     | `?service_center=BioinfoProt` | Filter by centre short name                                                                   |
-| `year_established`   | `?year_established=2021`      | Filter by year                                                                                |
-| `register_as_elixir` | `?register_as_elixir=true`    | Filter by ELIXIR flag                                                                         |
-| `ordering`           | `?ordering=-submitted_at`     | Sort (prefix `-` for descending)                                                              |
-
-**Response (200):**
+A missing or invalid field returns `400` with one message per field:
 
 ```json
 {
-  "count": 42,
-  "next": "http://.../api/v1/submissions/?page=2",
-  "previous": null,
-  "results": [
-    {
-      "id": "...",
-      "service_name": "...",
-      "status": "approved",
-      "edam_topics": [{"uri": "...", "accession": "topic_0091", "label": "Proteomics"}],
-      "edam_operations": [...],
-      "responsible_pis": [{"last_name": "...", "orcid": "..."}],
-      "biotoolsrecord": {
-        "id": "...",
-        "biotools_id": "my-tool",
-        "biotools_url": "https://bio.tools/my-tool",
-        "name": "My Tool",
-        "description": "A tool for ...",
-        "homepage": "https://example.com/my-tool",
-        "version": ["1.0", "1.1"],
-        "license": "MIT",
-        "maturity": "Mature",
-        "cost": "Free of charge",
-        "tool_type": ["Web application", "Command-line tool"],
-        "operating_system": ["Linux", "Mac"],
-        "edam_topic_uris": ["http://edamontology.org/topic_0091"],
-        "edam_topics_resolved": [
-          {"uri": "http://edamontology.org/topic_0091", "accession": "topic_0091", "label": "Proteomics"}
-        ],
-        "functions": [
-          {
-            "position": 0,
-            "operations": [{"uri": "http://edamontology.org/operation_0004", "term": "Operation"}],
-            "inputs": [{"data": {"uri": "...", "term": "Sequence"}, "formats": []}],
-            "outputs": [{"data": {"uri": "...", "term": "Report"}, "formats": []}],
-            "cmd": null,
-            "note": null
-          }
-        ],
-        "publications": [{"doi": "10.1000/xyz", "pmid": null, "pmcid": null, "type": "Primary", "note": null}],
-        "documentation": [{"url": "https://example.com/docs", "type": "General", "note": null}],
-        "download": [],
-        "links": [],
-        "last_synced_at": "2024-03-15T10:30:00Z",
-        "sync_error": null
-      },
-      ...
-    }
-  ]
+  "error": {
+    "service_description": ["Service description must be at least 50 characters."],
+    "website_url": ["URL must use the https:// scheme. Plain http:// and other schemes are not accepted."]
+  },
+  "request_id": "…"
 }
 ```
 
+The registry office and your internal contact address receive an e-mail for every new registration.
+
 ---
 
-### Retrieve a submission
+### Retrieve your submission
 
-`GET /api/v1/submissions/{id}/` — requires `ApiKey`. Returns your own submission in full detail.
-Returns 403 if the key does not belong to this submission.
+`GET /api/v1/submissions/{id}/` — requires your `ApiKey`. Returns your submission in full detail. Any other id returns `404`.
 
 **Description fields.** `service_description` is the raw text as submitted (only line endings, Unicode normalisation and leading/trailing whitespace are normalised): plain text that may contain Markdown and any characters, including `<`, `>` and `&` and text that looks like HTML tags (rows saved by older versions of the web form may hold HTML entities such as `&gt;` instead). It is not HTML: HTML-escape it wherever you insert it into a page, or use `service_description_html`, which is always safe to insert. The detail response (this endpoint, and the create and update responses) also includes a read-only `service_description_html`:
 
@@ -200,9 +152,9 @@ Returns 403 if the key does not belong to this submission.
 - When Markdown rendering is enabled on the server, it is the sanitized rendered HTML (CommonMark): paragraphs, line breaks, bold/italic, lists (an ordered list may carry a numeric `start` attribute), blockquotes, headings and links. Headings are shifted down three levels, so it may contain `h4`, `h5` and `h6` (`#` becomes `h4`, `##` `h5`, `###` and deeper `h6`) but never `h1` to `h3`. Only absolute `http://` or `https://` links with a host and non-empty `mailto:` links are kept; other links (including relative ones and host-less ones such as `https:example.org`) are reduced to their text, and so are links with no visible text. Kept links carry `rel="nofollow noopener noreferrer"`; `http`/`https` links also get `target="_blank"`, `mailto` links do not.
 - When it is disabled, it is the plain text HTML-escaped once, with no paragraph or line-break markup.
 
-Descriptions saved before Markdown support was released may contain HTML entities such as `&gt;` in the raw `service_description` (the old web form escaped its input); newer rows are raw. `service_description_html` decodes those entities in both cases, so a legacy `x &gt; 5` displays as `x > 5`, never as a literal `&gt;`: with Markdown enabled it is rendered as above, and with Markdown disabled the decoded plain text is escaped exactly once. Consumers that display descriptions should prefer `service_description_html` over the raw field.
+Rows saved by older versions of the web form may hold HTML entities such as `&gt;` in the raw field; `service_description_html` decodes them, so prefer it for display.
 
-`service_description_html` is not included in the list endpoint (`GET /api/v1/submissions/`) and is ignored if sent in a `POST` or `PATCH`. Length validation applies to the raw `service_description`.
+`service_description_html` is ignored if sent in a `POST` or `PATCH`. Length validation applies to the raw `service_description`.
 
 ```json
 {
@@ -211,27 +163,64 @@ Descriptions saved before Markdown support was released may contain HTML entitie
 }
 ```
 
+**bio.tools record.** When your service has a bio.tools URL, `biotoolsrecord` holds the synced metadata:
+
+```json
+"biotoolsrecord": {
+  "id": "...",
+  "biotools_id": "my-tool",
+  "biotools_url": "https://bio.tools/my-tool",
+  "name": "My Tool",
+  "description": "A tool for ...",
+  "homepage": "https://example.org/my-tool",
+  "version": ["1.0", "1.1"],
+  "license": "MIT",
+  "maturity": "Mature",
+  "cost": "Free of charge",
+  "tool_type": ["Web application", "Command-line tool"],
+  "operating_system": ["Linux", "Mac"],
+  "edam_topic_uris": ["http://edamontology.org/topic_0091"],
+  "edam_topics_resolved": [
+    {"uri": "http://edamontology.org/topic_0091", "accession": "topic_0091", "label": "Proteomics"}
+  ],
+  "functions": [
+    {
+      "position": 0,
+      "operations": [{"uri": "http://edamontology.org/operation_0004", "term": "Operation"}],
+      "inputs": [{"data": {"uri": "...", "term": "Sequence"}, "formats": []}],
+      "outputs": [{"data": {"uri": "...", "term": "Report"}, "formats": []}],
+      "cmd": null,
+      "note": null
+    }
+  ],
+  "publications": [{"doi": "10.1000/xyz", "pmid": null, "pmcid": null, "type": "Primary", "note": null}],
+  "documentation": [{"url": "https://example.org/docs", "type": "General", "note": null}],
+  "download": [],
+  "links": [],
+  "last_synced_at": "2024-03-15T10:30:00Z",
+  "sync_error": ""
+}
+```
+
+**Related records** are returned as objects: `service_categories` (`id`, `name`), `service_center` (`id`, `short_name`, `full_name`, `website`), `responsible_pis` (`id`, `last_name`, `first_name`, `display_name`, `institute`, `orcid`), `edam_topics` and `edam_operations`, `licenses` (SPDX ids). `biotoolsrecord` is `null` when there is no bio.tools record. `links` holds URLs to this record, the schema and the docs.
+
 ---
 
-### Update a submission
+### Update your submission
 
-`PATCH /api/v1/submissions/{id}/` — requires `ApiKey` with `write` scope. Partial update — include only changed fields.
-
-Updating an approved submission resets its status to `submitted` for re-review **when a field that is not listed in `no_reset_fields` actually changes** (configured in `site.toml [submission]`), the same rule as the web edit form. Sending a field with the value it already has is not a change, so a GET, modify, PATCH round-trip that echoes unchanged fields keeps the service approved; values are compared as stored, so differences only in surrounding whitespace or Unicode normalisation (NFC) do not count either. If no `no_reset_fields` are configured, any actual change resets the status. The default exempt set is the list of external links, EDAM annotations, keywords, publications, contact fields, KPI fields, and `comments` — see `no_reset_fields` in `site.toml` for the authoritative list. Changing only exempt fields on an approved submission preserves its status and maturity tags. The content change and the reset are saved in one transaction.
-
-When a reset does occur, `primary_maturity_tag` and `secondary_maturity_tags` are also cleared (they are only valid on approved services). The submitter update email includes a lifecycle notice.
+`PATCH /api/v1/submissions/{id}/` — requires your `ApiKey` with `write` scope. Partial update — include only changed fields. Full `PUT` is not supported and returns `405`.
 
 ```bash
 curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
   -H "Authorization: ApiKey <your-key>" \
   -H "Content-Type: application/json" \
-  -d '{"kpi_start_year": "2026"}'
+  -d '{"website_url": "https://new-url.example.org"}'
 ```
 
-Full `PUT` is not supported — use `PATCH`.
+**Approved services and re-review.** If your service is approved and the update changes a field that the registry treats as core content, the service goes back to **Submitted** for re-review and its maturity tags are cleared. Changing only supplementary fields (for example links, EDAM annotations, keywords, publications, contact fields, KPI fields or comments in the default configuration) keeps it approved. The exact list is set by the registry operators. Sending a field with the value it already has is not a change, so a GET, modify, PATCH round-trip that echoes unchanged fields keeps the service approved; differences only in surrounding whitespace, line endings or Unicode normalisation do not count either. Your confirmation e-mail says when a re-review was triggered.
 
-!!! warning "The service name is immutable after submission"
-`service_name` is read-only on update: it can be set at registration (`POST`) but never changed via `PATCH`. A `PATCH` that includes a **different** `service_name` still succeeds (`200`) — the name is left unchanged, all other fields are applied, and the response gains a `warnings` array noting the rename was not applied. Sending the same name (in any whitespace or Unicode form) is silently accepted with no warning. Only a de.NBI administrator can correct a submitted name.
+!!! warning "The service name cannot be changed"
+    `service_name` is read-only on update. A `PATCH` that includes a **different** `service_name` still succeeds (`200`): the name is left unchanged, all other fields are applied, and the response gains a `warnings` array. Sending the same name is accepted without a warning. Contact the registry office if the name must be corrected.
 
 ```json
 {
@@ -243,38 +232,15 @@ Full `PUT` is not supported — use `PATCH`.
 }
 ```
 
-!!! info "Email notifications on PATCH"
-Every successful `PATCH` triggers the same notification flow as a submitter web-form edit: an admin email with the full submission report, a field-level **what changed** diff table, and a direct link to the admin change view. If any fields actually changed, the submitter also receives a separate confirmation email with the same diff table. If the edit resets the status (non-exempt field change on an approved service), the submitter email includes a lifecycle notice explaining the reset. When the request contains no actual changes, the submitter gets no email and the admin email has no diff table (as for a web-form save without changes).
+**E-mails.** Every successful `PATCH` notifies the registry office. If anything actually changed, you also receive a confirmation e-mail at the internal contact address listing what changed (and whether a re-review was triggered). A `PATCH` with no actual changes sends you no e-mail.
+
+The fields you cannot set yourself (`status`, `primary_maturity_tag`, `secondary_maturity_tags`) are ignored if sent.
 
 ---
 
-## Custom permissions
+### Upload or replace your logo
 
-Two semantic permissions are defined on `ServiceSubmission` beyond the standard CRUD permissions:
-
-| Codename                                | What it gates                                                       | API endpoint impact                            |
-| --------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------- |
-| `submissions.approve_servicesubmission` | Approve and reject status transitions; bulk approve/reject actions. | Admin-only via `/admin/`. Not exposed via API. |
-| `submissions.manage_apikeys`            | Issue, reset, and revoke `SubmissionAPIKey` objects.                | Admin-only via `/admin/`. Not exposed via API. |
-
-These permissions are enforced solely in the Django admin backend. See [Admin Guide → Custom permission codenames](admin-guide.md#custom-permission-codenames) for more detail.
-
----
-
-### Upload or update a service logo
-
-Service logos can be attached to a submission at registration time or added/replaced later via `PATCH`.
-
-**On `POST` (new registration):**
-
-```bash
-curl -X POST https://service-registry.bi.denbi.de/api/v1/submissions/ \
-  -H "Authorization: ApiKey <your-key>" \
-  -F "service_name=MyTool" \
-  -F "logo=@service-logo.png"
-```
-
-**On `PATCH` (update existing submission):**
+Logos can be sent at registration or later with `PATCH`. Send the request as `multipart/form-data` (`-F` in curl); JSON requests cannot carry files. You can mix file and text fields in the same request.
 
 ```bash
 curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
@@ -282,198 +248,62 @@ curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
   -F "logo=@service-logo.svg"
 ```
 
-!!! note "Use `multipart/form-data` for logo uploads"
-When uploading a logo, send the request as `multipart/form-data` (`-F` flags in curl) instead of `application/json`. You can mix file and text fields in the same request. JSON-only requests (`Content-Type: application/json`) cannot carry file data.
-
-**Logo field behaviour:**
+To send a logo at registration, add `-F "logo=@service-logo.png"` to a `multipart/form-data` registration request that also carries all required fields.
 
 | Field      | Direction  | Type           | Notes                                                                                                               |
 | ---------- | ---------- | -------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `logo`     | write-only | file           | Accepted in `multipart/form-data` requests only, on create (`POST`) and update (`PATCH`). Omit to leave the existing logo unchanged. |
 | `logo_url` | read-only  | string \| null | Absolute URL to the stored logo file, or `null` if no logo has been uploaded. Returned in all submission responses. |
 
-**Accepted formats and default limits** (configurable in `config/site.toml` `[uploads]`; the `logo` field description in the OpenAPI schema shows the configured values):
-
-| Format     | Limit                                                                 |
-| ---------- | --------------------------------------------------------------------- |
-| PNG / JPEG | `logo_max_bytes` (10 MB) and `logo_max_pixels` (25 megapixels)        |
-| SVG        | `logo_max_svg_bytes` (1 MB)                                           |
-
-A file over these limits, of an unsupported type, or one that cannot be
-processed is rejected with `400 Bad Request` and a validation message for the
-`logo` field; nothing is stored. SVG content outside the rules below is removed
-and the rest of the file is stored.
-
-**Processing applied automatically:**
-
-- Magic-byte type detection (file extension and MIME header are never trusted)
-- JPEG/PNG: pixel count read from the header before decoding, then re-encoded via Pillow to strip EXIF metadata and verify integrity
-- SVG: parsed with Python's stdlib XML parser (external entities are not loaded, and text from internal entities goes through the same rules as the rest of the file); the root must be `<svg>`; only standard drawing elements are kept (shapes, text, gradients, patterns, clip paths, masks, filters, styles); an SVG containing a bitmap image (`<image>`) or other content from outside the file is rejected; `on*` attributes and namespaced attributes other than `xlink:href`, `xml:space` and `xml:lang` are removed; links may only point inside the logo (`#id`); CSS references may also use embedded `data:` resources such as fonts
-- Original filename is discarded; the file is stored under a UUID path (`media/logos/<uuid4>.<ext>`)
-
-Old logos are **not deleted** when a logo is replaced — previous files remain on disk.
+Accepted formats are PNG, JPEG and SVG. The size limits are shown in the `logo` field description at `/api/docs/` (by default PNG/JPEG up to 10 MB and 25 megapixels, SVG up to 1 MB). A file over the limits, of another type, or one that cannot be processed is rejected with `400` and a message for the `logo` field, and nothing is stored. What happens to a logo after upload, and which SVGs are rejected, is described in the [User Guide](user-guide.md#logo).
 
 ---
 
-### Maturity Tags
+### Maturity tags
 
-Approved services can be tagged with a **primary maturity stage** (Mature, Emerging, Legacy) and optional **secondary tags** (Unstable, etc.). Tags provide lifecycle metadata for users browsing the registry.
-
-**Response fields (read-only):**
+Approved services can carry a **primary maturity tag** (`mature`, `emerging`, `legacy`) and **secondary tags** (for example `unstable`), assigned by the registry team.
 
 - `primary_maturity_tag`: `"mature"` | `"emerging"` | `"legacy"` | `null`
 - `secondary_maturity_tags`: array of strings (e.g., `["unstable"]` or `[]`)
 
-!!! warning "Admin-only — read-only in the API"
-Maturity tags are assigned exclusively by admins via the Django admin backend. Any `primary_maturity_tag` or `secondary_maturity_tags` values included in a `POST` or `PATCH` request body are **silently ignored**. Tags appear in GET responses so consumers can read the admin-assigned lifecycle stage.
-
-**Filter by maturity:**
-
-```bash
-# List all approved Mature services
-curl https://service-registry.bi.denbi.de/api/v1/submissions/?primary_maturity_tag=mature \
-  -H "Authorization: AdminKey <your-key>"
-
-# List all services tagged Unstable
-curl https://service-registry.bi.denbi.de/api/v1/submissions/?secondary_maturity_tags=unstable \
-  -H "Authorization: AdminKey <your-key>"
-```
-
-!!! info "Tags are cleared on unapproval"
-When an admin changes a service's status away from Approved (via the admin backend), all maturity tags are automatically cleared. The API will return `null` / `[]` for the tag fields on such services. Tags can be reassigned after the service is re-approved.
-
----
-
-### Reference data {#reference-data-categories-service-centres-pis}
-
-All reference data endpoints require an admin API Key. All three resources support
-full CRUD and follow the same pattern.
-
-| Method   | URL pattern                | Description                             |
-| -------- | -------------------------- | --------------------------------------- |
-| `GET`    | `/api/v1/categories/`      | List all categories (active + inactive) |
-| `POST`   | `/api/v1/categories/`      | Create a category                       |
-| `GET`    | `/api/v1/categories/{id}/` | Retrieve a category                     |
-| `PATCH`  | `/api/v1/categories/{id}/` | Partial update                          |
-| `PUT`    | `/api/v1/categories/{id}/` | Full update                             |
-| `DELETE` | `/api/v1/categories/{id}/` | Soft-delete (sets `is_active=False`)    |
-
-Same pattern applies for `/api/v1/service-centers/{id}/` and `/api/v1/pis/{id}/`.
-
-**`DELETE` is a soft-delete** — the record is retained in the database and remains
-linked to existing submissions. `is_active=False` hides it from the registration form
-but does not break any foreign keys.
-
-**Filter:** `?is_active=true|false` narrows the list to active or inactive records.
-Without the filter, both active and inactive records are returned.
-
-#### Fields — `/api/v1/categories/`
-
-| Field       | Type    | Writable | Notes              |
-| ----------- | ------- | -------- | ------------------ |
-| `id`        | integer | no       | Auto-assigned      |
-| `name`      | string  | yes      | Must be unique     |
-| `is_active` | boolean | yes      | Defaults to `true` |
-
-#### Fields — `/api/v1/service-centers/`
-
-| Field        | Type    | Writable | Notes              |
-| ------------ | ------- | -------- | ------------------ |
-| `id`         | UUID    | no       | Auto-assigned      |
-| `short_name` | string  | yes      | e.g. `"HD-HuB"`    |
-| `full_name`  | string  | yes      | Full official name |
-| `website`    | URL     | yes      | Optional           |
-| `is_active`  | boolean | yes      | Defaults to `true` |
-
-#### Fields — `/api/v1/pis/`
-
-| Field                   | Type    | Writable | Notes                                                  |
-| ----------------------- | ------- | -------- | ------------------------------------------------------ |
-| `id`                    | UUID    | no       | Auto-assigned                                          |
-| `last_name`             | string  | yes      | Required                                               |
-| `first_name`            | string  | yes      | Required                                               |
-| `display_name`          | string  | no       | Computed (`"Last, First"`)                             |
-| `email`                 | string  | yes      | Internal — never exposed in submission responses       |
-| `institute`             | string  | yes      | Optional                                               |
-| `orcid`                 | string  | yes      | Optional; validated format + checksum                  |
-| `is_active`             | boolean | yes      | Defaults to `true`                                     |
-| `is_associated_partner` | boolean | yes      | Mark `true` for the generic "Associated partner" entry |
-
-#### curl examples
-
-```bash
-# List all service centres (active + inactive)
-curl https://service-registry.bi.denbi.de/api/v1/service-centers/ \
-  -H "Authorization: ApiKey <admin-key>"
-
-# List active categories only
-curl "https://service-registry.bi.denbi.de/api/v1/categories/?is_active=true" \
-  -H "Authorization: ApiKey <admin-key>"
-
-# Create a new PI
-curl -X POST https://service-registry.bi.denbi.de/api/v1/pis/ \
-  -H "Authorization: ApiKey <admin-key>" \
-  -H "Content-Type: application/json" \
-  -d '{"last_name": "Smith", "first_name": "Alice", "email": "a.smith@example.com", "institute": "Example University"}'
-
-# Deactivate a service centre (soft-delete)
-curl -X DELETE https://service-registry.bi.denbi.de/api/v1/service-centers/<id>/ \
-  -H "Authorization: ApiKey <admin-key>"
-
-# Re-activate a category via PATCH
-curl -X PATCH https://service-registry.bi.denbi.de/api/v1/categories/<id>/ \
-  -H "Authorization: ApiKey <admin-key>" \
-  -H "Content-Type: application/json" \
-  -d '{"is_active": true}'
-```
-
-### bio.tools records
-
-Bio.tools metadata is automatically fetched and kept in sync when a submission includes a `biotools_id`.
-The data is embedded directly in every submission response under the `biotoolsrecord` key (see above).
-
-A standalone read-only endpoint is also available for admin API keys:
-
-| Method | URL                               | Description                                       |
-| ------ | --------------------------------- | ------------------------------------------------- |
-| `GET`  | `/api/v1/biotools/`               | List all bio.tools records                        |
-| `GET`  | `/api/v1/biotools/{biotools_id}/` | Retrieve one bio.tools record by its bio.tools ID |
-
-**Authentication:** admin API Key required.
-
-Both endpoints return the same field set as the `biotoolsrecord` object shown in the submission response above, plus a `submission` link field pointing to the associated submission.
-
-```bash
-# List all synced bio.tools records
-curl https://service-registry.bi.denbi.de/api/v1/biotools/ \
-  -H "Authorization: AdminKey <admin-key>"
-
-# Retrieve a specific record
-curl https://service-registry.bi.denbi.de/api/v1/biotools/my-tool/ \
-  -H "Authorization: AdminKey <admin-key>"
-```
-
-#### bio.tools sync actions
-
-Admins can trigger a manual re-sync from the bio.tools record list in the Django admin
-(**Bio.tools records → select records → "Sync selected records from bio.tools now"**).
-Syncs are queued as Celery tasks and run in the background.
+They are read-only in the API. They are cleared when a service leaves the Approved status, for example when an update sends it back to review.
 
 ---
 
 ### EDAM ontology terms
 
-`GET /api/v1/edam/` — public, no authentication required. Returns all non-obsolete EDAM terms.
+`GET /api/v1/edam/` — public, no authentication required. Returns all non-obsolete EDAM terms (not paginated).
 
-Filter: `?branch=topic|operation|data|format`, `?q=<search>`
+Filter: `?branch=topic|operation|data|format`, `?q=<search>` (searches label, definition and synonyms).
 
-### EDAM term detail
+`GET /api/v1/edam/{accession}/` — public. Look up by accession (e.g. `topic_0091`).
 
-`GET /api/v1/edam/{accession}/` — public. Look up by accession (e.g. `topic_0091`) or UUID.
+```bash
+curl "https://service-registry.bi.denbi.de/api/v1/edam/?branch=topic&q=proteomics"
+```
+
+### bio.tools record
+
+`GET /api/v1/biotools/{biotools_id}/` — public. Returns the synced bio.tools record of an approved service; `404` if there is none or the service is not approved.
 
 ---
 
-## Response shape
+## Field visibility
+
+| Field                     | POST/PATCH | GET response | Notes                                                                            |
+| ------------------------- | ---------- | ------------ | -------------------------------------------------------------------------------- |
+| `internal_contact_name`   | required   | never        | Write-only; stored for admin use only                                            |
+| `internal_contact_email`  | required   | never        | Write-only; stored for admin use only                                            |
+| `data_protection_consent` | required   | never        | Write-only; must be `true`                                                       |
+| `primary_maturity_tag`    | ignored    | yes          | Set by the registry team. See [Maturity tags](#maturity-tags)                    |
+| `secondary_maturity_tags` | ignored    | yes          | Set by the registry team. See [Maturity tags](#maturity-tags)                    |
+| `service_description_html` | ignored   | yes          | Read-only; safe HTML rendering of `service_description`. See [Retrieve your submission](#retrieve-your-submission) |
+| `submission_ip`           | —          | never        | Server-generated; not exposed via API                                            |
+| `user_agent_hash`         | —          | never        | Server-generated; not exposed via API                                            |
+
+---
+
+## Errors
 
 All error responses follow this envelope:
 
@@ -484,53 +314,19 @@ All error responses follow this envelope:
 }
 ```
 
-The `request_id` is included in every response (success and error) as `X-Request-ID`
-header and in error bodies. Use it when reporting issues.
+| Status | Meaning                                                                                     |
+| ------ | ------------------------------------------------------------------------------------------- |
+| 400    | A field is missing or invalid; `error` lists the messages per field                         |
+| 401    | No key, an unknown or revoked key, or a wrong scheme in the `Authorization` header          |
+| 403    | The key is valid but not allowed to do this, for example a read-scope key sending `PATCH`   |
+| 404    | The submission does not exist or does not belong to your key                                |
+| 405    | `PUT` (use `PATCH`)                                                                         |
+| 429    | Too many requests; wait and retry                                                           |
 
----
+Every response carries the request id in the `X-Request-ID` header. Include it when you report a problem.
 
-## Field visibility
+## Limits
 
-| Field                     | POST/PATCH | GET response | Notes                                                                            |
-| ------------------------- | ---------- | ------------ | -------------------------------------------------------------------------------- |
-| `internal_contact_name`   | required   | never        | Write-only; stored for admin use only                                            |
-| `internal_contact_email`  | required   | never        | Write-only; stored for admin use only                                            |
-| `primary_maturity_tag`    | ignored    | yes          | Read-only in API; set by admins via backend. See [Maturity Tags](#maturity-tags) |
-| `secondary_maturity_tags` | ignored    | yes          | Read-only in API; set by admins via backend. See [Maturity Tags](#maturity-tags) |
-| `service_description_html` | ignored   | detail only  | Read-only; safe HTML rendering of `service_description`. See [Retrieve a submission](#retrieve-a-submission) |
-| `submission_ip`           | —          | never        | Server-generated; not exposed via API                                            |
-| `user_agent_hash`         | —          | never        | Server-generated; not exposed via API                                            |
-
----
-
-## curl examples
-
-```bash
-# Register a new service (public) — internal_contact_* are required
-curl -X POST https://service-registry.bi.denbi.de/api/v1/submissions/ \
-  -H "Content-Type: application/json" \
-  -d @submission.json
-# submission.json must include internal_contact_name and internal_contact_email
-
-# List all submissions (admin key)
-curl https://service-registry.bi.denbi.de/api/v1/submissions/ \
-  -H "Authorization: AdminKey <admin-key>"
-
-# Retrieve your submission (ApiKey)
-curl https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
-  -H "Authorization: ApiKey <your-key>"
-
-# Update a field (ApiKey, write scope)
-curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
-  -H "Authorization: ApiKey <your-key>" \
-  -H "Content-Type: application/json" \
-  -d '{"website_url": "https://new-url.example.com"}'
-
-# Upload or replace a logo (ApiKey, write scope — multipart/form-data)
-curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
-  -H "Authorization: ApiKey <your-key>" \
-  -F "logo=@service-logo.png"
-
-# Browse EDAM topics (public)
-curl "https://service-registry.bi.denbi.de/api/v1/edam/?branch=topic&q=proteomics"
-```
+- Requests without a key (registering, EDAM lookups) are limited to 10 per minute per client.
+- Requests with your key are limited per submission (by default 60 per minute).
+- Browsers on other sites cannot call the API unless the registry operators allow that origin (CORS is off by default).

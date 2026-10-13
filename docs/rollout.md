@@ -2,173 +2,44 @@
 icon: material/package-up
 ---
 
-# Release, Rollout, and Rollback Runbook
+# Releases and Rollback
 
-This document covers the full lifecycle of a code change from development to
-production: versioning scheme, CI pipeline steps, staged rollout, zero-downtime
-deployment, rollback procedure, and post-release verification.
+How a change gets from the repository to production, how to deploy and roll back, and the checks to run after a release. The live production host is managed by Ansible (`roles/registry/templates/docker-compose.yml.j2`); the commands below describe the same steps for a host managed with Docker Compose directly.
 
 ---
 
 ## Versioning
 
-The project uses **Semantic Versioning** (`MAJOR.MINOR.PATCH`):
+Releases are tagged in git with plain version numbers (for example `0.9.0`), following `MAJOR.MINOR.PATCH`:
 
-| Increment            | When                                                      |
-| -------------------- | --------------------------------------------------------- |
-| `PATCH` (e.g. 1.0.1) | Bug fix, security patch, config-only change               |
-| `MINOR` (e.g. 1.1.0) | New feature, new optional field, new API endpoint         |
-| `MAJOR` (e.g. 2.0.0) | Breaking API change, major migration, architecture change |
-
-Version is tracked in **two places**:
-
-1. Git tag: `git tag v1.1.0`
-2. Docker image tag: `denbi-registry:v1.1.0`
-
-The `SPECTACULAR_SETTINGS["VERSION"]` in `config/settings.py` must match the
-API's own version (updated independently from the application version when
-API contracts change):
-
-```python
-SPECTACULAR_SETTINGS = {
-    "VERSION": "1.0.0",   # Update when API surface changes
-    ...
-}
-```
+| Increment | When                                                      |
+| --------- | --------------------------------------------------------- |
+| `PATCH`   | Bug fix, security patch, config-only change               |
+| `MINOR`   | New feature, new optional field, new API endpoint         |
+| `MAJOR`   | Breaking API change, major migration, architecture change |
+ The REST API reports its own version in the OpenAPI schema; it is set in `config/site.toml` under `[api] version` and changes only when the API contract changes.
 
 ---
 
-## Branch and Release Workflow
+## How releases are built today
 
-```
-feature/xyz  →  main  →  tag v1.1.0  →  Docker image  →  staging  →  production
-```
+1. **Pull request**: the GitHub Actions workflow `.github/workflows/ci.yml` runs on pull requests to `main` and on pushes to `main` and `develop`. It runs `pytest`, `ruff check`, `ruff format --check` and `pip-audit`. Its Docker build and push jobs are commented out, so CI does not publish images.
+2. **Merge to `main`**.
+3. **Build and push the image** with `ci_build_push.sh`, run by a maintainer from an up-to-date checkout: it logs in to the private registry given in `REGISTRY_HOST`, builds the current directory with `docker buildx` and pushes `<REGISTRY_HOST>/<IMAGE_ORGANIZATION>/<IMAGE_NAME>:<IMAGE_TAG>` (defaults `denbi`, `denbi-registry`, `latest`; use a version for releases). In the committed version the git fetch and the commit-SHA tag are commented out, and the test stage does not run (it uses the unset `GIT_SHA`, and the runtime image has no pytest), so run it with `SKIP_TESTS=1` after `make pre-commit` has passed. The header comment of the script still describes the earlier behaviour.
+4. **Staging**: deploy the image to staging and work through the [Staging Verification Checklist](#staging-verification-checklist).
+5. **Deploy**: production pulls the new image through Ansible. Migrations run automatically when the `web` container starts.
 
-1. **Feature branch**: all development in `feature/*` or `fix/*` branches.
-2. **Pull Request**: CI runs tests, linting, audit before merge.
-3. **Merge to main**: triggers CI build of `denbi-registry:main` (unstable tag).
-4. **Tag a release**: `git tag v1.1.0 && git push origin v1.1.0` triggers production build.
-5. **Deploy to staging**: automated or manual after CI passes on the tag.
-6. **Deploy to production**: manual gate after staging verification.
+Before a release, run `make pre-commit` locally (lint fix, audit, full test suite, strict docs build).
 
 ---
 
-## CI Pipeline (GitHub Actions / GitLab CI)
+## Deployment script (example)
 
-### GitHub Actions example
-
-Tests, linting, and audits run natively on the GitHub runner (no Docker needed for
-the test stage). The build job validates the Docker image separately.
-
-```yaml
-# .github/workflows/ci.yml
-name: CI
-
-on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  pull_request:
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements/development.txt
-      - name: Install dependencies
-        run: pip install -r requirements/development.txt
-      - name: Run tests
-        run: pytest tests/
-        env:
-          DJANGO_SETTINGS_MODULE: config.settings_test
-          SECRET_KEY: ci-only-not-a-real-key
-          DB_PASSWORD: ci
-          REDIS_PASSWORD: ci
-      - name: Lint
-        run: |
-          ruff check apps/ config/ tests/
-          ruff format --check apps/ config/ tests/
-      - name: Audit
-        run: pip-audit -r requirements/production.txt
-
-  build:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build Docker image
-        run: docker compose build
-      - name: Push image (on tag)
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          IMAGE_TAG: ${{ github.ref_name }}
-        run: |
-          docker build -t ghcr.io/denbi/service-registry:${IMAGE_TAG} .
-          docker push ghcr.io/denbi/service-registry:${IMAGE_TAG}
-          docker tag ghcr.io/denbi/service-registry:${IMAGE_TAG} \
-                     ghcr.io/denbi/service-registry:latest
-          docker push ghcr.io/denbi/service-registry:latest
-```
-
-### GitLab CI example
-
-```yaml
-# .gitlab-ci.yml
-stages: [test, build, deploy-staging, deploy-production]
-
-test:
-  stage: test
-  image: python:3.12-slim
-  before_script:
-    - pip install -r requirements/development.txt
-  script:
-    - pytest tests/
-    - ruff check apps/ config/ tests/
-    - pip-audit -r requirements/production.txt
-  variables:
-    DJANGO_SETTINGS_MODULE: config.settings_test
-    SECRET_KEY: ci-only
-    DB_PASSWORD: ci
-    REDIS_PASSWORD: ci
-
-build:
-  stage: build
-  only: [tags]
-  script:
-    - docker build -t registry.gitlab.com/$CI_PROJECT_PATH:$CI_COMMIT_TAG .
-    - docker push registry.gitlab.com/$CI_PROJECT_PATH:$CI_COMMIT_TAG
-
-deploy-staging:
-  stage: deploy-staging
-  only: [tags]
-  environment: staging
-  script:
-    - ssh $DEPLOY_USER@$STAGING_HOST "IMAGE_TAG=$CI_COMMIT_TAG /opt/denbi/scripts/deploy.sh"
-
-deploy-production:
-  stage: deploy-production
-  only: [tags]
-  environment: production
-  when: manual # Requires explicit click in GitLab UI
-  script:
-    - ssh $DEPLOY_USER@$PROD_HOST "IMAGE_TAG=$CI_COMMIT_TAG /opt/denbi/scripts/deploy.sh"
-```
-
----
-
-## Deployment Script
-
-Place this on the server at `/opt/denbi/scripts/deploy.sh`:
+For a host without Ansible, a script like this pulls an image and restarts the services. It assumes a compose file whose `web`, `worker` and `beat` services use `image: <registry>/denbi-registry:${IMAGE_TAG}`, as the production Ansible template does. The `docker-compose.yml` and `docker-compose.prod.yml` in the repository build the image locally instead and do not read `IMAGE_TAG`. Replace `<registry>/denbi-registry` with your image name.
 
 ```bash
 #!/usr/bin/env bash
-# /opt/denbi/scripts/deploy.sh
-# Usage: IMAGE_TAG=v1.1.0 ./deploy.sh
+# Usage: IMAGE_TAG=0.9.0 ./deploy.sh
 set -euo pipefail
 
 IMAGE_TAG=${IMAGE_TAG:-latest}
@@ -179,16 +50,16 @@ echo "=== Deploying denbi-registry:${IMAGE_TAG} ==="
 cd "$COMPOSE_DIR"
 
 # 1. Pull the new image
-docker pull "ghcr.io/denbi/service-registry:${IMAGE_TAG}"
-docker tag  "ghcr.io/denbi/service-registry:${IMAGE_TAG}" denbi-registry:current
+docker pull "<registry>/denbi-registry:${IMAGE_TAG}"
+docker tag  "<registry>/denbi-registry:${IMAGE_TAG}" denbi-registry:current
 
-# 2. Rolling restart — start new containers before stopping old
+# 2. Restart web, worker and beat on the new image.
 #    The container entrypoint runs migrations automatically on startup.
 #    Static files are baked into the image at build time — no collectstatic needed.
 echo "--- Restarting web, worker, beat ---"
 IMAGE_TAG="${IMAGE_TAG}" $COMPOSE up -d --no-deps web worker beat
 
-# 5. Wait for health check to pass
+# 3. Wait for health check to pass
 echo "--- Waiting for health check ---"
 for i in $(seq 1 12); do
   STATUS=$(curl -sf http://localhost:8000/health/ready/ | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','error'))" 2>/dev/null || echo "error")
@@ -209,25 +80,19 @@ fi
 echo "=== Deployment complete: ${IMAGE_TAG} ==="
 ```
 
-Make it executable: `chmod +x /opt/denbi/scripts/deploy.sh`
-
 ---
 
-## Zero-Downtime Deployment (Standard)
+## Standard deployment
 
 For regular releases with **non-destructive migrations** (adding optional fields,
 adding tables, adding indices):
 
 ```bash
 # On the server
-IMAGE_TAG=v1.1.0 /opt/denbi/scripts/deploy.sh
+IMAGE_TAG=0.9.0 ./deploy.sh
 ```
 
-This is zero-downtime because:
-
-- Migrations run before new code starts (new schema is backward-compatible)
-- `docker compose up -d --no-deps` starts new containers before removing old
-- Nginx continues serving requests throughout
+The interruption is short because migrations run before the new code starts serving and the new schema is backward-compatible. Docker Compose replaces each container, so expect a few seconds in which `web` is restarting; nginx shows its error page during that time.
 
 ---
 
@@ -236,23 +101,18 @@ This is zero-downtime because:
 Required when migrations are **destructive** (renaming columns, dropping columns,
 changing column types). These cannot be backward-compatible.
 
-```bash
-# 1. Enable maintenance page on host Nginx
-sudo cp /var/www/denbi-registry/errors/upstream_down.html \
-        /var/www/denbi-registry/maintenance.html
-# (Configure host Nginx to serve this file instead of proxying)
+While the application is stopped, the bundled nginx vhost answers with its 50x error page (`error_page 502 503 504` in `nginx/host/service-registry.bi.denbi.de.conf`).
 
-# 2. Stop the application (keep DB and Redis running)
+```bash
+# 1. Stop the application (keep DB and Redis running)
 docker compose stop web worker beat
 
-# 3. Apply the migration (use --run --rm to bypass the normal entrypoint auto-migrate
-#    so you can verify the migration manually before bringing traffic back)
+# 2. Apply the migration with a one-off container, so you can check it
+#    before bringing traffic back
 docker compose run --rm web python manage.py migrate
 
-# 4. Deploy the new image (entrypoint will detect no pending migrations and proceed)
-IMAGE_TAG=v2.0.0 /opt/denbi/scripts/deploy.sh
-
-# 5. Remove maintenance page / re-enable proxy
+# 3. Deploy the new image (entrypoint will detect no pending migrations and proceed)
+IMAGE_TAG=1.0.0 ./deploy.sh
 ```
 
 ---
@@ -261,11 +121,11 @@ IMAGE_TAG=v2.0.0 /opt/denbi/scripts/deploy.sh
 
 ### Rollback application code (no migration rollback needed)
 
-If the new release has a bug but no schema changes:
+If the new release has a bug but no schema changes, start the previous image (the commands assume the image-based compose file described under [Deployment script](#deployment-script-example)):
 
 ```bash
 # Restart with the previous image — no migration step needed
-IMAGE_TAG=v1.0.0 docker compose \
+IMAGE_TAG=0.9.0 docker compose \
   -f docker-compose.yml -f docker-compose.prod.yml \
   up -d --no-deps web worker beat
 
@@ -289,7 +149,7 @@ If reversible:
 docker compose run --rm web python manage.py migrate submissions 0002
 
 # 2. Deploy previous image
-IMAGE_TAG=v1.0.0 docker compose \
+IMAGE_TAG=0.9.0 docker compose \
   -f docker-compose.yml -f docker-compose.prod.yml \
   up -d --no-deps web worker beat
 ```
@@ -302,13 +162,14 @@ If the migration cannot be reversed and the new code is broken:
 # 1. Stop application
 docker compose stop web worker beat
 
-# 2. Restore database
+# 2. Restore database (bundled db container; on production run the same
+#    statements against the external PostgreSQL server)
 docker compose exec db psql -U denbi postgres -c "DROP DATABASE denbi_registry;"
 docker compose exec db psql -U denbi postgres -c "CREATE DATABASE denbi_registry;"
 docker compose exec -T db psql -U denbi denbi_registry < /path/to/backup.sql
 
 # 3. Deploy previous image
-IMAGE_TAG=v1.0.0 /opt/denbi/scripts/deploy.sh
+IMAGE_TAG=0.9.0 ./deploy.sh
 ```
 
 ---
@@ -328,8 +189,8 @@ Run through this on staging after every deployment, before promoting to producti
 - [ ] Clicking "Apply prefill" populates name, description, and EDAM fields from bio.tools
 - [ ] `GET /captcha/` returns `200` with JSON containing `algorithm`, `challenge`, `salt`, `signature`, and `maxNumber` fields
 - [ ] `GET /captcha/` response has `Cache-Control: no-store` header
-- [ ] The ALTCHA widget appears on `/register/` (checkbox or spinner visible below Section G)
-- [ ] Clicking the Submit button on `/register/` triggers the ALTCHA proof-of-work solve (spinner, then checkmark) before the form posts
+- [ ] The ALTCHA checkbox appears on `/register/` below Section G
+- [ ] Ticking the ALTCHA checkbox solves the challenge (spinner, then checkmark)
 - [ ] Submit a test registration with EDAM terms selected → confirm redirect to success page with API key
 - [ ] Copy the API key → go to `/update/` → enter key → form pre-populates including EDAM selections
 - [ ] Submit an update → confirm notification email received
@@ -341,7 +202,7 @@ Run through this on staging after every deployment, before promoting to producti
 - [ ] `GET /api/v1/edam/topic_0121/` returns full Proteomics term with definition and parent
 - [ ] After bio.tools sync runs: `GET /api/v1/biotools/blast/` returns structured record with functions
 - [ ] Admin portal at `/<ADMIN_URL_PREFIX>/` loads and shows submissions list
-- [ ] Admin → EDAM Ontology → EDAM Terms shows ~4000 terms
+- [ ] Admin → EDAM Ontology → EDAM Terms shows about 3,500 terms
 - [ ] Admin → bio.tools Integration shows sync status for submissions with bio.tools URLs
 - [ ] Approve a submission via admin → status email sent
 
@@ -350,10 +211,10 @@ Run through this on staging after every deployment, before promoting to producti
 - [ ] `http://` redirects to `https://` (301)
 - [ ] `Strict-Transport-Security` header present in response
 - [ ] `X-Frame-Options: DENY` present
-- [ ] API call without auth returns 403 (not 401, not 500)
-- [ ] Invalid API key returns same 403 as revoked key
+- [ ] API call without a key to `GET /api/v1/submissions/{id}/` returns 401 (not 500)
+- [ ] An invalid key and a revoked key both return 401
 - [ ] `GET /api/v1/edam/` returns 200 without any `Authorization` header (public endpoint)
-- [ ] `GET /api/v1/biotools/` without admin API key returns 403
+- [ ] `GET /api/v1/biotools/` without an Admin API key returns 401
 
 ---
 
@@ -363,32 +224,19 @@ Run through this on staging after every deployment, before promoting to producti
 # Watch live logs for errors
 docker compose logs -f web | grep -E "ERROR|WARNING|CRITICAL"
 
-# Check Celery task queue
+# Check that the worker answers and what it is running
+docker compose exec worker celery -A config inspect ping
 docker compose exec worker celery -A config inspect active
 
-# Check that beat is running scheduled tasks (should include sync-biotools-daily)
-docker compose exec worker celery -A config inspect scheduled
-
-# Check for failed tasks
-docker compose exec worker celery -A config inspect reserved
+# Check that beat is sending its scheduled tasks
+docker compose logs beat --tail 50
 ```
 
-### bio.tools Sync Health
+Finished and failed tasks are listed in the admin under **Celery Results** (task results are stored in the database).
 
-After releasing a version that adds or changes bio.tools integration:
+### bio.tools sync health
 
-```bash
-# Count records with sync errors
-docker compose exec web python manage.py shell -c "
-from apps.biotools.models import BioToolsRecord
-errors = BioToolsRecord.objects.exclude(sync_error='')
-print(f'{errors.count()} records with sync errors:')
-for r in errors: print(f'  {r.biotools_id}: {r.sync_error[:80]}')
-"
-
-# Manually trigger a full sync if the scheduled task missed
-docker compose exec web python manage.py sync_biotools
-```
+To list records whose last sync failed, or to run a full sync by hand, see [Reference Data and Ontology Sync](operator/data-sync.md#biotools-records).
 
 ### EDAM Term Count
 
@@ -404,8 +252,7 @@ print(f"  {'TOTAL':12s}: {EdamTerm.objects.count()}")
 "
 ```
 
-Set up an alert if `/health/ready/` returns non-200 for more than 60 seconds.
-Tools: Uptime Kuma (self-hosted), Healthchecks.io, or your institution's monitoring stack.
+For ongoing monitoring, see [Operations and Monitoring](operator/operations.md).
 
 ---
 
@@ -425,7 +272,7 @@ Markdown rendering of `service_description` is behind the `[features] markdown_d
    ```bash
    docker compose exec web python manage.py audit_markdown_descriptions --csv /tmp/md-audit.csv
    ```
-   It is read-only and exits non-zero while any row is flagged. See [Auditing existing descriptions](admin-guide.md#markdown-descriptions) for what `text_changed` and `content_removed` mean.
+   It is read-only and exits non-zero while any row is flagged. Details are in [The description audit](#the-description-audit) below.
 3. **Fix flagged rows in the admin** change form. Admin edits do not reset the submission status. Re-run the audit until it reports `0 row(s) flagged.`, or until the remaining rows are acceptable as rendered.
 4. **Enable the flag**: set `markdown_descriptions = true` in the bind-mounted `site.toml`.
 5. **Restart** so the web, worker and beat processes reload it:
@@ -433,6 +280,22 @@ Markdown rendering of `service_description` is behind the `[features] markdown_d
    docker compose restart web worker beat
    ```
 6. **Spot-check**: the catalogue list view shows formatted descriptions, cards show plain-text excerpts, the **Write** | **Preview** editor on the forms renders a preview, and `GET /api/v1/submissions/{id}/` returns rendered HTML in `service_description_html`.
+
+### The description audit
+
+```bash
+docker compose exec web python manage.py audit_markdown_descriptions
+docker compose exec web python manage.py audit_markdown_descriptions --csv /tmp/md-audit.csv
+```
+
+The command is read-only (a single query, no database or cache writes). Each flagged row is printed with its reasons and a `today:` / `markdown:` preview of the visible text. For long descriptions both previews are cut to about 200 characters around the first place where the two texts differ, with `…` marking the cut, so the change is visible even deep inside the text:
+
+| Reason            | Meaning                                                                                                         |
+| ----------------- | --------------------------------------------------------------------------------------------------------------- |
+| `text_changed`    | The visible text would differ once rendered (e.g. `*` or `_` pairs become emphasis, a line starting with `# ` (hash and space) becomes a heading and loses the `#`, a line starting with `- ` becomes a list item even directly under a line of text). A paragraph starting `1990.` becomes a list numbered from 1990, but its visible text is unchanged, so it is not flagged |
+| `content_removed` | Sanitization would drop content: code, an image, a horizontal rule, lists nested more than nine levels deep (or quotes about twenty), or a link that is not a full `https://`, `http://` or `mailto:` address (a blocked scheme such as `javascript:`, or a relative link such as `/about`) |
+
+Legacy rows containing HTML entities such as `&gt;` are not flagged, because every surface already displays them as the intended characters. Headings are supported, so a `#` heading is reported only as `text_changed`. The command ends with `N row(s) flagged.` and, when any row is flagged, exits non-zero with `Flagged rows found; fix them in the admin before enabling markdown_descriptions.`, so it can gate a deployment script. `--csv PATH` also writes `id,service_name,status,reasons` for the flagged rows, with the same spreadsheet formula guard as the CSV export (see the [Admin Guide](admin-guide.md#exporting-submissions)).
 
 **Rollback:** set `markdown_descriptions = false` and restart the same services. Display returns to plain text immediately; no data changes are needed.
 
@@ -446,17 +309,4 @@ Rendered HTML is cached per submission (keyed on its `updated_at`) for 24 hours.
 
 ## EDAM Ontology Releases
 
-EDAM publishes new releases several times a year. When a new release is out:
-
-1. Check the [EDAM changelog](https://github.com/edamontology/edamontology/blob/main/changelog.md)
-   for any deprecated terms your submissions may be using.
-2. Run the sync on staging first: `docker compose exec web python manage.py sync_edam --dry-run`
-3. Apply on staging and verify term counts look correct.
-4. Apply on production during a low-traffic period:
-   ```bash
-   docker compose exec web python manage.py sync_edam
-   ```
-5. No migration, no restart, no downtime needed — terms upsert in place.
-
-This is a `PATCH`-level release (no code change, data-only) and does **not** require
-going through the full CI/deploy pipeline.
+New EDAM releases are a data-only change and need no release: see [New EDAM releases](operator/data-sync.md#new-edam-releases).

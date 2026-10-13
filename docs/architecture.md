@@ -20,11 +20,11 @@ icon: material/sitemap
                        │
           ┌────────────┼────────────┐
      [PostgreSQL]   [Redis]    [Celery]
-     (submissions,  (cache,    (async tasks:
-      EDAM, bio.    sessions,   email dispatch,
-      tools cache)  rate limit) bio.tools sync,
-                               EDAM sync,
-                               stale draft cleanup)
+     (submissions,  (Celery    (async tasks:
+      sessions,     broker,     email dispatch,
+      EDAM, SPDX,   cache,      bio.tools sync,
+      bio.tools)    rate-limit  EDAM and SPDX sync,
+                    counters)   expired-session cleanup)
 ```
 
 Traffic enters the host nginx, which terminates TLS and proxies to the Gunicorn container on the internal network. Gunicorn serves both the Django web application and the REST API. Static files are served directly through Gunicorn via WhiteNoise — no separate static file server.
@@ -42,6 +42,7 @@ The project follows Django's app-per-domain convention. Each app has a single cl
 | `registry`    | Reference data. `PrincipalInvestigator`, `ServiceCategory`, `ServiceCenter` models.                                                                                                                                         |
 | `biotools`    | bio.tools integration. HTTP client, sync logic, Celery tasks, post_save signal.                                                                                                                                             |
 | `edam`        | EDAM ontology. `EdamTerm` model, `sync_edam` management command.                                                                                                                                                            |
+| `licenses`    | SPDX licence list. `SpdxLicense` model, `sync_spdx_licenses` management command, `licenses.sync` task.                                                                                                                      |
 | `catalogue`   | Public Registry Catalogue. Read-only browsing of approved services at `/catalogue/`. Isolated app with no new models; queries `ServiceSubmission` via `selectors.py`. Feature-flagged via `site.toml [features] catalogue`. |
 
 ---
@@ -51,17 +52,23 @@ The project follows Django's app-per-domain convention. Each app has a single cl
 ```
 ServiceSubmission (one per registered service)
 ├── SubmissionAPIKey (one-to-many — for scoped access)
+├── SubmissionChangeLog (one-to-many — append-only edit history)
 ├── BioToolsRecord (one-to-one — mirrored from bio.tools)
 │   └── BioToolsFunction (one-to-many — EDAM function blocks)
-├── PrincipalInvestigator (many-to-many — responsible and associated PIs)
-├── ServiceCenter (many-to-many)
-└── ServiceCategory (many-to-many)
+├── ServiceCenter (foreign key — exactly one)
+├── PrincipalInvestigator (many-to-many — responsible PIs)
+├── ServiceCategory (many-to-many)
+├── EdamTerm (many-to-many — edam_topics, edam_operations)
+└── SpdxLicense (many-to-many — licenses)
 
 EdamTerm (EDAM ontology cache — seeded via sync_edam)
 └── parent → EdamTerm (self-referential, hierarchy)
+
+SubmissionDeletionAudit (no foreign key — survives deletion of the submission)
+AdminAPIKey (machine-to-machine key, not linked to a submission)
 ```
 
-`ServiceSubmission` references EDAM terms by URI strings (`edam_topics`, `edam_operations`) rather than foreign keys, so the submission model is not hard-coupled to the EDAM sync state.
+Obsolete EDAM terms and deprecated SPDX licences are kept (hidden from the form), so a sync never breaks the many-to-many links of existing submissions. The full field reference is in [Database Schema](database-schema.md).
 
 ---
 
@@ -125,10 +132,11 @@ client knows the rename was dropped. Only the Django admin (a separate
 
 ```
 Client → POST /api/v1/submissions/
-  → ApiKeyAuthentication (no key required for create)
-  → SubmissionSerializer.is_valid()
-  → ServiceSubmission.objects.create()
-  → SubmissionAPIKey.objects.create()  (one-time plaintext returned)
+  → no authentication (get_authenticators returns [] for create)
+  → SubmissionCreateSerializer.is_valid()
+  → ServiceSubmission saved (status "submitted")
+  → SubmissionAPIKey.create_for_submission()  (one-time plaintext returned)
+  → send_submission_notification.delay(event="created")
   → 201 Created { submission, api_key }
 ```
 
@@ -136,9 +144,11 @@ Client → POST /api/v1/submissions/
 
 ```
 Client → GET/PATCH /api/v1/submissions/{id}/
-  → ApiKeyAuthentication  → validates HMAC hash
-  → IsSubmissionOwner permission → checks key.submission == instance
-  → SubmissionSerializer → excludes sensitive fields
+  → SubmissionAPIKeyAuthentication or AdminAPIKeyAuthentication
+      → SHA-256 hash of the key looked up, inactive keys rejected (401)
+  → IsAdminOrOwner permission → owner key: own submission only, read scope GET only
+  → queryset scoped to the key's submission for owner keys (other ids → 404)
+  → SubmissionDetailSerializer → excludes sensitive fields
   → 200 OK
 ```
 
@@ -146,15 +156,17 @@ Client → GET/PATCH /api/v1/submissions/{id}/
 
 ## Async task processing
 
-Celery workers connect to Redis and process three categories of tasks:
+Celery workers connect to Redis and run these tasks (all on the default queue):
 
-| Queue           | Tasks                                                                                                         | Schedule                     |
-| --------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| Default         | `send_submission_notification` — admin email on create/update/status change; submitter email on status change | On demand                    |
-| Default         | bio.tools record sync                                                                                         | On demand (post_save signal) |
-| Beat (periodic) | `sync_all_biotools_records` — refresh all bio.tools records                                                   | Daily                        |
-| Beat (periodic) | `edam.sync` — refresh EDAM ontology terms                                                                     | Monthly (30 days)            |
-| Beat (periodic) | `cleanup_stale_drafts` — purge old incomplete submissions                                                     | Daily (24 hours)             |
+| Task                                       | What it does                                                                                       | When                                   |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `submissions.send_submission_notification` | Admin e-mail on create, update and status change; the matching submitter e-mail (receipt, status message, edit confirmation) | On demand                              |
+| `submissions.send_update_notification`     | Entry point for edits: calls the notification task with the change list                            | On demand                              |
+| `biotools.sync_record`                     | Fetch one bio.tools record                                                                         | On demand (post_save signal, admin action) |
+| `biotools.sync_all`                        | Sync every submission with a bio.tools URL; remove records without one                               | Every 24 hours (beat)                  |
+| `edam.sync`                                | Refresh EDAM ontology terms                                                                        | Every 30 days (beat)                   |
+| `licenses.sync`                            | Refresh the SPDX licence list                                                                      | Every 30 days (beat)                   |
+| `submissions.cleanup_stale_drafts`         | Delete Django sessions that expired more than 24 hours ago                                         | Every 24 hours (beat)                  |
 
 Celery beat runs in its own container alongside the worker container. The worker container's Docker healthcheck uses `celery inspect ping` via the Redis broker; beat has no inspection API so its healthcheck is disabled.
 
@@ -177,6 +189,7 @@ ServiceSubmission.objects
         "edam_topics",
         "edam_operations",
         "biotoolsrecord__functions",
+        "licenses",
     )
     .order_by("-submitted_at")
 ```
@@ -229,10 +242,10 @@ terms_by_uri = {t.uri: t for t in EdamTerm.objects.filter(uri__in=uris)}
 | Control                   | Implementation                                                                                                                              |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | CSRF protection           | Django's built-in CSRF middleware — all POST form views protected. Native forms refresh their hidden token from the `csrftoken` cookie at submit time (`csrf-token-refresh.js`) to avoid stale-token 403s under `SameSite=Strict`; this reads the cookie only (relies on `CSRF_COOKIE_HTTPONLY=False`) and never weakens server-side validation |
-| API authentication        | HMAC-based API key: plaintext hashed with PBKDF2, stored as `key_hash`                                                                      |
+| API authentication        | API keys (`ApiKey` per submission, `AdminKey` for integrations); only the SHA-256 hash is stored (`key_hash`), the plaintext is shown once |
 | Admin authentication      | Django auth + django-axes (brute-force lockout)                                                                                             |
 | Content Security Policy   | `django-csp` middleware — all third-party JS/CSS vendored locally; `script-src 'unsafe-inline'` retained for Django template inline scripts |
-| Rate limiting             | `django-ratelimit` on form-submit, key-entry/edit, and REST API endpoints; bucketed per real client IP (`X-Real-IP` via `RATELIMIT_IP_META_KEY`), not `REMOTE_ADDR`                       |
+| Rate limiting             | `django-ratelimit` on the web form, key-entry/edit, validation, preview, CAPTCHA and bio.tools endpoints, bucketed per real client IP (`X-Real-IP` via `RATELIMIT_IP_META_KEY`), not `REMOTE_ADDR`; DRF throttles on the REST API (per key, or per client for requests without a key) |
 | Input sanitisation        | Web form `clean_*` methods strip HTML tags with `bleach` from the other free-text fields; `service_description` is stored as raw Markdown and sanitized on output by `apps/submissions/markdown_render.py` (bleach allowlist); `ServiceSubmission.save()` strips NUL bytes, normalises line endings to LF, normalises to NFC and trims whitespace on all free-text fields (change diffs ignore CRLF vs LF, so an untouched browser re-save is never a change); templates autoescape everything else |
 | Sensitive field isolation | IP, user-agent hash, internal contact excluded from all API serializers                                                                     |
 | Immutable service name    | `service_name` is locked after submission on the edit form (`disabled`) and REST API (read-only on update); only the Django admin can change it |
@@ -263,25 +276,4 @@ All `site.toml` values are injected into every template via the `site_context` c
 
 ## Static files
 
-All static assets are vendored locally in `static/` — zero CDN requests at runtime (GDPR requirement):
-
-| File                                                | Version                | Used by                                 |
-| --------------------------------------------------- | ---------------------- | --------------------------------------- |
-| `static/css/bootstrap.min.css`                      | Bootstrap 5.3.3        | All pages                               |
-| `static/js/bootstrap.bundle.min.js`                 | Bootstrap 5.3.3        | All pages                               |
-| `static/js/htmx.min.js`                             | HTMX 1.9.12            | bio.tools prefill                       |
-| `static/css/tom-select.bootstrap5.min.css`          | Tom-Select 2.3.1       | EDAM multi-select, affiliation combobox |
-| `static/js/tom-select.complete.min.js`              | Tom-Select 2.3.1       | EDAM multi-select, affiliation combobox |
-| `static/swagger-ui/swagger-ui.css`                  | swagger-ui-dist 5.18.2 | `/api/docs/`                            |
-| `static/swagger-ui/swagger-ui-bundle.js`            | swagger-ui-dist 5.18.2 | `/api/docs/`                            |
-| `static/swagger-ui/swagger-ui-standalone-preset.js` | swagger-ui-dist 5.18.2 | `/api/docs/`                            |
-| `static/swagger-ui/favicon-32x32.png`               | swagger-ui-dist 5.18.2 | `/api/docs/`                            |
-| `static/redoc/bundles/redoc.standalone.js`          | ReDoc 2.2.0            | `/api/redoc/`                           |
-| `static/img/favicon.ico`                            | de.NBI favicon         | All pages                               |
-| `static/css/registry.css`                           | Project custom         | All pages                               |
-| `static/img/icons/biotools.svg`                     | —                      | Service card bio.tools link icon        |
-| `static/img/icons/fairsharing.svg`                  | —                      | Service card FAIRsharing link icon      |
-
-WhiteNoise serves these through Gunicorn with long `Cache-Control: public, immutable` headers.
-
-When updating a vendored library, replace the file(s) in `static/` and update the version comment in `config/settings.py` (`SPECTACULAR_SETTINGS`) or the relevant widget `Media` class.
+All static assets are vendored locally in `static/`, so pages load no files from a CDN. The inventory, versions and update steps are in [Vendored Static Assets](developer/vendored-assets.md#current-inventory).
