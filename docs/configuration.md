@@ -22,8 +22,11 @@ Environment variables always take precedence over settings in `config/site.toml`
 For example:
 
 - `EDAM_OWL_URL` in `.env` overrides `[edam] owl_url` in site.toml
+- `SPDX_LICENSES_URL` in `.env` overrides `[licenses] url` in site.toml
 - `ADMIN_URL_PREFIX` in `.env` overrides `[admin] url_prefix` in site.toml
-- `LOGO_URL` in `.env` overrides `[site] logo_url` in site.toml
+- `EMAIL_FROM` in `.env` overrides `[email] from_address` in site.toml
+
+Only these settings have an environment override; everything else in `site.toml` is read from the file.
 
 ---
 
@@ -73,6 +76,8 @@ subject_prefix = "[de.NBI Registry]"
 
 `from_address` is overridden by the `EMAIL_FROM` environment variable if set. SMTP credentials stay in `.env`.
 
+`subject_prefix` is currently not used: the subject lines, including their prefix, are set in `apps/submissions/email_texts.yaml` (see [Customising Texts](operator/customising-texts.md#email-notification-texts)).
+
 ### External URLs
 
 ```toml
@@ -112,12 +117,14 @@ license_name = "MIT"
 ```toml
 [features]
 biotools_prefill  = true   # Show bio.tools prefill banner on the form
-edam_annotations  = true   # Show EDAM ontology fields on the form
-catalogue         = false  # Enable the public Registry Catalogue at /catalogue/
+edam_annotations  = true   # Currently has no effect (see below)
+catalogue         = true   # Public Registry Catalogue at /catalogue/ (false if the key is absent)
 markdown_descriptions = false  # Render service descriptions as Markdown
 ```
 
-`markdown_descriptions` (default `false`) renders `service_description` as sanitized Markdown in the catalogue, the admin and the API `service_description_html` field, and turns the description field on the forms and in the admin into the **Write** | **Preview** editor. With the flag off every surface shows the plain, autoescaped text. In both flag states every display surface (catalogue, API `service_description_html`, notification emails) decodes HTML entities stored by the old escaping web form exactly once, so a legacy `x &gt; 5` reads `x > 5` (see [the API guide](api-guide.md#retrieve-a-submission)). Run `python manage.py audit_markdown_descriptions` before enabling it in production (see [Markdown descriptions rollout](rollout.md#markdown-descriptions-rollout)). Like all `site.toml` changes, it takes effect after `docker compose restart web worker beat`.
+`edam_annotations` is not read by the application at the moment: the EDAM fields are always shown, whatever its value.
+
+`markdown_descriptions` (default `false`) renders `service_description` as sanitized Markdown in the catalogue, the admin and the API `service_description_html` field, and turns the description field on the forms and in the admin into the **Write** | **Preview** editor. With the flag off every surface shows the plain, autoescaped text. In both flag states every display surface (catalogue, API `service_description_html`, notification emails) decodes HTML entities stored by the old escaping web form exactly once, so a legacy `x &gt; 5` reads `x > 5` (see [Using the API](api-guide.md#retrieve-your-submission)). Run `python manage.py audit_markdown_descriptions` before enabling it in production (see [Markdown descriptions rollout](rollout.md#markdown-descriptions-rollout)). Like all `site.toml` changes, it takes effect after `docker compose restart web worker beat`.
 
 ### Registry Catalogue
 
@@ -128,7 +135,7 @@ per_page         = 12
 meta_description = "Browse all approved de.NBI & ELIXIR-DE bioinformatics services."
 ```
 
-The catalogue is a public, read-only page at `/catalogue/` that lets anonymous users browse, search, filter, sort, and group all approved services. It is disabled by default — set `[features] catalogue = true` to enable it.
+The catalogue is a public, read-only page at `/catalogue/` that lets anonymous users browse, search, filter, sort, and group all approved services. It is on in the shipped `site.toml` (`[features] catalogue = true`) and off when the key is absent.
 
 | Key                | Default                                                                         | Description                                                                                                                                                          |
 | ------------------ | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -246,7 +253,7 @@ Default: `7`. Minimum meaningful value: `1`.
 After changing either setting, restart the containers:
 
 ```bash
-docker compose restart web worker
+docker compose restart web worker beat
 ```
 
 ---
@@ -254,6 +261,8 @@ docker compose restart web worker
 ## Secrets and connection strings
 
 `.env` — copy `.env.example` to `.env` and fill in the required values. Every variable is documented below with its default.
+
+Any variable can also be read from a file: if `<NAME>_FILE` is set (for example `SECRET_KEY_FILE=/run/secrets/secret_key`), the value is read from that file instead (Docker secrets).
 
 ### Required — startup fails without these
 
@@ -302,8 +311,8 @@ FORWARDED_ALLOW_IPS=127.0.0.1
 ```
 
 !!! note "Two separate concerns: Gunicorn log vs. application IP"
-**`FORWARDED_ALLOW_IPS`** only affects Gunicorn's own access log (stdout).
-It has no effect on the IP that Django views or django-axes record.
+    **`FORWARDED_ALLOW_IPS`** only affects Gunicorn's own access log (stdout).
+    It has no effect on the IP that Django views or django-axes record.
 
     **Application-level IP** (axes lockout log, `submission_ip` field, **and
     per-client rate limiting**) is resolved from the `X-Real-IP` header, which the
@@ -360,12 +369,9 @@ caps it (1 hour by default), and `SESSION_EXPIRE_AT_BROWSER_CLOSE = True`
 ```bash
 AXES_FAILURE_LIMIT=5                    # Failed login attempts before lockout
 AXES_COOLOFF_MINUTES=30                 # Lockout duration in minutes
-AXES_RESET_ON_SUCCESS=false             # Keep access attempts after successful login (for audit)
-AXES_ENABLE_ACCESS_FAILURE_LOG=true     # Record every failed login event
 ```
 
-- `AXES_RESET_ON_SUCCESS=false` ensures the `axes_accessattempt` table retains failure state until timeout/cleanup.
-- `AXES_ENABLE_ACCESS_FAILURE_LOG=true` ensures a full event trail in `axes_accessfailurelog`.
+Lockouts count per IP address and username. Two related settings are fixed in `config/settings.py`, not read from `.env`: failed attempts are kept after a successful login (`AXES_RESET_ON_SUCCESS = False`), and every failed login is recorded in `axes_accessfailurelog` (`AXES_ENABLE_ACCESS_FAILURE_LOG = True`).
 
 ### Rate limiting
 
@@ -374,12 +380,14 @@ Format: `<count>/<period>` where period is `s` / `m` / `h` / `d`.
 ```bash
 RATE_LIMIT_SUBMIT=10/h          # Registration form submissions (POST /register/)
 RATE_LIMIT_UPDATE=20/h          # Key-entry and edit form submissions (POST /update/ and /update/edit/<submission_id>/)
-RATE_LIMIT_API=60/m             # REST API (authenticated users)
+RATE_LIMIT_API=60/m             # REST API requests with an API key (per key, or per submission for ApiKey)
 RATE_LIMIT_CHALLENGE=60/h       # ALTCHA challenge generation (GET /captcha/)
 RATE_LIMIT_BIOTOOLS=60/h        # bio.tools prefill/search proxy (GET /biotools/*)
 RATE_LIMIT_VALIDATE=120/h       # Inline field validation (POST /register/validate/)
 RATE_LIMIT_PREVIEW=120/h        # Markdown description preview (POST /markdown-preview/); per signed-in user, else per IP
 ```
+
+REST API requests **without** a key (registering via the API, EDAM lookups) are limited to 10 per minute per client. This value is fixed in `config/settings.py`. The REST API answers `429` when a limit is exceeded; the web form endpoints answer `403`, except the description preview, which shows a "Too many previews" message instead.
 
 !!! warning "Limits are bucketed per real client IP"
     The django-ratelimit limits (all of the above except `RATE_LIMIT_API`, which DRF applies per authenticated user or API key, and `RATE_LIMIT_PREVIEW` for signed-in users) are keyed on the real client IP, not `REMOTE_ADDR`
@@ -415,11 +423,13 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 **How it works at runtime:**
 
-- The browser widget fetches a fresh challenge from `GET /captcha/` when the form is submitted.
+- The form shows the ALTCHA checkbox; when the user ticks it, the browser fetches a fresh challenge from `GET /captcha/`. When the key is empty, the widget is not shown.
 - Challenges are signed with `ALTCHA_HMAC_KEY`, expire after **10 minutes**, and carry `Cache-Control: no-store` so proxies cannot cache and re-serve them.
 - The widget performs a SHA-256 proof-of-work in a Web Worker (search space up to 100 000) then posts the solution with the form.
 - Django verifies the HMAC signature and expiry before accepting the submission. An expired or tampered challenge is rejected with HTTP 400.
-- The widget and all verification logic run entirely in your infrastructure — no external service is contacted.
+- The widget and all verification logic run on your own server — no external service is contacted.
+
+Key rotation is described in [Security Operations](operator/security.md#rotating-the-altcha-hmac-key).
 
 ### Email (SMTP credentials)
 
@@ -441,36 +451,13 @@ EMAIL_FROM=no-reply@denbi.de    # Overrides [email] from_address in site.toml
 # SUBMISSION_NOTIFY_OVERRIDE=test-inbox@denbi.de
 ```
 
-### Email notification texts (`apps/submissions/email_texts.yaml`)
-
-Subject lines and submitter-facing status messages are configured in `apps/submissions/email_texts.yaml`. Edit the file and rebuild the container image to apply changes.
-
-**Subject line keys:**
-
-| Key                 | Event                                                   | Placeholders                 |
-| ------------------- | ------------------------------------------------------- | ---------------------------- |
-| `created`           | New submission received (admin notification)            | `{service_name}`             |
-| `status_changed`    | Status changed (admin notification)                     | `{service_name}`, `{status}` |
-| `updated`           | Submitter edited their service (admin notification)     | `{service_name}`             |
-| `submitter_created` | New submission received (submitter confirmation)        | `{service_name}`             |
-| `submitter_status`  | Status changed (submitter notification)                 | `{service_name}`, `{status}` |
-| `submitter_updated` | Submitter edited their service (submitter notification) | `{service_name}`             |
-
-**Email routing summary:**
-
-| Event                             | Admin email                             | Submitter email                        |
-| --------------------------------- | --------------------------------------- | -------------------------------------- |
-| New submission (`created`)        | ✓ (with admin portal link)              | ✓ (receipt confirmation, no admin URL) |
-| Edit submitted (`updated`)        | ✓ (with diff table + admin portal link) | ✓ (with diff table, no admin URL)      |
-| Status changed (`status_changed`) | ✓                                       | ✓ (plain-language status message)      |
-
-The submitter is **never** CC'd on admin emails. All submitter communication goes through dedicated separate emails so the admin portal URL is never accidentally forwarded to submitters.
+Who receives which e-mail, and how `SUBMISSION_NOTIFY_OVERRIDE` behaves, is described in [E-mail and Notifications](operator/email.md). Subject lines and status messages are edited in `apps/submissions/email_texts.yaml` ([Customising Texts](operator/customising-texts.md#email-notification-texts)).
 
 ### REST API
 
 ```bash
-API_PAGE_SIZE=20                # Default page size for list endpoints
-API_MAX_PAGE_SIZE=100           # Maximum page size clients may request
+API_PAGE_SIZE=20                # Page size of the paginated lists (GET /api/v1/submissions/, /api/v1/biotools/)
+API_MAX_PAGE_SIZE=100           # Currently has no effect (clients cannot choose a page size)
 
 # Comma-separated allowed origins for cross-origin API requests.
 # Leave empty to disallow all cross-origin requests (safe default).
@@ -484,6 +471,8 @@ CORS_ALLOW_CREDENTIALS=false
 API_KEY_ENTROPY_BYTES=48        # Entropy bytes → 64-char URL-safe token
 API_KEY_HASH_ALGORITHM=sha256   # Hash algorithm for stored key hashes
 ```
+
+Both apply to submission API keys only; Admin API keys always use 48 bytes and SHA-256. Leave the algorithm at `sha256`: the stored hash column holds 64 characters, and existing keys stop working if the algorithm changes.
 
 ### EDAM ontology
 
@@ -503,14 +492,15 @@ EDAM_OWL_URL=https://edamontology.org/EDAM_stable.owl
 SPDX_LICENSES_URL=https://raw.githubusercontent.com/spdx/license-list-data/main/json/licenses.json
 ```
 
-### Branding overrides
+### Admin URL override
 
-These can also be set in `site.toml`. Env vars take precedence.
+Can also be set in `site.toml` (`[admin] url_prefix`); the environment variable takes precedence.
 
 ```bash
 # ADMIN_URL_PREFIX=admin-denbi
-# LOGO_URL=/static/img/logo.svg
 ```
+
+`.env.example` also lists `LOGO_URL`, but nothing reads it; set the logo with `[site] logo_url` in `site.toml`.
 
 ### Error tracking (Sentry)
 
@@ -537,8 +527,10 @@ All values from `site.toml` are injected into every Django template via the
 {{ IMPRINT_URL }}
 {{ WEBSITE_URL }}
 {{ USER_GUIDE_URL }}
+{{ REPOSITORY_URL }}
 {{ LOGO_URL }}
 {{ FAVICON_URL }}
+{{ FORM_DRAFT_TTL_DAYS }}
 
 {# Full SITE dict — mirrors site.toml sections #}
 {{ SITE.contact.email }}
@@ -562,9 +554,8 @@ To white-label this registry for another institution, only `config/site.toml`
 needs to be edited:
 
 1. Update `[site]`, `[contact]`, and `[links]` sections
-2. Place your logo at `static/img/logo.svg` and set `logo_url = "/static/img/logo.svg"`
+2. Set the logo: either an absolute URL in `logo_url`, or place a file at `static/img/logo.svg` (or `.png`, `.jpg`) and set `logo_url = "/static/img/logo.svg"` (an empty `logo_url` auto-detects `static/img/logo.*`). The logo is shown in the navbar next to the site name; about 38 px high works well.
 3. Place your favicon at `static/img/favicon.ico` (auto-detected, no config needed)
-4. Run `docker compose exec web python manage.py collectstatic --noinput`
-5. Restart: `docker compose restart web worker beat`
+4. Restart: `docker compose restart web worker beat`
 
-No Python, no template edits, no rebuild required.
+No Python and no template edits are needed. Files added under `static/` are collected when the image is built (`collectstatic` runs in the Docker build), so after adding a logo or favicon file rebuild the image; in the development stack `make collectstatic` is enough. Changing only `site.toml` needs a restart, not a rebuild.

@@ -66,7 +66,7 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_media_serving.py` | `/media/` response policy header; files served unchanged; site pages keep the site policy |
 | `test_nginx_conf.py` | The bundled host nginx vhost raises the 64k body limit to 12m on every upload location (`/api/`, `/register/`, `/update/` and the default admin prefix) |
 | `test_migrations_complete.py` | Every model change has a migration (`makemigrations --check` reports nothing pending) |
-| `test_template_tags.py` | `linkify_description` filter — named links, bare URLs, paragraph/line breaks, XSS escaping |
+| `test_template_tags.py` | `linkify_description` filter — named links, bare URLs, paragraph/line breaks, HTML escaping |
 | `test_markdown_*.py`, `test_catalogue_markdown_render.py`, `test_api_markdown.py`, `test_admin_markdown.py` | Markdown descriptions: render/sanitize pipeline (heading shift, link filtering), removal of disallowed markup, cross-surface consistency, template filters, preview endpoint, Write/Preview editor markup, counter limits and WCAG AA text contrast of the editor CSS (`test_markdown_editor_render.py`), API `service_description_html`, admin editor widget and the view-only rendered row |
 | `test_markdown_robustness.py` | Markdown engine on slow-to-parse input: each of the max-length inputs tested scales linearly (4x input must cost under 10x, a load- and coverage-independent check; Python-Markdown, tried during development, measured 14-29x) and finishes, nesting cap reported as removed, ordered-list `start` filter |
 | `test_markdown_cache.py` | Description cache: one cache read per catalogue page, a service shown in two groups rendered once, pages and single renders still work with the cache unreachable |
@@ -78,14 +78,50 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_query_counts.py` | List endpoints (API list, admin changelist) issue the same number of queries for 3 and 12 rows: no per-row (N+1) queries |
 | `test_api_patch_reset.py` | API `PATCH` on an approved submission resets it only on a real non-exempt change (re-sent, re-padded or NFD values keep approval), content + reset in one transaction, no-change notification contract |
 | `test_http_utils.py` | `get_client_ip()` returns only valid IPs (malformed `X-Real-IP`/`X-Forwarded-For` fall through), `get_ratelimit_ip()` always gives django-ratelimit a parseable IP |
+| `test_catalogue_views.py`, `test_catalogue_selectors.py`, `test_catalogue_filters.py`, `test_catalogue_id_filtering.py` | Registry Catalogue: views and HTMX responses, search/filter/sort/group selectors, query-parameter validation, integer and UUID ids in filters |
+| `test_permissions.py` | `setup_groups` command and the group-based admin permissions |
+| `test_registry_admin.py` | Deletion guard on categories, service centres and PIs |
+| `test_admin_filter_sidebar.py` | Admin submission list filter sidebar |
+| `test_lifecycle.py` | `get_no_reset_fields()`: valid, unknown and system-controlled entries |
+| `test_diff_utils.py` | Field-level diff helpers in `diff_utils.py` |
+| `test_line_endings.py` | CRLF and LF are stored, measured and diffed the same on every channel |
+| `test_validation.py` | Shared validators in `apps/submissions/validation.py` |
+| `test_validate_field.py` | Inline field-validation endpoint (`/register/validate/`): CSRF and rate limit |
+| `test_widgets.py` | Form widget rendering |
+| `test_context_processors.py` | Template context from `site.toml` |
+| `test_middleware.py` | `RequestIDMiddleware`: request id per request, no unbounded log-factory chaining |
+| `test_spdx_sync.py` | SPDX licence sync: import, update in place, deprecation of removed entries |
 
 Run `pytest --collect-only -q` for the current test count; a coverage threshold of ≥ 80% is enforced.
 
 ---
 
+## Running the checks in Docker
+
+`docker/docker-compose.ci.yml` runs the same checks in containers, without a local Python environment: `docker compose -f docker/docker-compose.ci.yml run --rm test` (also `lint`, `audit`, `typecheck`).
+
+## Shared fixtures and helpers
+
+`tests/conftest.py` (available in every test):
+
+| Fixture                  | Purpose                                                                                       |
+| ------------------------ | --------------------------------------------------------------------------------------------- |
+| `rf`                     | Django `RequestFactory`                                                                       |
+| `superuser_client`       | Test client logged in as a fresh superuser (`testadmin`)                                      |
+| `frozen_ratelimit_clock` | Freezes django-ratelimit's clock so rate-limit tests do not depend on the current time window |
+
+`tests/helpers.py` (import explicitly):
+
+| Helper                 | Purpose                                                                 |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `base_form_data()`     | Minimal valid POST data for the registration form                        |
+| `edit_form_data(sub)`  | Complete POST payload for the web edit form from a submission            |
+| `edit_form_payload(sub)` | Minimal POST payload for the admin change form                        |
+| `list_desc(content)`, `card_desc(content)` | Extract the description from a rendered catalogue list row or card |
+
 ## Factories
 
-`tests/factories.py` provides `factory_boy` factories for all models:
+`tests/factories.py` provides `factory_boy` factories for submissions, reference data, bio.tools records and submission API keys (`ServiceSubmissionFactory`, `ServiceCategoryFactory`, `ServiceCenterFactory`, `PIFactory`, `AssociatedPartnerPIFactory`, `BioToolsRecordFactory`, `BioToolsFunctionFactory`, `APIKeyFactory`). Other models (EDAM terms, SPDX licences, Admin API keys, change logs) are created directly in the tests that need them:
 
 ```python
 from tests.factories import ServiceSubmissionFactory, APIKeyFactory
@@ -198,19 +234,4 @@ def test_sends_email(self):
 
 The coverage threshold is **80%** enforced by `--cov-fail-under=80` in `pytest.ini`. The CI pipeline fails if coverage drops below this.
 
-Current coverage by module (approximate):
-
-| Module | Coverage |
-|---|---|
-| `api/` | ~90% |
-| `biotools/` | ~90% |
-| `submissions/models.py` | ~96% |
-| `submissions/forms.py` | ~88% |
-| `submissions/logo_utils.py` | ~91% |
-| `submissions/views.py` | ~88% |
-| `submissions/admin.py` | ~53% (admin UI is hard to test) |
-| `edam/management/commands/sync_edam.py` | ~91% |
-
-Admin code is intentionally at lower coverage — Django's admin class methods require
-a running admin site with a logged-in superuser, which adds significant test setup complexity
-with limited return value.
+Run `make test-cov` for the current per-module figures (HTML report in `htmlcov/`).
