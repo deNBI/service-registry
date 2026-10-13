@@ -652,6 +652,68 @@ class TestSyncAllBioToolsTask:
 
         assert BioToolsRecord.objects.get(submission=sub).biotools_id == "blast"
 
+    def test_skips_url_without_biotools_id(self):
+        from apps.biotools.tasks import sync_all_biotools_records
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        type(sub).objects.filter(pk=sub.pk).update(biotools_url="/")
+
+        with patch("apps.biotools.sync.sync_tool") as mock_sync:
+            sync_all_biotools_records()
+
+        mock_sync.assert_not_called()
+
+    def test_removes_record_of_submission_without_url(self):
+        """A record whose submission no longer has a bio.tools URL (for example
+        cleared by a bulk update that bypasses signals) is removed."""
+        from apps.biotools.models import BioToolsRecord
+        from apps.biotools.tasks import sync_all_biotools_records
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        BioToolsRecord.objects.create(
+            submission=sub, biotools_id="blast", name="BLAST", raw_json={}
+        )
+
+        with patch("apps.biotools.client.BioToolsClient.get_tool") as mock_get:
+            sync_all_biotools_records()
+
+        mock_get.assert_not_called()
+        assert not BioToolsRecord.objects.filter(submission=sub).exists()
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("https://bio.tools/blast", "blast"),
+        ("https://bio.tools/blast/", "blast"),
+        ("https://bio.tools/interproscan", "interproscan"),
+        ("", ""),
+        (None, ""),
+    ],
+)
+def test_biotools_id_from_url(url, expected):
+    from apps.biotools.sync import biotools_id_from_url
+
+    assert biotools_id_from_url(url) == expected
+
+
+@pytest.mark.django_db
+def test_remove_records_without_url_keeps_records_of_submissions_with_url():
+    from apps.biotools.models import BioToolsRecord
+    from apps.biotools.sync import remove_records_without_url
+
+    keep = ServiceSubmissionFactory(biotools_url="")
+    stale = ServiceSubmissionFactory(biotools_url="")
+    for sub, bid in [(keep, "blast"), (stale, "interproscan")]:
+        BioToolsRecord.objects.create(
+            submission=sub, biotools_id=bid, name=bid, raw_json={}
+        )
+    type(keep).objects.filter(pk=keep.pk).update(biotools_url="https://bio.tools/blast")
+
+    assert remove_records_without_url() == 1
+    assert BioToolsRecord.objects.filter(submission=keep).exists()
+    assert not BioToolsRecord.objects.filter(submission=stale).exists()
+
 
 # ---------------------------------------------------------------------------
 # Signals
@@ -723,6 +785,36 @@ class TestBioToolsSignal:
         record = BioToolsRecord.objects.get(submission=sub)
         assert record.biotools_id == "interproscan"
         assert record.name == "INTERPROSCAN"
+
+    def test_signal_removes_record_when_url_is_cleared(self):
+        """Clearing the bio.tools URL removes the old record, so its data is
+        no longer shown."""
+        from apps.biotools.models import BioToolsRecord
+
+        with patch(
+            "apps.biotools.client.BioToolsClient.get_tool", side_effect=_entry_for
+        ):
+            sub = ServiceSubmissionFactory(biotools_url="https://bio.tools/blast")
+        assert BioToolsRecord.objects.filter(submission=sub).exists()
+
+        sub.biotools_url = ""
+        sub.save()
+
+        assert not BioToolsRecord.objects.filter(submission=sub).exists()
+
+    def test_ordinary_save_does_not_resync(self):
+        """A save that leaves the bio.tools URL as it is (e.g. a status change)
+        does not call bio.tools again."""
+        with patch(
+            "apps.biotools.client.BioToolsClient.get_tool", side_effect=_entry_for
+        ) as mock_get:
+            sub = ServiceSubmissionFactory(biotools_url="https://bio.tools/blast")
+            assert mock_get.call_count == 1
+
+            sub.status = "under_review"
+            sub.save(update_fields=["status", "updated_at"])
+
+            assert mock_get.call_count == 1
 
 
 # ---------------------------------------------------------------------------

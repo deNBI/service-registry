@@ -42,7 +42,11 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         from apps.biotools.models import BioToolsRecord
-        from apps.biotools.sync import biotools_id_from_url, sync_tool
+        from apps.biotools.sync import (
+            biotools_id_from_url,
+            remove_records_without_url,
+            sync_tool,
+        )
         from apps.submissions.models import ServiceSubmission
 
         dry_run = options["dry_run"]
@@ -85,6 +89,14 @@ class Command(BaseCommand):
 
         # Bulk mode: refresh all existing records, using the bio.tools ID in
         # each submission's current URL (it may differ from the stored ID).
+        # Records of submissions without a URL are removed first (not on a
+        # dry run).
+        if not dry_run:
+            removed = remove_records_without_url()
+            if removed:
+                self.stdout.write(
+                    f"Removed {removed} record(s) of submissions without a bio.tools URL."
+                )
         records = BioToolsRecord.objects.select_related("submission").all()
         total = records.count()
 
@@ -98,18 +110,16 @@ class Command(BaseCommand):
             self.stdout.write(f"[DRY RUN] Would sync {total} record(s):")
             for r in records:
                 current = biotools_id_from_url(r.submission.biotools_url)
-                self.stdout.write(
-                    f"  {r.submission.service_name} → bio.tools:{current or r.biotools_id}"
-                )
+                action = f"bio.tools:{current}" if current else "remove (no URL)"
+                self.stdout.write(f"  {r.submission.service_name} → {action}")
             return
 
         self.stdout.write(f"Syncing {total} bio.tools record(s)...")
         ok = err = 0
         for record in records:
-            biotools_id = (
-                biotools_id_from_url(record.submission.biotools_url)
-                or record.biotools_id
-            )
+            biotools_id = biotools_id_from_url(record.submission.biotools_url)
+            if not biotools_id:
+                continue
             result = sync_tool(
                 biotools_id=biotools_id,
                 submission_id=str(record.submission_id),

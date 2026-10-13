@@ -73,11 +73,15 @@ def sync_all_biotools_records() -> None:
     Scheduled every 24 hours (CELERY_BEAT_SCHEDULE in config/settings.py).
     The bio.tools ID is taken from the submission's current URL, so a changed
     URL replaces the old tool's data and a submission whose first sync failed
-    gets its record. Errors are logged and stored on the record but do not
-    stop the loop.
+    gets its record. Records of submissions without a URL are removed.
+    Errors are logged and stored on the record but do not stop the loop.
     """
     from apps.submissions.models import ServiceSubmission
-    from .sync import biotools_id_from_url, sync_tool
+    from .sync import biotools_id_from_url, remove_records_without_url, sync_tool
+
+    removed = remove_records_without_url()
+    if removed:
+        logger.info("Removed %d bio.tools record(s) without a bio.tools URL", removed)
 
     submissions = (
         ServiceSubmission.objects.exclude(biotools_url="")

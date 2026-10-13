@@ -35,7 +35,8 @@ def connect_signals():
 
         Only triggers when the submission has a biotools_url and there is no
         record yet for the tool in that URL (new submission, changed URL, or
-        an earlier sync that never created a record).
+        an earlier sync that never created a record). When the URL is empty,
+        a record left from an earlier URL is removed so its data is not shown.
         """
         from apps.biotools.models import BioToolsRecord
 
@@ -43,6 +44,12 @@ def connect_signals():
         from .tasks import sync_biotools_record
 
         if not instance.biotools_url:
+            removed, _ = BioToolsRecord.objects.filter(submission=instance).delete()
+            if removed:
+                logger.info(
+                    "Removed bio.tools record of submission %s (no bio.tools URL)",
+                    instance.pk,
+                )
             return
 
         # post_save runs after the row is written, so the previous URL cannot

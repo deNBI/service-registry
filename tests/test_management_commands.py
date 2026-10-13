@@ -259,6 +259,48 @@ class TestSyncBioToolsCommand:
             biotools_id="interproscan", submission_id=str(sub.pk)
         )
 
+    def test_bulk_sync_removes_record_of_submission_without_url(self):
+        from apps.biotools.models import BioToolsRecord
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        BioToolsRecord.objects.create(
+            submission=sub, biotools_id="blast", name="BLAST", raw_json={}
+        )
+
+        with patch("apps.biotools.sync.sync_tool") as mock:
+            call_command("sync_biotools", stdout=StringIO(), stderr=StringIO())
+
+        mock.assert_not_called()
+        assert not BioToolsRecord.objects.filter(submission=sub).exists()
+
+    def test_bulk_sync_skips_url_without_biotools_id(self):
+        from apps.biotools.models import BioToolsRecord
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        BioToolsRecord.objects.create(
+            submission=sub, biotools_id="blast", name="BLAST", raw_json={}
+        )
+        type(sub).objects.filter(pk=sub.pk).update(biotools_url="/")
+
+        with patch("apps.biotools.sync.sync_tool") as mock:
+            call_command("sync_biotools", stdout=StringIO(), stderr=StringIO())
+
+        mock.assert_not_called()
+
+    def test_bulk_dry_run_lists_but_keeps_record_without_url(self):
+        from apps.biotools.models import BioToolsRecord
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        BioToolsRecord.objects.create(
+            submission=sub, biotools_id="blast", name="BLAST", raw_json={}
+        )
+
+        out = StringIO()
+        call_command("sync_biotools", dry_run=True, stdout=out)
+
+        assert "remove (no URL)" in out.getvalue()
+        assert BioToolsRecord.objects.filter(submission=sub).exists()
+
     def test_single_submission_not_found_raises_error(self):
         import uuid
 
@@ -330,6 +372,9 @@ class TestSyncBioToolsCommand:
         BioToolsRecord.objects.create(
             submission=sub, biotools_id="blast", name="BLAST", raw_json={}
         )
+        type(sub).objects.filter(pk=sub.pk).update(
+            biotools_url="https://bio.tools/blast"
+        )
         out = StringIO()
         call_command("sync_biotools", dry_run=True, stdout=out)
         assert "DRY RUN" in out.getvalue()
@@ -342,6 +387,9 @@ class TestSyncBioToolsCommand:
         sub = ServiceSubmissionFactory(biotools_url="")
         BioToolsRecord.objects.create(
             submission=sub, biotools_id="blast", name="BLAST", raw_json={}
+        )
+        type(sub).objects.filter(pk=sub.pk).update(
+            biotools_url="https://bio.tools/blast"
         )
         ok_result = SyncResult(ok=True, biotools_id="blast", created=False, error="")
         with patch("apps.biotools.sync.sync_tool", return_value=ok_result):
@@ -356,6 +404,9 @@ class TestSyncBioToolsCommand:
         sub = ServiceSubmissionFactory(biotools_url="")
         BioToolsRecord.objects.create(
             submission=sub, biotools_id="blast", name="BLAST", raw_json={}
+        )
+        type(sub).objects.filter(pk=sub.pk).update(
+            biotools_url="https://bio.tools/blast"
         )
         err_result = SyncResult(
             ok=False, biotools_id="blast", created=False, error="timeout"
