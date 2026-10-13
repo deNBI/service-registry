@@ -2,7 +2,7 @@
 icon: material/plus-box
 ---
 
-# Extending the Application — Adding New Apps and Features
+# Adding Apps and Features
 
 This guide covers how to add substantial new features (new Django apps,
 new API endpoints, new reference data types) without breaking existing functionality.
@@ -27,8 +27,9 @@ new API endpoints, new reference data types) without breaking existing functiona
 # 1. Create the app directory
 mkdir -p apps/myapp
 
-# 2. Generate the app scaffold
-docker compose exec web python manage.py startapp myapp apps/myapp
+# 2. Generate the app scaffold (locally, in the conda environment: the container
+#    user cannot write to the bind-mounted source tree)
+python manage.py startapp myapp apps/myapp
 
 # 3. Register in settings.py
 ```
@@ -133,7 +134,7 @@ from rest_framework import status, viewsets
 from rest_framework.response import Response
 
 from .authentication import AdminAPIKeyAuthentication
-from .permissions import IsAdminOrOwner
+from .permissions import IsAdminTokenUser
 
 @extend_schema(
     tags=["Reference Data"],
@@ -146,7 +147,7 @@ class FundingBodyViewSet(viewsets.ModelViewSet):
     Filter: ?is_active=true|false
     """
     serializer_class = FundingBodyAdminSerializer
-    permission_classes = [IsAdminOrOwner]
+    permission_classes = [IsAdminTokenUser]
     authentication_classes = [AdminAPIKeyAuthentication]
     pagination_class = None
 
@@ -385,7 +386,6 @@ class DynamicFieldDefinition(models.Model):
     class Meta:
         ordering = ["sort_order", "name"]
 
-
 class DynamicFieldValue(models.Model):
     """Stores a single dynamic field value for one submission."""
     submission  = models.ForeignKey(
@@ -445,7 +445,7 @@ mypy apps/ config/
 
 - Always use an explicit `fields = [...]` list — never `fields = "__all__"`
 - Exclude all internal/sensitive fields by omission (not by `exclude`)
-- Add `_links` block via `SerializerMethodField` on all top-level serialisers
+- Add a `links` field via `SerializerMethodField` on top-level serialisers (see `get_links` in `apps/api/serializers.py`)
 
 ### Test conventions
 

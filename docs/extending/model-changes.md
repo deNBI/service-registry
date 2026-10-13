@@ -67,7 +67,8 @@ the bind-mounted source tree):
 ```bash
 make makemigrations
 # or: python manage.py makemigrations submissions --name add_data_access_type
-# Creates: apps/submissions/migrations/0002_add_data_access_type.py
+# Creates: apps/submissions/migrations/<next number>_add_data_access_type.py
+# (the examples below use 0002 as a placeholder number)
 ```
 
 Open the generated file and verify it looks right:
@@ -93,7 +94,7 @@ class Migration(migrations.Migration):
 
 ```bash
 docker compose exec web python manage.py migrate
-docker compose exec web pytest tests/ -v
+make test        # runs locally; pytest is not installed in the container image
 ```
 
 **Step 4 — Expose in the API (if needed)**
@@ -141,7 +142,7 @@ class SubmissionForm(forms.ModelForm):
 
 And add it to the registration template `templates/submissions/register.html`.
 
-**Step 7 — Commit and deploy** (see [Rollout Guide](../rollout.md))
+**Step 7 — Commit and deploy** (see [Releases and Rollback](../rollout.md))
 
 ```bash
 git add apps/submissions/migrations/0002_add_data_access_type.py \
@@ -149,8 +150,7 @@ git add apps/submissions/migrations/0002_add_data_access_type.py \
         apps/api/serializers.py \
         apps/submissions/admin.py \
         apps/submissions/forms.py
-git commit -m "feat: add data_access_type field to ServiceSubmission"
-git tag v1.1.0
+git commit -m "add data_access_type field to ServiceSubmission"
 ```
 
 ---
@@ -209,7 +209,7 @@ class ServiceUpdateInline(admin.TabularInline):
     readonly_fields = ("changed_by", "changed_fields", "created_at")
     can_delete = False
 
-@admin.register(ServiceSubmissionAdmin)
+@admin.register(ServiceSubmission)
 class ServiceSubmissionAdmin(admin.ModelAdmin):
     inlines = [SubmissionAPIKeyInline, ServiceUpdateInline]
 ```
@@ -429,11 +429,12 @@ docker compose logs web --tail 50
 ### Rollback (if migration fails)
 
 ```bash
-# Roll back to the previous migration
-docker compose run --rm web python manage.py migrate submissions 0001
+# Roll back to the migration before yours (replace <previous> with its name,
+# e.g. the last one listed by: python manage.py showmigrations submissions)
+docker compose run --rm web python manage.py migrate submissions <previous>
 
-# Restore previous image
-docker compose up -d --no-deps web worker beat --image denbi-registry:v1.0.0
+# Restore the previous image (see Releases and Rollback for the image-based compose setup)
+IMAGE_TAG=0.9.0 docker compose up -d --no-deps web worker beat
 ```
 
 ---
@@ -455,14 +456,13 @@ The API is versioned at `/api/v1/`. Follow these rules when changing models:
 ## Generating a Fresh OpenAPI Schema After Changes
 
 ```bash
-docker compose exec web python manage.py spectacular --file openapi.yaml
+# Run locally in the conda environment (the container user cannot write to the source tree)
+python manage.py spectacular --file openapi.yaml
 # Or as JSON:
-docker compose exec web python manage.py spectacular --file openapi.json --format json
+python manage.py spectacular --file openapi.json --format json
 ```
 
 Commit `openapi.yaml` to the repository so that API consumers can diff changes.
-
----
 
 ---
 

@@ -6,10 +6,37 @@ icon: material/home
 
 <div class="hero" markdown>
 
-A structured registration platform for de.NBI and ELIXIR-DE bioinformatics services — from initial submission through review and publication.
+A registration platform for de.NBI and ELIXIR-DE bioinformatics services, from submission through review to the public catalogue.
 
-[:material-rocket-launch: Get Started](development.md){ .md-button .md-button--primary }
-[:material-api: API Reference](api-guide.md){ .md-button }
+</div>
+
+## Start here
+
+<div class="grid cards" markdown>
+
+- :material-account: **I register or maintain a service**
+
+    Register a service, edit it with your API key, format the description, upload a logo.
+
+    [User Guide](user-guide.md) · [Using the API](api-guide.md)
+
+- :material-shield-account: **I review submissions**
+
+    Approve and reject submissions, manage reference data, API keys and exports in the Django admin.
+
+    [Admin Guide](admin-guide.md) · [API keys](admin/api-keys.md) · [Admin REST API](admin/api.md)
+
+- :material-server: **I deploy and run the registry**
+
+    Install, configure, monitor, back up and update a deployment.
+
+    [Operator Guide](operator/index.md) · [Deployment](deployment.md) · [Configuration](configuration.md)
+
+- :material-code-braces: **I develop the registry**
+
+    Local setup, architecture, tests and internals.
+
+    [Development Setup](development.md) · [Architecture](architecture.md)
 
 </div>
 
@@ -19,33 +46,37 @@ A structured registration platform for de.NBI and ELIXIR-DE bioinformatics servi
 
 <div class="grid cards" markdown>
 
-- :material-form-select: **Structured registration form**
+- :material-form-select: **Registration form**
 
-  Sections for service identity, contact, technical details, EDAM annotations, publications, and KPIs. Validated at every step.
+    Sections for service identity, contacts, links, EDAM annotations, publications, licences and KPIs, with inline field validation and a browser draft that survives closing the tab.
 
 - :material-tools: **bio.tools prefill**
 
-  Paste a bio.tools URL to pre-populate form fields from the bio.tools database automatically.
+    Enter a bio.tools URL to fill form fields from the bio.tools entry.
 
-- :material-tag-multiple: **EDAM ontology integration**
+- :material-tag-multiple: **EDAM and SPDX**
 
-  Tag services with EDAM Topic and Operation terms. Ontology is synced automatically from edamontology.org.
+    Tag services with EDAM topics and operations and pick licences from the SPDX list. Both lists are synced from their sources on a schedule.
+
+- :material-language-markdown: **Markdown descriptions**
+
+    Optional (feature flag): descriptions with a small set of Markdown and a Write / Preview editor.
+
+- :material-view-grid: **Registry Catalogue**
+
+    Optional (feature flag): a public page to search, filter, sort and group approved services.
 
 - :material-api: **REST API**
 
-  Full CRUD access with token and API-key authentication. Interactive docs at `/api/docs/` (Swagger UI) and `/api/redoc/` (ReDoc). Machine-readable OpenAPI schema at `/api/schema/`.
+    Register a service, then read and update it with its API key. Registry staff use Admin API keys for listing and reference data. Interactive docs at `/api/docs/` (Swagger UI) and `/api/redoc/` (ReDoc); OpenAPI schema at `/api/schema/`.
 
 - :material-shield-check: **Admin portal**
 
-  Review, approve, reject, and export submissions. Bulk actions, full audit trail, CSV and JSON export.
+    Review, approve, reject and export submissions, with role groups, bulk actions, a change log for every edit and an audit record of deletions.
 
-- :material-key-variant: **Scoped API keys**
+- :material-image: **Service logos**
 
-  Each submission gets a scoped key for future programmatic updates — read or read+write scope.
-
-- :material-image: **Service logo upload**
-
-  Attach a PNG, JPEG, or SVG logo to any service registration — via the web form, the edit form, or the REST API. Images are processed automatically before storage (PNG/JPEG re-encoded without metadata, SVG reduced to standard drawing content).
+    PNG, JPEG or SVG logos via the forms, the API or the admin. PNG/JPEG are re-encoded without metadata; SVGs are reduced to standard drawing content.
 
 </div>
 
@@ -58,80 +89,24 @@ A structured registration platform for de.NBI and ELIXIR-DE bioinformatics servi
     ```bash
     git clone https://github.com/deNBI/service-registry
     cd service-registry
-    cp .env.example .env      # set SECRET_KEY, DB_PASSWORD, REDIS_PASSWORD
-    make build                # builds images + starts stack + runs migrations
+    cp .env.example .env      # set SECRET_KEY, DB_PASSWORD, REDIS_PASSWORD; for http://localhost also
+                              # DEBUG=true and the three *_SECURE/SSL settings (see Development Setup)
+    make build                # build the images
+    make dev                  # start the stack; migrations and EDAM/SPDX seeding run on first start
     make superuser
     ```
 
-    App at **http://localhost:8000** — migrations and EDAM seeding run automatically on first start.
-    See [Development Setup](development.md) for the full local guide.
+    App at **http://localhost:8000**. See [Development Setup](development.md) for the full local guide.
 
 === ":material-server: Production"
 
     ```bash
     cp .env.example .env      # configure all production values
     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-    docker compose exec web python manage.py collectstatic --noinput
-    docker compose exec web python manage.py createsuperuser
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml exec web python manage.py createsuperuser
     ```
 
-    Migrations run automatically on container start. See [Deployment](deployment.md) for the full guide.
-
----
-
-## Documentation
-
-<div class="grid cards" markdown>
-
-- :material-code-braces: **[Development Setup](development.md)**
-
-  Local environment, conda setup, Make targets, and the development workflow.
-
-- :material-tune: **[Configuration](configuration.md)**
-
-  All `site.toml` and `.env` settings — branding, email, security, rate limits.
-
-- :material-rocket-launch: **[Deployment](deployment.md)**
-
-  Production setup: Docker, TLS, nginx, EDAM seeding, backups, updates.
-
-- :material-account: **[User Guide](user-guide.md)**
-
-  How to register a service, use the update form, and manage API keys.
-
-- :material-shield-account: **[Admin Guide](admin-guide.md)**
-
-  Reviewing submissions, managing EDAM terms, bio.tools records, and email settings.
-
-- :material-api: **[API Reference](api-guide.md)**
-
-  Endpoints, authentication schemes, filters, and curl examples.
-
-- :material-sitemap: **[Architecture](architecture.md)**
-
-  System design, data model, Docker services, request lifecycle, and static assets.
-
-- :material-test-tube: **[Testing](testing.md)**
-
-  Running the test suite, coverage targets, and adding new tests.
-
-- :material-database: **[Database Schema](database-schema.md)**
-
-  Full field-level reference for all models.
-
-- :material-package-up: **[Rollout & Releases](rollout.md)**
-
-  Release process, migrations, rollback, and upgrade runbook.
-
-- :material-puzzle: **[Extending Models](extending/model-changes.md)**
-
-  How to add or change model fields safely.
-
-- :material-plus-box: **[Adding Apps](extending/adding-apps.md)**
-
-  Adding a new Django app with API endpoints.
-
-</div>
+    This overlay is for staging and for validating the production image; it still starts the bundled `db` container. Migrations run automatically on container start and static files are built into the image. The live de.NBI deployment is managed with Ansible. See [Deployment](deployment.md) for the full guide.
 
 ---
 

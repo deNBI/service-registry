@@ -4,15 +4,15 @@ icon: material/shield-account
 
 # Admin Guide
 
+For registry staff who review submissions and manage reference data in the Django admin. Deploying, configuring and running the server (e-mail settings, scheduled tasks, key rotation, backups) is covered in the [Operator Guide](operator/index.md). API keys have their own page: [Managing API Keys](admin/api-keys.md).
+
 ## Accessing the Admin Portal
 
-The admin is available at `/<ADMIN_URL_PREFIX>/` (default: `/admin-denbi/`).
-The URL prefix is configured via the `ADMIN_URL_PREFIX` environment variable in `.env` (default: `admin-denbi`).
+The admin is available at `/<ADMIN_URL_PREFIX>/`. The shipped `config/site.toml` sets the prefix to `admin-denbi` (so `/admin-denbi/`); operators can change it there or with the `ADMIN_URL_PREFIX` environment variable.
 
-Log in with your Django superuser credentials.
+Log in with the staff account the registry operators or a superuser created for you.
 
 ---
-
 ## User Roles & Permissions
 
 The admin uses Django's group-based access control. Three purpose-built groups
@@ -24,15 +24,11 @@ permission checkbox work is needed.
 
 | Group                | Intended for                                    | Can do                                                                                                                                                            |
 | -------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Registry Viewer**  | Auditors, new team members, read-only observers | View everything — submissions, change logs, API keys, reference data, EDAM terms, bio.tools records, Celery task results                                          |
-| **Registry Editor**  | Day-to-day curators                             | Everything a Viewer can, **plus** create/edit submissions, approve/reject submissions, mark under-review/deprecated, and issue/reset/revoke API keys              |
+| **Registry Viewer**  | Auditors, new team members, read-only observers | View submissions, change logs, submission API keys, reference data, EDAM terms, bio.tools records and Celery task results                                        |
+| **Registry Editor**  | Day-to-day curators                             | Everything a Viewer can, **plus** create/edit submissions, approve/reject submissions, mark under-review/deprecated, and issue/reset/revoke submission API keys   |
 | **Registry Manager** | Team leads, data stewards                       | Everything an Editor can, **plus** delete submissions and full add/change/delete on reference data (Service Categories, Service Centres, Principal Investigators) |
 
-**Superusers** bypass the group system entirely and have unrestricted access.
-
-**Admin API Keys** are managed separately under **API → Admin API Keys** and are
-not tied to the group permission system. Key creation is limited to staff users
-with access to that admin section.
+**Superusers** bypass the group system entirely and have unrestricted access. Some sections are not part of any group, so only superusers see them: **Admin API Keys**, **SPDX Licenses** and **Deletion Audits**.
 
 ### Permissions in detail
 
@@ -83,36 +79,15 @@ and are separate from the standard CRUD permissions:
 | `submissions.approve_servicesubmission` | Approve and reject status transitions; bulk approve/reject actions. Kept separate from `change_servicesubmission` so editors can fix data without having final-decision authority. |
 | `submissions.manage_apikeys`            | Issue, reset, and revoke `SubmissionAPIKey` objects. Kept separate so auditors can view key metadata without being able to create credentials that grant submitters write access.  |
 
-!!! info "API permissions are admin-only"
-These custom permissions are **not exposed via the REST API**. They are enforced solely in the Django admin interface. The API uses the built-in CRUD permissions (`view`, `change`, `add`, `delete`) combined with the custom DRF permission classes (`IsAdminOrOwner`, `IsSubmissionOwner`) for access control. See the [API Guide → Custom permissions](api-guide.md#custom-permissions) for more detail.
+These two permissions apply only in the Django admin. The REST API does not use staff accounts or these permissions: it is accessed with API keys (see [Managing API Keys](admin/api-keys.md)).
 
 ### Setting up the groups
 
-!!! info "Automatic since entrypoint v2"
-The Docker entrypoint now runs `python manage.py setup_groups` automatically
-after every `manage.py migrate`. No manual step is needed on a standard
-deployment — the groups are always in sync with the codebase by the time
-Gunicorn starts.
-
-The command is **idempotent** — safe to run repeatedly. It brings each
-group's permission set exactly in line with the specification, adding missing
-permissions and removing any that are no longer in the spec. Existing
-user → group memberships are never touched.
-
-You can still run it manually for diagnostics or to preview changes:
-
-```bash
-# Preview changes without writing to the database:
-docker compose exec web python manage.py setup_groups --dry-run
-
-# List each group and its current permissions:
-docker compose exec web python manage.py setup_groups --list
-
-# Force a sync without restarting the container (rarely needed):
-docker compose exec web python manage.py setup_groups
-```
+The groups are created and kept in sync automatically each time the application starts (`manage.py setup_groups`); no permission checkboxes need to be ticked by hand. To preview or list the groups from the command line, see [Operations → Admin role groups](operator/operations.md#admin-role-groups).
 
 ### Creating a staff user and assigning a group
+
+Only superusers can create users and assign groups; the role groups have no permissions on user accounts.
 
 1. **Create the user**
    - Go to **Admin → Authentication and Authorization → Users → Add User**
@@ -130,52 +105,29 @@ docker compose exec web python manage.py setup_groups
    change their password immediately via the account menu (top right)
 
 !!! note "A user can belong to multiple groups"
-Permissions are additive. A user in both `Registry Viewer` and
-`Registry Editor` has the union of both groups' permissions, but in
-practice it is cleaner to assign exactly one group per user.
+    Permissions are additive. A user in both `Registry Viewer` and
+    `Registry Editor` has the union of both groups' permissions, but in
+    practice it is cleaner to assign exactly one group per user.
 
 ### Superuser vs. staff user behaviour
 
 |                                     | Superuser | Registry Manager | Registry Editor | Registry Viewer |
 | ----------------------------------- | --------- | ---------------- | --------------- | --------------- |
 | Log in to admin                     | ✓         | ✓                | ✓               | ✓               |
-| View all sections                   | ✓         | ✓                | ✓               | ✓               |
+| View submissions, change logs, keys, reference data, EDAM, bio.tools | ✓ | ✓        | ✓               | ✓               |
 | Edit submissions                    | ✓         | ✓                | ✓               | —               |
 | Approve / reject                    | ✓         | ✓                | ✓               | —               |
-| Manage API keys                     | ✓         | ✓                | ✓               | —               |
+| Manage submission API keys          | ✓         | ✓                | ✓               | —               |
 | Delete submissions                  | ✓         | ✓                | —               | —               |
 | Edit reference data                 | ✓         | ✓                | —               | —               |
-| Manage auth tokens                  | ✓         | —                | —               | —               |
+| Manage Admin API keys               | ✓         | —                | —               | —               |
+| View SPDX licences and deletion audits | ✓      | —                | —               | —               |
 | See submission IP address           | ✓         | —                | —               | —               |
 | Django admin settings & log entries | ✓         | —                | —               | —               |
 
-### Defence-in-depth: how permissions are enforced
+### How permissions are enforced
 
-The permission system has two enforcement layers that work together:
-
-1. **Outer gate — `has_*_permission` methods on the `ModelAdmin`**
-   Django calls these before rendering any view. A Viewer's `has_change_permission`
-   returns `False`, so any HTTP POST to the change URL returns **403 Forbidden**
-   before the code even processes the POST body.
-
-2. **Inner gate — `_require_perm` guards in `response_change`**
-   Each privileged POST action (approve, reject, issue key, revoke keys, …) is
-   guarded individually inside `response_change`. This is defence-in-depth:
-   even if a future refactor were to inadvertently widen the outer gate, the
-   inner guards would still block the action and show a "Permission denied"
-   message instead of silently performing it.
-
-The conditional fieldset system (`get_fieldsets`) hides the **Status Actions**
-panel and the **Key Management** panel from users who lack the relevant
-permissions. This is a UI convenience, not a security boundary — the inner
-guards are the security boundary.
-
-Specifically: the **Status Actions** panel is shown to any user who has **either**
-`change_servicesubmission` **or** `approve_servicesubmission`. A user with only
-`change_servicesubmission` will see the buttons, but the Approve and Reject
-buttons are still blocked by the inner `_require_perm` guard if that permission
-is absent — only Under Review, Deprecate, and Undeprecate will succeed.
-The **Key Management** panel is shown only to users with `manage_apikeys`.
+Buttons and panels a user has no permission for are hidden: the **Status Actions** panel needs `change_servicesubmission` or `approve_servicesubmission`, and the **API Key Management** panel needs `manage_apikeys`. Hiding is only for convenience; the server checks the permission again for every action. A user with only `change_servicesubmission` sees the status buttons, but **Approve** and **Reject** are refused; only **Mark Under Review**, **Deprecate** and **Undeprecate** succeed. Implementation details are in [Admin Permission Enforcement](developer/admin-permissions.md).
 
 ---
 
@@ -183,13 +135,17 @@ The **Key Management** panel is shown only to users with `manage_apikeys`.
 
 ### Submission List View
 
-**Columns:** Service name (link), Submitter (`LAST, First — Affiliation`), Status badge (colour-coded pill), **Maturity** tag (primary bold + secondary muted), Service Centre, ELIXIR-DE flag, Submission date, **API Keys** (active/total count), **Keys** (🔑 Manage link to the key list filtered for that submission).
+**Columns:** Service name (link), Submitter (`LAST, First — Affiliation`), Status badge (colour-coded pill), **Maturity** tag (primary bold + secondary muted), Service Centre, **License(s)**, ELIXIR-DE flag, Submission date, **API Keys** (active/total count), **Keys** (🔑 Manage link to the key list filtered for that submission).
 
 **Filters** (right sidebar): Status, Primary maturity tag, ELIXIR-DE flag, Service Centre, Service Categories, Responsible PIs, Submission date (date-drill-down calendar).
 
-**Search** (top): service name, submitter first/last name, submitter affiliation, host institute, responsible PI name.
+**Search** (top): service name, submitter first/last name, submitter affiliation, host institute, responsible PI name, licence id or name, and licence note.
 
 **Default sort:** newest first. **Page size:** 30.
+
+### Creating a submission in the admin
+
+Staff with `add_servicesubmission` can create a submission directly in the admin. Such a submission gets no API key and sends no e-mail. To let the owner edit it later, issue a key on its change page ([Managing API Keys](admin/api-keys.md)) and send it to them.
 
 ### Submission Detail View
 
@@ -209,29 +165,15 @@ The detail view is organised into collapsible fieldsets. The fieldset layout is:
 | **G — Consent**                    | No                   | Data protection consent (read-only)                                                                                                                                                          |
 | **🔑 API Key Management**          | No                   | Inline key list + Revoke / Reset / Issue controls (hidden if user lacks `manage_apikeys`)                                                                                                    |
 
-### Submission Edit Form (Submitter View)
-
-When a submitter edits their submission via `/update/`, they see the same form structure as the initial registration. The edit form includes:
-
-| Feature                 | Description                                                                  |
-| ----------------------- | ---------------------------------------------------------------------------- |
-| **Sidebar navigation**  | Links to jump between sections (A-G) and a progress bar for required fields  |
-| **Completion progress** | Real-time percentage showing required field completion                       |
-| **Danger Zone card**    | Only shown for non-deprecated services; allows marking service as deprecated |
-| **Deprecated badge**    | Shows if service is deprecated; only admins can reverse                      |
-| **Locked service name** | The **Name of the Service** field is greyed out and cannot be changed after the initial submission; all other fields remain editable |
-
-The sidebar is shared between registration (`/register/`) and edit (`/update/`) forms.
-
 !!! note "Admins can change a locked service name"
-The service name lock applies only to the submitter-facing edit form and the REST API. In this admin change form the **Service name** field (fieldset **B**) stays fully editable, so an administrator can correct a name on a submitter's behalf.
+    Submitters cannot change the service name after submission (on the edit form and in the REST API). In this admin change form the **Service name** field (fieldset **B**) stays fully editable, so an administrator can correct a name on a submitter's behalf.
 
 !!! note "Status is read-only"
-The `Status` field is displayed for information only — it cannot be edited directly. All status transitions are made via the **Status action buttons** panel in the same fieldset (see below).
+    The `Status` field is displayed for information only — it cannot be edited directly. All status transitions are made via the **Status action buttons** panel in the same fieldset (see below).
 
 ### Markdown descriptions
 
-When `[features] markdown_descriptions = true` (see [Configuration](configuration.md#feature-flags)), **Service description** in fieldset **B** of the change form uses the same **Write** | **Preview** editor as the public forms (see the [user guide](user-guide.md#registering-a-new-service) for the tabs, formatting help and counter). **Preview** renders the current text through the same sanitizer used by the catalogue and the API, and shows a notice when content was removed (images, code, horizontal rules, lists nested more than nine levels deep (or quotes about twenty), or links other than `http`, `https` and `mailto`, including relative links).
+When `[features] markdown_descriptions = true` (see [Configuration](configuration.md#feature-flags)), **Service description** in fieldset **B** of the change form uses the same **Write** | **Preview** editor as the public forms (see the [user guide](user-guide.md#formatting-the-description) for the tabs, formatting help and counter). **Preview** renders the current text through the same sanitizer used by the catalogue and the API, and shows a notice when content was removed (images, code, horizontal rules, lists nested more than nine levels deep (or quotes about twenty), or links other than `http`, `https` and `mailto`, including relative links).
 
 Staff who can view a submission but not change it see the description read-only, with an extra **Description (rendered)** row below it that shows the saved description as the catalogue list view displays it. Staff who can change the submission get the editor instead and do not see that row.
 
@@ -239,30 +181,13 @@ With the flag off, the editor and the rendered row are not shown and the descrip
 
 Notification emails never render Markdown: plain-text bodies show the description source without HTML escaping, and HTML bodies (such as the change table) escape it once. In both, HTML entities stored by older versions of the web form, such as `&gt;`, are decoded once, so they read as `>`, as they do in the catalogue and the API. The change form's text box, the change history and the CSV/JSON exports show the stored value unchanged.
 
-**Auditing existing descriptions.** Before enabling the flag, list the descriptions whose display would change:
-
-```bash
-docker compose exec web python manage.py audit_markdown_descriptions
-docker compose exec web python manage.py audit_markdown_descriptions --csv /tmp/md-audit.csv
-```
-
-The command is read-only (a single query, no database or cache writes). Each flagged row is printed with its reasons and a `today:` / `markdown:` preview of the visible text. For long descriptions both previews are cut to about 200 characters around the first place where the two texts differ, with `…` marking the cut, so the change is visible even deep inside the text:
-
-| Reason            | Meaning                                                                                                         |
-| ----------------- | --------------------------------------------------------------------------------------------------------------- |
-| `text_changed`    | The visible text would differ once rendered (e.g. `*` or `_` pairs become emphasis, a line starting with `# ` (hash and space) becomes a heading and loses the `#`, a line starting with `- ` becomes a list item even directly under a line of text). A paragraph starting `1990.` becomes a list numbered from 1990, but its visible text is unchanged, so it is not flagged |
-| `content_removed` | Sanitization would drop content: code, an image, a horizontal rule, lists nested more than nine levels deep (or quotes about twenty), or a link that is not a full `https://`, `http://` or `mailto:` address (a blocked scheme such as `javascript:`, or a relative link such as `/about`) |
-
-Legacy rows containing HTML entities such as `&gt;` are not flagged, because every surface already displays them as the intended characters. Headings are supported, so a `#` heading is reported only as `text_changed`. The command ends with `N row(s) flagged.` and, when any row is flagged, exits non-zero with `Flagged rows found; fix them in the admin before enabling markdown_descriptions.`, so it can gate a deployment script. `--csv PATH` also writes `id,service_name,status,reasons` for the flagged rows, with the same spreadsheet formula guard as the CSV export (see below).
+**Before the flag is switched on**, operators run a read-only audit command that lists the descriptions whose display would change (see [Markdown descriptions rollout](rollout.md#markdown-descriptions-rollout)). Each flagged row has a reason: `text_changed` (the visible text would change, for example `*word*` becomes emphasis or a line starting with `# ` becomes a heading) or `content_removed` (code, images, horizontal rules, deeply nested lists, or links that are not full `https://`, `http://` or `mailto:` addresses would be dropped).
 
 Fix flagged rows by editing the description in this change form. **Admin edits do not reset the submission status**, so approved services stay approved. See the [Markdown descriptions rollout](rollout.md#markdown-descriptions-rollout) for the full sequence.
 
 ### Changing Submission Status
 
-**On new submission:** When a submitter registers a new service, two emails are sent automatically:
-
-- **Admin notification** — full internal report with a direct link to the admin change view sent to the registry coordination address.
-- **Submitter confirmation** — a brief receipt confirmation ("We have received your service registration") sent to `internal_contact_email`. Contains no admin URL or internal details.
+**On new submission:** the registry address receives a notification with a link to the admin change view, and the submitter receives a receipt confirmation. Who receives which e-mail is listed in [E-mail and Notifications](operator/email.md).
 
 **Individual status change (change view):** Open a submission. The **Status & Metadata** fieldset contains a row of action buttons — the current status is highlighted and its button is disabled. Click any other button to trigger the transition:
 
@@ -274,13 +199,10 @@ Fix flagged rows by editing the description in this change form. **Admin edits d
 | **Deprecate**               | `change_servicesubmission`  | → `Deprecated`                         |
 | **Undeprecate → Submitted** | `change_servicesubmission`  | → `Submitted` (re-enters review queue) |
 
-!!! note "Status actions bypass the form diff"
-Status button clicks are processed separately from the regular form save — they do **not** produce a field-level diff entry in the **Last Change Summary** or **Change History**. They are recorded in the **Django LogEntry** (History tab) with a plain text message.
+!!! note "Status changes are recorded"
+    Each status change (button or bulk action) is recorded as a `status` change, with `admin:<username>`, in the **Change History** and the **Last Change Summary**, and also in the **History** tab. Choosing the status a submission already has records nothing.
 
-Two emails are sent automatically on every status transition:
-
-- **Admin notification** — sent to the registry coordination address (`[contact] email` in `site.toml`), CC'd to `SUBMISSION_NOTIFY_CC` if configured. Contains a direct link to the admin change view. **The submitter is never CC'd on this email.**
-- **Submitter notification** — sent directly to the `internal_contact_email` of the submission with a plain-language status update ("Your service has been approved / was not approved at this time"). This is a completely separate email so the submitter receives a clear, action-oriented message and never sees the admin portal URL.
+Every status transition sends the registry a notification and the submitter a plain-language status message (for example "Your service has been approved"). The submitter message is a separate e-mail and contains no admin link.
 
 **Bulk status changes:** Select submissions in the list view, then choose an action from the dropdown:
 
@@ -288,32 +210,32 @@ Two emails are sent automatically on every status transition:
 | ----------------------------- | --------------------------- | --------------------------------------- |
 | Approve selected              | `approve_servicesubmission` | → `Approved`                            |
 | Reject selected               | `approve_servicesubmission` | → `Rejected`                            |
-| Mark selected as Under Review | `change_servicesubmission`  | → `Under Review`                        |
+| Mark as Under Review          | `change_servicesubmission`  | → `Under Review`                        |
 | Deprecate selected            | `change_servicesubmission`  | → `Deprecated`                          |
-| Undeprecate selected          | `change_servicesubmission`  | → `Submitted` (returns to review queue) |
+| Undeprecate selected (→ Submitted) | `change_servicesubmission` | → `Submitted` (returns to review queue) |
 
 All bulk transitions fire the admin + submitter email notifications via Celery and are logged to Django's LogEntry.
 
 !!! note "Maturity tags are auto-cleared on any non-approved transition"
-Both individual buttons and bulk actions call the same underlying `_change_status` function, which clears maturity tags whenever moving away from `Approved`. See [Assigning Maturity Tags](#assigning-maturity-tags) for details.
+    Both individual buttons and bulk actions call the same underlying `_change_status` function, which clears maturity tags whenever moving away from `Approved`. See [Assigning Maturity Tags](#assigning-maturity-tags) for details.
 
 !!! note "Deprecation is owner-reversible only by admins"
-Service owners can mark their own service as deprecated via the edit form. Only admins can reverse a deprecation (via bulk action or the change view button), which resets status to `Submitted` for re-review.
+    Service owners can mark their own service as deprecated via the edit form. Only admins can reverse a deprecation (via bulk action or the change view button), which resets status to `Submitted` for re-review.
 
 !!! note "Draft status"
-`draft` is defined in the data model but is not set by the submission form
-or any automated workflow. It can only be assigned via direct admin edit
-and is reserved for a future "save as draft" feature.
+    `draft` exists in the data model but nothing sets it: not the forms, the API, the status buttons or any automated workflow. Unsubmitted forms exist only as drafts in the submitter's browser.
 
 #### Submitter edits on approved services
 
 When a submitter edits an approved service (via the update form or REST API), the platform determines whether to reset the status to `submitted`:
 
-- **Exempt fields** (configured in `site.toml [submission] no_reset_fields`) do not trigger a reset. The shipped default set covers supplementary fields: the external links, EDAM annotations, keywords, publications, contact fields, KPI fields, and `comments`. See `no_reset_fields` in `config/site.toml` for the authoritative list.
+- **Exempt fields** (configured in `site.toml [submission] no_reset_fields`) do not trigger a reset. The shipped default set covers supplementary fields: the external links, EDAM annotations, keywords, publications, contact fields, KPI fields, and `comments`. See [`no_reset_fields`](configuration.md#no_reset_fields) for how the list is configured.
 - **Any non-exempt field change** resets status to `submitted` and clears maturity tags. The submitter's update email includes a lifecycle notice: *"Because one or more core service fields were modified, your service registration has been reset to Submitted…"*
 - **Exempt-only edits** (e.g. uploading a logo, updating EDAM annotations) preserve the `approved` status and maturity tags. The submitter receives the normal diff email with no lifecycle notice.
 
 Sanitization artifacts (trailing whitespace stripped by form cleaning, Unicode normalization) are excluded from the reset decision — only genuine value changes count.
+
+---
 
 ## Audit Logging
 
@@ -356,7 +278,7 @@ A dedicated append-only table (`SubmissionChangeLog`) that captures **all** fiel
 
 Django's built-in `LogEntry` table that records **admin-initiated actions only**:
 
-- Status changes (approve/reject/under_review/deprecate)
+- Status changes (approve/reject/under_review/deprecate); these also appear in the Submission Change Log
 - API key operations (issue/reset/revoke)
 - Direct admin saves via the backend
 
@@ -364,7 +286,7 @@ Django's built-in `LogEntry` table that records **admin-initiated actions only**
 
 ### Deletion Audit Log
 
-**Location:** Admin → Service Submissions → **Deletion Audits** (sidebar menu)
+**Location:** Admin → Service Submissions → **Deletion Audits** (sidebar menu; superusers only)
 
 When a `ServiceSubmission` is hard-deleted, a `SubmissionDeletionAudit` record is written **before** the cascade. This record is never linked by FK to the submission so it is never cascade-deleted itself — it persists indefinitely.
 
@@ -402,57 +324,45 @@ Every submission change view includes a collapsible **Last Change Summary** sect
 | **Before**     | Previous value (shown in red)                                                                      |
 | **After**      | New value (shown in green)                                                                         |
 
-!!! note "Status button clicks are not captured here"
-The **Last Change Summary** (and **Change History**) only reflect field-level edits saved through the regular form. Status transitions triggered by the action buttons (Approve, Reject, etc.) do **not** produce a `SubmissionChangeLog` entry and will not appear here. Those actions are recorded in the **Django LogEntry** (History tab) instead.
+!!! note "Status changes appear here too"
+    Status changes made with the buttons or bulk actions, and a submitter deprecating their own service, are recorded as a change of the `status` field, so they appear in the **Last Change Summary** and the **Change History**. API key operations do not; they appear only in the **History** tab.
 
-### Email notifications for edits (updated event)
+!!! info "E-mails on submitter edits"
+    A submitter edit (edit form or API `PATCH`) sends the registry a report with a **what changed** table and a link to the change view; the submitter gets a confirmation with the same table. See [E-mail and Notifications](operator/email.md).
 
-When a submitter edits their service — via the edit form **or** via `PATCH` to the REST API — two separate emails are sent:
+---
 
-| Recipient                                          | Template           | Contents                                                                                     |
-| -------------------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------- |
-| Admin (`[contact] email` + `SUBMISSION_NOTIFY_CC`) | Admin notification | Full submission report + **what changed** table + direct link to admin change view           |
-| Submitter (`internal_contact_email`)               | Submitter updated  | Confirmation + **what changed** table + security notice ("if you did not make this change…") |
-
-The admin URL is never included in the submitter email.
-
-### Filtering by Status
+## Exporting Submissions
 
 The list view sidebar filters by **status**, making it easy to find submissions in a specific state:
 `Draft` · `Submitted` · `Under Review` · `Approved` · `Rejected` · `Deprecated`
 
-Combine status with the category, service centre, or date filters to narrow down exports.
+Combine status with the category, service centre, or date filters to narrow down the selection, then select submissions → choose **Export selected as CSV** or **Export selected as JSON**. All admin groups, including Viewers, can export.
 
-### Exporting Submissions
-
-Select submissions → choose **Export selected as CSV** or **Export selected as JSON**.
-
-Both formats include all submission fields:
+Both formats contain these fields:
 
 | Category               | Fields included                                                                                                                                                                                  |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Identity               | `id`, `status`, `submitted_at`, `updated_at`, `date_of_entry`, `primary_maturity_tag`, `secondary_maturity_tags`                                                                                 |
-| Submitter              | `submitter_first_name/last_name/affiliation`, `host_institute`, `public_contact_email`, `internal_contact_name/email`, `associated_partner_note`                                                 |
+| Identity               | `id`, `status`, `primary_maturity_tag`, `secondary_maturity_tags`, `date_of_entry`, `submitted_at`, `updated_at`                                                                                 |
+| Submitter              | `submitter_first_name/last_name/affiliation` (JSON: nested `submitter` object), `host_institute`, `public_contact_email`, `internal_contact_name/email`, `associated_partner_note`               |
 | Service                | `service_name`, `service_description`, `year_established`, `is_toolbox`, `toolbox_name`, `user_knowledge_required`, `publications_pmids`                                                         |
-| Relations              | `service_categories`, `responsible_pis` (semicolons in CSV, arrays in JSON)                                                                                                                      |
+| Relations              | `service_center` (name), `service_categories`, `responsible_pis` (semicolons in CSV, arrays in JSON)                                                                                              |
 | EDAM                   | `edam_topics`, `edam_operations` — label + URI (semicolons in CSV, objects in JSON)                                                                                                              |
-| Links                  | `website_url`, `terms_of_use_url`, `license`, `github_url`, `biotools_url`, `fairsharing_url`, `other_registry_url`                                                                              |
+| Links and licences     | `website_url`, `terms_of_use_url`, `licenses` (SPDX ids), `license_note`, `github_url`, `biotools_url`, `fairsharing_url`, `other_registry_url`                                                  |
 | KPIs                   | `kpi_monitoring`, `kpi_start_year`                                                                                                                                                               |
 | Discovery              | `keywords_uncited`, `keywords_seo`, `register_as_elixir`, `survey_participation`, `comments`                                                                                                     |
 | Logo                   | `logo_url` — absolute URL, or empty if no logo uploaded                                                                                                                                          |
-| bio.tools (scalar)     | `biotools_id`, `biotools_name`, `biotools_description`, `biotools_homepage`, `biotools_version`, `biotools_license`, `biotools_maturity`, `biotools_cost` — empty strings if no bio.tools record |
-| bio.tools (lists)      | `biotools_tool_type`, `biotools_operating_system` — semicolons in CSV, arrays in JSON                                                                                                            |
-| bio.tools (EDAM)       | `biotools_edam_topic_uris`, `biotools_edam_operation_uris` — semicolons in CSV, arrays in JSON                                                                                                   |
-| bio.tools (structured) | `biotools_functions`, `biotools_publications`, `biotools_documentation`, `biotools_download`, `biotools_links` — JSON strings in CSV, arrays of objects in JSON                                  |
-| bio.tools (sync)       | `biotools_last_synced_at` — ISO datetime of last successful sync, or empty                                                                                                                       |
+| bio.tools              | `biotools_id`, `biotools_name`, `biotools_description`, `biotools_homepage`, `biotools_version`, `biotools_license`, `biotools_maturity`, `biotools_cost`, `biotools_tool_type`, `biotools_operating_system`, `biotools_edam_topic_uris`, `biotools_edam_operation_uris`, `biotools_functions`, `biotools_publications`, `biotools_documentation`, `biotools_download`, `biotools_links`, `biotools_last_synced_at` — empty if the service has no bio.tools record |
+
+In the CSV each bio.tools field is its own column (lists joined with semicolons, structured values as JSON strings). In the JSON export they are grouped in one `biotools` object with the same key names.
 
 !!! note "CSV cells that start like a formula"
     In the CSV export, any text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'` so spreadsheet applications treat it as text instead of a formula. This applies to every column: a description that starts with a Markdown bullet appears as `'- item`, and a phone number written as `+49 ...` appears as `'+49 ...`. The JSON export and the API return the raw values unchanged.
 
 !!! note "JSON export uses a nested submitter object"
-In the JSON export, submitter fields are grouped under a `"submitter"` key:
-`{"submitter": {"first_name": "…", "last_name": "…", "affiliation": "…"}, …}`.
-The CSV export keeps these fields flat (`submitter_first_name`, `submitter_last_name`, `submitter_affiliation`).
+    In the JSON export, submitter fields are grouped under a `"submitter"` key:
+    `{"submitter": {"first_name": "…", "last_name": "…", "affiliation": "…"}, …}`.
+    The CSV export keeps these fields flat (`submitter_first_name`, `submitter_last_name`, `submitter_affiliation`).
 
 ---
 
@@ -484,7 +394,7 @@ To re-tag a service after re-approval, use the change form or bulk action again.
 5. Save
 
 !!! note
-Using a status button (Reject, Deprecate, etc.) in the same section will automatically clear any selected tags — the warning banner indicates this before you act.
+    Using a status button (Reject, Deprecate, etc.) in the same section will automatically clear any selected tags — the warning banner indicates this before you act.
 
 ### Bulk assignment: List action
 
@@ -500,40 +410,7 @@ Non-approved submissions are filtered out automatically with a warning. Mixed se
 
 ## API Key Management
 
-Each submission detail page shows the **Submission API Keys** section. This shows all keys ever issued, their label, creation date, last-used timestamp, and whether they are active.
-
-### Available actions
-
-| Action                   | What it does                                                                                                                                                          |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Revoke all keys**      | Deactivates all active keys. The submitter can no longer edit their submission until a new key is issued.                                                             |
-| **Reset key**            | Revokes all keys and issues one new one. The new plaintext key is shown **once** in a banner. Communicate it to the submitter securely (e.g. encrypted email, phone). |
-| **Issue additional key** | Creates a new active key alongside existing ones. Useful for CI/CD pipelines or team members. Enter a descriptive label.                                              |
-
-**Auto-generated labels:** If the label field is left blank, the system fills it automatically — `"Admin key YYYY-MM-DD by <username>"` for Issue, `"Admin reset YYYY-MM-DD by <username>"` for Reset.
-
-**Key scope:** All keys issued from the submission change page have **write** scope. To issue a **read-only** key, use the standalone **Submission API Keys** list view (see below) where a scope selector is available.
-
-!!! note "Key operations do not email the submitter"
-Revoke, Reset, and Issue actions are silent — no notification is sent to the submitter. Communicate the new key manually (e.g. encrypted email, phone).
-
-!!! warning "Key shown once only"
-Key plaintexts are shown once in the admin interface and are never stored anywhere.
-If you accidentally close the browser before copying the key, you must reset it again.
-
-All key operations are logged in Django's admin audit log (**History** tab, top right of the submission change view).
-
-### Standalone Submission API Keys list
-
-**Location:** Admin → Submissions → Submission API Keys
-
-This view lists **all keys across all submissions** in one place. Use it to:
-
-- Filter by active/inactive status or submission status
-- Search by service name, key label, or the username of the staff member who created the key
-- Set or change a key's **scope** (read or write) — the scope selector is only available here, not on the submission change page
-
-See [Audit Logging](#audit-logging) above for a comparison of the two audit trails.
+Issuing, resetting and revoking submission API keys, and the Admin API keys used by integrations, are described in [Managing API Keys](admin/api-keys.md).
 
 ---
 
@@ -542,7 +419,7 @@ See [Audit Logging](#audit-logging) above for a comparison of the two audit trai
 Reference data (PIs, service centres, categories) can be managed in two ways:
 
 - **Admin UI** — the Django admin portal (see below)
-- **REST API** — `POST/PATCH/DELETE /api/v1/pis/`, `/api/v1/service-centers/`, `/api/v1/categories/` — useful for bulk onboarding or automation (see [API Guide](api-guide.md#reference-data-categories-service-centres-pis))
+- **REST API** — `POST/PATCH/DELETE /api/v1/pis/`, `/api/v1/service-centers/`, `/api/v1/categories/` with an Admin API key — useful for bulk onboarding or automation (see [Admin REST API](admin/api.md#reference-data-categories-service-centres-pis) and the [bulk import script](operator/data-sync.md#bulk-import-of-pis-categories-and-service-centres))
 
 Both interfaces support soft-delete: `DELETE` via the API (or setting `is_active = False` in the admin) hides the record from the registration form but keeps it linked to existing submissions.
 
@@ -558,11 +435,11 @@ Hard deletion of any PI, service centre, or service category is **blocked** when
 | Bulk "Delete selected" — **all** selected records have no submissions | Allowed. All selected records are deleted.                                                                                                                                                                                           |
 
 !!! warning "Use `is_active = False` to retire records, not Delete"
-Setting `is_active = False` hides the record from the submission form dropdown
-while preserving all existing submission links. This is always the correct
-operation for records that are no longer in use. Hard deletion is only
-appropriate for records that were added by mistake and have never been
-referenced by any submission.
+    Setting `is_active = False` hides the record from the submission form dropdown
+    while preserving all existing submission links. This is always the correct
+    operation for records that are no longer in use. Hard deletion is only
+    appropriate for records that were added by mistake and have never been
+    referenced by any submission.
 
 The **Submissions** column in each list view shows how many submissions currently
 reference the record. For Service Categories and Service Centres the count is a
@@ -581,10 +458,10 @@ deactivate or delete.
 - The **Submissions** column shows the total number of submissions that list this PI as responsible (plain count — no hyperlink, as the submission list does not have a per-PI filter).
 
 !!! info "PI institutes populate the affiliation combobox"
-The **Institute** field on each PI record feeds directly into the affiliation
-autocomplete shown to submitters in Section A of the registration form.
-Keeping PI institute names consistent and up-to-date here helps submitters
-find and reuse the correct spelling, reducing data inconsistencies.
+    The **Institute** field on each PI record feeds directly into the affiliation
+    autocomplete shown to submitters in Section A of the registration form.
+    Keeping PI institute names consistent and up-to-date here helps submitters
+    find and reuse the correct spelling, reducing data inconsistencies.
 
 ### Service Centres
 
@@ -606,42 +483,13 @@ find and reuse the correct spelling, reducing data inconsistencies.
 
 ## Service Logos
 
-Submitters can optionally upload a logo for their service during registration or when editing their submission. Logos are also uploadable directly from the admin detail view.
+Submitters can optionally upload a logo for their service during registration or when editing their submission. Logos can also be uploaded from the admin detail view.
 
-### Accepted formats and limits
-
-| Property     | Value                                                                                        |
-| ------------ | -------------------------------------------------------------------------------------------- |
-| Formats      | PNG, JPEG, SVG                                                                               |
-| PNG / JPEG   | Up to 10 MB and 25 megapixels (configurable — see [`[uploads]`](configuration.md#uploads))   |
-| SVG          | Up to 1 MB (configurable — see [`[uploads]`](configuration.md#uploads))                      |
-| Storage      | `/app/mediafiles/logos/<uuid>.<ext>` inside the container (mounted from `media_data` volume) |
-| Served at    | `/media/logos/<uuid>.<ext>` — via Gunicorn (nginx proxy_passes everything)                   |
-
-### Upload processing
-
-Every newly uploaded file goes through the same validation, whether it arrives
-through the registration form, the edit form, the REST API or this admin:
-
-- **Size** — PNG/JPEG up to `logo_max_bytes` and `logo_max_pixels` (the pixel count is read from the image header before decoding); SVG up to `logo_max_svg_bytes`
-- **Magic bytes** — the file type is detected from its binary header, not its extension or MIME type
-- **JPEG / PNG** — re-encoded via Pillow to strip EXIF metadata and verify file integrity
-- **SVG** — parsed with Python's stdlib XML parser (external entities are not loaded, and text from internal entities goes through the same rules as the rest of the file); the root must be `<svg>`; only standard drawing elements are kept (editor metadata is removed); an SVG containing a bitmap image (`<image>`) or other content from outside the file is rejected; `on*` attributes and namespaced attributes other than `xlink:href`, `xml:space` and `xml:lang` are removed; links may only point inside the logo (`#id`); CSS references (read with the [tinycss2](https://pypi.org/project/tinycss2/) CSS parser) may also use embedded `data:` resources such as fonts
-- **Filename** — original filename is discarded; a UUID is assigned before storage
+Accepted formats are PNG, JPEG and SVG, within the limits set in [`[uploads]`](configuration.md#uploads) (by default PNG/JPEG up to 10 MB and 25 megapixels, SVG up to 1 MB). An upload from the admin is checked and processed exactly like one from the forms or the API: JPEG and PNG are re-encoded without metadata, SVGs are reduced to standard drawing content, and files that break the rules are rejected with a message. The rules are listed in the [User Guide](user-guide.md#logo); the implementation is in [Logo Upload Pipeline](developer/logo-pipeline.md).
 
 Saving a submission without choosing a new file keeps the stored logo exactly
 as it is: stored logos are never re-processed, so rule changes do not alter
 logos that are already in place.
-
-Uploaded files are served with their own restrictive `Content-Security-Policy`
-header (sandboxed, no scripts, only embedded resources). Pages that show logos
-through `<img>`, such as the catalogue and this admin, are not affected by it.
-
-!!! note "Request size limit in the reverse proxy"
-    The reverse proxy must accept request bodies a little larger than
-    `logo_max_bytes` on the admin URL prefix as well, otherwise it refuses large
-    admin uploads (HTTP 413) before the application sees them. See
-    [Deployment → Request size for uploads](deployment.md#request-size-for-uploads).
 
 ### Admin usage
 
@@ -650,168 +498,7 @@ Open a submission's detail view. The **B — Service Master Data** section shows
 - **Logo** — file upload widget to add or replace the current logo
 - **Logo preview** — inline image display of the currently stored logo (or "—" if none)
 
-!!! note "Old logos are retained"
-When a submitter or admin uploads a replacement logo, the previous file remains on disk. No automatic cleanup is performed. If disk space becomes a concern, orphaned logo files can be removed manually or via a future management command.
-
-!!! info "Production persistence"
-Logo files are stored in the `media_data` Docker volume (mounted at `/app/mediafiles`).
-Without a persistent volume or bind mount, logos are lost when the container is replaced.
-See [Deployment → Uploaded Media](deployment.md#uploaded-media-service-logos) for volume
-configuration, bind-mount instructions, and backup procedures.
-
----
-
-## Customising Form Text & Section Descriptions
-
-The registration form text is controlled entirely from a single YAML file:
-`apps/submissions/form_texts.yaml`
-
-The file has two parts:
-
-### Section descriptions
-
-Each of the seven form sections (A–G) can show an introductory paragraph at the
-top of its card. Edit the `sections` block:
-
-```yaml
-sections:
-  a:
-    description: '' # leave empty to show no description
-  b:
-    description: 'Provide accurate information about your service.'
-  # ... c through g
-```
-
-- Leave `description: ""` to hide the paragraph for that section.
-- No raw HTML — use the supported syntax below instead.
-
-#### Supported text formatting
-
-**Named hyperlinks** — use `[link text](https://...)` to display a clickable word or phrase
-instead of the full URL:
-
-```yaml
-e:
-  description: >-
-    KPI requirements depend on your service category. See the
-    [de.NBI KPI Compass](https://www.denbi.de/images/Service/20210624_KPI_Cheat_Sheet_doi.pdf)
-    for guidance.
-```
-
-**Bare URLs** — plain `https://` links are also automatically converted to clickable links:
-
-```yaml
-b:
-  description: 'For examples see https://www.denbi.de/services'
-```
-
-**Multiple paragraphs** — use a YAML [literal block scalar](https://yaml.org/spec/1.2/spec.html#id2795688)
-(`|`) and leave a blank line between paragraphs:
-
-```yaml
-f:
-  description: |
-    This section collects keywords and consent information.
-
-    The information helps us improve visibility in search engines and outreach activities.
-```
-
-**Line breaks within a paragraph** — also use the `|` block style; each newline becomes a `<br>`:
-
-```yaml
-c:
-  description: |
-    Please name the PI responsible for this service.
-    Use the associated partner option if your PI is not listed.
-```
-
-!!! note "Folded (`>-`) vs literal (`|`) block scalars"
-The `>-` style collapses line breaks into spaces — useful for long single-paragraph
-descriptions that you want to wrap neatly in the file. Use `|` when you need actual
-line breaks or blank-line paragraph splits to appear in the rendered output.
-
-For the full technical details of the rendering filter, see
-[Custom template tags — `linkify_description`](development.md#linkify_description) in the
-Developer Guide.
-
-### Field help text and tooltips
-
-Each field shows two types of guidance:
-
-- **Help text** — a short hint shown below the input field.
-- **Tooltip** — a detailed explanation shown when hovering or clicking the info icon.
-
-```yaml
-service_name:
-  help: 'Official name of the service.'
-  tooltip: 'Use the canonical name as it appears on your website.'
-  locked_note: 'The service name cannot be changed after submission. Contact the registry team if it must be corrected.'
-```
-
-- Set `help: ""` to hide the help text for a field.
-- Set `tooltip: ""` to hide the info icon for a field.
-- `locked_note` (currently used only for `service_name`) is appended to the field's help text on the **edit** form, where the field is locked. It is not shown on the registration form. Edit it to reword the lock explanation shown to submitters.
-
-### Deploying form text changes
-
-After editing `form_texts.yaml`, rebuild and redeploy:
-
-```bash
-docker compose build web
-docker compose up -d web
-```
-
-No code changes, no migrations, no template edits required.
-
----
-
-## Customising Email Notification Text
-
-Email subject lines and status messages sent to submitters are controlled from a
-single YAML file:
-
-```
-apps/submissions/email_texts.yaml
-```
-
-### Subjects
-
-The `subjects` section defines the subject line for each email type.
-Placeholders `{service_name}` and `{status}` are replaced automatically:
-
-```yaml
-subjects:
-  created: '[de.NBI Registry] New service submission: {service_name}'
-  status_changed: "[de.NBI Registry] Status updated to '{status}': {service_name}"
-  updated: '[de.NBI Registry] Update: {service_name}'
-  submitter_status: 'Your service registration status: {status} — {service_name}'
-```
-
-### Status messages
-
-The `status_messages` section provides the body text included in the submitter
-notification when an admin changes the submission status.
-A `default` fallback is used for any status not explicitly listed:
-
-```yaml
-status_messages:
-  approved: 'Your service has been approved and is now registered …'
-  rejected: 'Your service registration was not approved at this time …'
-  under_review: 'Your submission is currently under review …'
-  default: 'If you have questions about your submission, please contact us.'
-```
-
-### Deploying email text changes
-
-After editing `email_texts.yaml`, rebuild and redeploy — same as form text
-changes:
-
-```bash
-docker compose build web
-docker compose up -d web
-```
-
-No code changes, no migrations, no template edits required.
+A replaced logo file stays on disk; nothing deletes it automatically. If a large admin upload fails with a bare HTTP 413 page, the reverse proxy limit is too low: see [Deployment → Request size for uploads](deployment.md#request-size-for-uploads).
 
 ---
 
@@ -822,14 +509,9 @@ No code changes, no migrations, no template edits required.
 EDAM terms are imported from the official EDAM ontology release and are read-only in the admin.
 Terms cannot be added or deleted manually — all changes come through a sync.
 
-### How EDAM seeding works
+### How EDAM terms are kept current
 
-| Trigger                        | When                      | Notes                                                                                                            |
-| ------------------------------ | ------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **Auto-seed on first migrate** | Once, on a fresh database | Fires automatically as a `post_migrate` signal when the `EdamTerm` table is empty. Downloads ~3 MB, takes ~30 s. |
-| **Monthly beat schedule**      | Every 30 days             | Celery beat task `edam.sync` keeps terms current as EDAM publishes new releases.                                 |
-| **Admin "Sync EDAM" button**   | On demand                 | Queues a background Celery task. Useful after a known EDAM release or if the automatic sync failed.              |
-| **CLI**                        | On demand                 | `python manage.py sync_edam` — synchronous, progress shown in terminal.                                          |
+The terms are loaded automatically on the first deployment and refreshed every 30 days. You can also start a sync from the admin (below). Command-line options, air-gapped servers and the full schedule are in [Reference Data and Ontology Sync](operator/data-sync.md#edam-ontology).
 
 ### Viewing Terms
 
@@ -840,7 +522,7 @@ Search by label or definition text.
 
 ### Checking the Loaded Version
 
-The **EDAM version** column shows which release each term was last loaded from (e.g. `1.25`).
+The **EDAM version** column shows which release each term was last loaded from (for example `1.25-20200618T0915Z`).
 All terms should show the same version after a successful sync.
 
 ### Triggering a manual EDAM sync
@@ -852,53 +534,18 @@ All terms should show the same version after a successful sync.
 3. A green message confirms the task was queued
 4. Refresh the page after ~30 seconds to see the updated term count and version
 
-**From the CLI**:
-
-```bash
-# Download and import the latest stable release
-docker compose exec web python manage.py sync_edam
-
-# Dry-run — parse and count terms without writing to the database
-docker compose exec web python manage.py sync_edam --dry-run
-
-# Sync a single branch only
-docker compose exec web python manage.py sync_edam --branch topic
-
-# Load from a local file (air-gapped servers)
-docker compose exec web python manage.py sync_edam --url /app/EDAM.owl
-```
-
 New terms appear immediately in the form. Obsolete terms are hidden from the form but
 retained in the database so existing submissions referencing them are not broken.
 
-### If the Form Shows No EDAM Terms
-
-On a standard deployment this should not happen — the auto-seed fires on first migrate.
-If the dropdowns are empty, check the term count:
-
-```bash
-docker compose exec web python manage.py shell -c \
-  "from apps.edam.models import EdamTerm; print(EdamTerm.objects.count())"
-# Expected: ~3400. If 0, the auto-seed failed (check migrate output for [edam] lines).
-# Fix: docker compose exec web python manage.py sync_edam
-```
+If the form shows no EDAM terms, ask an operator to check the sync (see [Data sync → If the form shows no EDAM terms](operator/data-sync.md#if-the-form-shows-no-edam-terms)).
 
 ---
 
 ## SPDX License Management {#spdx-management}
 
-**Location:** Admin → Licenses → SPDX Licenses
+**Location:** Admin → SPDX Licenses → SPDX Licenses (superusers only)
 
-SPDX licenses are imported from the canonical [SPDX License List](https://spdx.org/licenses/) and are read-only in the admin. Entries cannot be added or deleted manually — all changes come through a sync.
-
-### How SPDX seeding works
-
-| Trigger                          | When                      | Notes                                                                                                                         |
-| -------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| **Auto-seed on first migrate**   | Once, on a fresh database | Fires as a `post_migrate` signal when the `SpdxLicense` table is empty. Downloads ~500 KB from the SPDX GitHub raw URL, fast. |
-| **Fortnightly beat schedule**    | Every 15 days             | Celery beat task `licenses.sync` refreshes the table as SPDX publishes new releases.                                          |
-| **Admin "Sync Licenses" button** | On demand                 | Queues a background Celery task. Useful after a known SPDX release or if the automatic sync failed.                           |
-| **CLI**                          | On demand                 | `python manage.py sync_spdx_licenses` — synchronous, progress shown in terminal.                                              |
+SPDX licenses are imported from the canonical [SPDX License List](https://spdx.org/licenses/) and are read-only in the admin. Entries cannot be added or deleted manually — all changes come through a sync. The list is loaded on the first deployment and refreshed every 30 days; command-line options are in [Reference Data and Ontology Sync](operator/data-sync.md#spdx-licences).
 
 ### Viewing Licenses
 
@@ -912,32 +559,10 @@ Licenses that are either deprecated upstream in SPDX, or that disappear from ups
 
 **From the admin UI**:
 
-1. Go to **Licenses → SPDX Licenses**
+1. Go to **SPDX Licenses → SPDX Licenses**
 2. Click **↻ Sync Licenses from SPDX** in the top-right toolbar
 3. A green message confirms the task was queued
 4. Refresh the page after a few seconds to see the updated license count and version
-
-**From the CLI**:
-
-```bash
-# Download and import the latest SPDX License List
-docker compose exec web python manage.py sync_spdx_licenses
-
-# Dry-run — parse and count licenses without writing to the database
-docker compose exec web python manage.py sync_spdx_licenses --dry-run
-
-# Load from a local file (air-gapped servers)
-docker compose exec web python manage.py sync_spdx_licenses --url /app/licenses.json
-```
-
-### If the Form Shows No SPDX Licenses
-
-```bash
-docker compose exec web python manage.py shell -c \
-  "from apps.licenses.models import SpdxLicense; print(SpdxLicense.objects.count())"
-# Expected: 600+. If 0, the auto-seed failed.
-# Fix: docker compose exec web python manage.py sync_spdx_licenses
-```
 
 ---
 
@@ -971,279 +596,12 @@ Common sync errors:
 
 - `bio.tools tool not found (HTTP 404)` — the bio.tools ID in the submission URL is wrong
 - `bio.tools network error` — the server could not reach bio.tools (check firewall/proxy)
-- `bio.tools API error (HTTP 5xx)` — bio.tools is temporarily unavailable; will retry automatically
+- `bio.tools API error (HTTP 5xx)` — bio.tools is temporarily unavailable; the next sync tries again
 
 ### Manually Triggering a Sync
 
 From the admin list, select records and choose **Sync selected records from bio.tools now**.
 This queues a background Celery task; the record refreshes within a few seconds.
 
-From the command line:
+The command-line sync, and creating a missing record for a submission, are described in [Reference Data and Ontology Sync](operator/data-sync.md#biotools-records). Records are refreshed automatically every 24 hours.
 
-```bash
-# Sync all records
-docker compose exec web python manage.py sync_biotools
-
-# Sync one specific submission
-docker compose exec web python manage.py sync_biotools --submission <uuid>
-
-# Dry-run
-docker compose exec web python manage.py sync_biotools --dry-run
-```
-
-### Creating a bio.tools Record Manually
-
-If a submission has a bio.tools URL but no record was created (e.g. bio.tools was unreachable
-when the submission was saved), create it manually:
-
-```bash
-docker compose exec web python manage.py sync_biotools \
-  --submission <submission-uuid> \
-  --create
-```
-
-### Stale Draft Cleanup {#stale-drafts}
-
-There are two independent draft systems — one server-side, one client-side.
-
-#### Server-side draft sessions
-
-The `cleanup_stale_drafts` Celery beat task runs daily and removes Django session
-rows that are older than 24 hours. These sessions are written by the browser
-draft auto-save feature. The task does not touch any `ServiceSubmission` rows.
-
-To run manually:
-
-```python
-from apps.submissions.tasks import cleanup_stale_drafts
-result = cleanup_stale_drafts()
-print(f"Removed {result} stale session(s)")
-```
-
-The beat schedule is defined in `settings.py` under `CELERY_BEAT_SCHEDULE`. See [Monitoring → Celery / Task Queue](#celery-task-queue) for monitoring.
-
-#### Client-side localStorage drafts
-
-The registration and edit forms auto-save field values to the submitter's
-**browser localStorage** (not to the server). These are managed entirely
-client-side:
-
-- **Submit clears the draft immediately** — no admin action needed.
-- **`updated_at` key invalidation** — the edit form draft key embeds the submission's
-  `updated_at` Unix timestamp. Any server-side save (admin edit, status change, API
-  update) advances `updated_at`, making the old draft key unreachable. The submitter
-  always sees current values on their next visit.
-- **TTL** — drafts older than `draft_ttl_days` (default 7, configurable in
-  `site.toml [submission]`) are removed on the submitter's next form load.
-- **Global purge** — on every form load the browser also sweeps all `denbi_draft_*`
-  localStorage entries and removes expired ones, covering drafts from multiple
-  service registrations.
-
-No admin action is required for client-side drafts. They are entirely transparent
-to the server.
-
----
-
-### Periodic Sync Schedule
-
-All bio.tools records are refreshed automatically every 24 hours by a Celery beat task.
-To verify the scheduler is running:
-
-```bash
-docker compose exec worker celery -A config inspect scheduled
-# Should show the biotools.sync_all task
-```
-
-To change the schedule, edit `CELERY_BEAT_SCHEDULE` in `config/settings.py`:
-
-```python
-"sync-biotools-daily": {
-    "task": "biotools.sync_all",
-    "schedule": 86400,  # seconds — change to 43200 for twice-daily
-},
-```
-
----
-
-## Admin API Keys
-
-Scoped machine-to-machine keys that are **independent of any staff user account**.
-Use these when you need to give API access to an external consumer (a website,
-dashboard, or third-party script) without creating a user account for it.
-
-### Scopes
-
-| Scope  | Allowed HTTP methods       | When to use                                                    |
-| ------ | -------------------------- | -------------------------------------------------------------- |
-| `read` | GET / HEAD / OPTIONS only  | Public-facing website, read-only dashboard, external analytics |
-| `full` | All methods (read + write) | Trusted internal integration that needs to mutate data         |
-
-**Rule of thumb:** always start with `read`. Only issue a `full` key if the consumer
-explicitly needs to create, update, or delete records.
-
-### Security properties of `read` keys
-
-- A leaked `read` key cannot modify any submission or reference data.
-- Serialisers already exclude all sensitive internal fields
-  (`internal_contact_email`, `submission_ip`, `user_agent_hash`), so a `read` key
-  cannot expose PII that isn't already exposed by the same endpoint to admin users.
-- Revoke instantly by setting **Is active** to False — no user account to disable.
-
-### Creating a key
-
-1. Go to **API → Admin API Keys → Add Admin API Key**.
-2. Enter a descriptive **Label** (e.g. `Public website – read-only`, `CI pipeline`).
-3. Select the **Scope** (`read` for external consumers, `full` for internal integrations).
-4. Click **Save**.
-5. The full plaintext key appears once in a warning banner — copy it immediately.
-
-### Using the key
-
-```bash
-Authorization: AdminKey <plaintext-key>
-```
-
-```bash
-# Example — list all submissions with a read-scope key:
-curl https://service-registry.bi.denbi.de/api/v1/submissions/ \
-  -H "Authorization: AdminKey sk_abc123..."
-
-# Attempting a write with a read-scope key returns 403:
-# {"detail": "This key is read-only. Use a full-access Admin API Key to modify data."}
-```
-
-### Revoking a key
-
-Uncheck **Is active** in the admin change view and save. The key stops working
-immediately. The record is kept for audit purposes — hard deletion is intentionally
-disabled.
-
----
-
-## Email Notification Settings
-
-Emails are sent asynchronously via Celery. Configure via environment variables in `.env`:
-
-```bash
-EMAIL_HOST=smtp.example.org
-EMAIL_PORT=587
-EMAIL_USE_TLS=true
-EMAIL_FROM=no-reply@denbi.de
-SUBMISSION_NOTIFY_CC=admin@denbi.de          # Optional CC on every notification
-SUBMISSION_NOTIFY_OVERRIDE=                  # Override recipient for testing
-```
-
-Events that trigger emails:
-
-| Event                           | Recipient(s)                                                                               | Template                                             |
-| ------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
-| New submission created          | Admin + `SUBMISSION_NOTIFY_CC` (CC: `internal_contact_email`)                              | `notification.html`                                  |
-| Submitter edits via update form | Admin + `SUBMISSION_NOTIFY_CC`                                                             | `notification.html`                                  |
-| Status changed by admin         | Admin + `SUBMISSION_NOTIFY_CC` **and** `internal_contact_email` (separate submitter email) | `notification.html` + `status_update_submitter.html` |
-
-The submitter email on status change is suppressed when `SUBMISSION_NOTIFY_OVERRIDE` is set (e.g. in staging/testing), so test environments do not accidentally send submitter-facing emails.
-
----
-
-## Monitoring
-
-### Health Checks
-
-- `GET /health/live/` — 200 if the process is running (no DB check)
-- `GET /health/ready/` — 200 only if DB and Redis are reachable; 503 otherwise
-
-### Logs
-
-Logs are structured JSON on stdout (captured by Docker). Key fields:
-`timestamp`, `levelname`, `name`, `message`, `request_id`.
-
-View live logs:
-
-```bash
-make logs
-# or
-docker compose logs -f web
-docker compose logs -f worker
-```
-
-### Celery / Task Queue
-
-Check task queue health:
-
-```bash
-docker compose exec worker celery -A config inspect active
-docker compose exec worker celery -A config inspect stats
-
-# Check scheduled tasks (should include cleanup-stale-drafts, sync-biotools-daily, sync-edam-monthly)
-docker compose exec worker celery -A config inspect scheduled
-
-# Ping the worker directly (same check used by the Docker healthcheck)
-docker compose exec worker celery -A config inspect ping
-```
-
-The `worker` container reports a Docker health status based on `celery inspect ping`. The `beat` container has no inspection API so its healthcheck is disabled — liveness is inferred from the process staying up.
-
----
-
-## ALTCHA CAPTCHA
-
-The registration and edit forms are protected by [ALTCHA](https://altcha.org/) — a
-self-hosted, privacy-respecting proof-of-work CAPTCHA. The browser widget is served
-from `static/js/altcha.min.js` (no CDN, no third-party requests) and the challenge
-endpoint is `GET /captcha/`.
-
-### How it works
-
-1. When the form loads, the widget automatically fetches a signed challenge from `/captcha/`.
-2. The browser solves a small SHA-256 proof-of-work puzzle (invisible to the user).
-3. On submit, the solved payload is included in the form POST as the `altcha` field.
-4. The server verifies the signature and expiry before processing the form.
-
-No user interaction is required — ALTCHA runs silently in the background.
-
-### Setting the HMAC key
-
-`ALTCHA_HMAC_KEY` in `.env` is the secret used to sign and verify challenges.
-
-Generate a strong key:
-
-```bash
-python -c "import secrets; print(secrets.token_hex(32))"
-```
-
-Then set it in `.env`:
-
-```bash
-ALTCHA_HMAC_KEY=<your-generated-key>
-```
-
-Restart the web service to apply: `docker compose restart web`
-
-!!! warning "Required in production"
-When `ALTCHA_HMAC_KEY` is empty, ALTCHA verification is **bypassed entirely** — safe
-for local development but must be configured before deploying publicly.
-
-### Rotating the ALTCHA HMAC key
-
-1. Generate a new key: `python -c "import secrets; print(secrets.token_hex(32))"`
-2. Update `ALTCHA_HMAC_KEY` in `.env`.
-3. Restart the web service: `docker compose restart web`
-
-Any challenges signed with the old key will immediately become invalid. Users who
-opened the form before the rotation will see a CAPTCHA failure on submit — they need
-to reload the page to fetch a new challenge signed with the new key.
-
----
-
-## Rotating the SECRET_KEY
-
-1. Generate a new key: `python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"`
-2. Update `SECRET_KEY` in `.env` (or your deployment environment / CI secret store).
-3. Restart the web and worker services: `docker compose restart web worker`
-4. All existing sessions will be invalidated (users will need to log in again).
-
-## Rotating Database Password
-
-1. Update the PostgreSQL password: `docker compose exec db psql -U denbi -c "ALTER USER denbi PASSWORD 'new-password';"`
-2. Update `DB_PASSWORD` in `.env` to the new password.
-3. Restart services: `docker compose restart web worker beat`

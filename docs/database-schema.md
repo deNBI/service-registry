@@ -16,7 +16,10 @@ ServiceSubmission (UUID PK)
 ├── service_center → ServiceCenter (FK, PROTECT)        — many-to-one
 ├── responsible_pis → PrincipalInvestigator             — many-to-many
 ├── edam_topics → EdamTerm (branch=topic)               — many-to-many
-└── edam_operations → EdamTerm (branch=operation)       — many-to-many
+├── edam_operations → EdamTerm (branch=operation)       — many-to-many
+└── licenses → SpdxLicense                              — many-to-many
+
+AdminAPIKey                                             — not linked to a submission
 
 SubmissionDeletionAudit                                 — no FK (survives cascade)
 └── stores submission_id (UUID, plain field) + changelog snapshot
@@ -34,13 +37,15 @@ EdamTerm
 | `ServiceSubmission`, `SubmissionChangeLog`, `SubmissionAPIKey`, `SubmissionDeletionAudit` | `apps/submissions/models.py` |
 | `ServiceCategory`, `ServiceCenter`, `PrincipalInvestigator` | `apps/registry/models.py` |
 | `EdamTerm` | `apps/edam/models.py` |
+| `SpdxLicense` | `apps/licenses/models.py` |
+| `AdminAPIKey` | `apps/api/models.py` |
 | `BioToolsRecord`, `BioToolsFunction` | `apps/biotools/models.py` |
 
 ---
 
 ## `submissions_servicesubmission`
 
-**Source:** `apps/submissions/models.py` → `ServiceSubmission` (line 166)
+**Source:** `apps/submissions/models.py` → `ServiceSubmission`
 
 The core domain model. One row per registered service.
 
@@ -68,7 +73,7 @@ The core domain model. One row per registered service.
 | `submitter_affiliation` | varchar(300) | Institute or organisation |
 | `register_as_elixir` | boolean | `false` by default |
 
-**Computed property (not a column):** `submitter_name` — `"First Last, Affiliation"` string. (`models.py:233`)
+**Computed property (not a column):** `submitter_name` — `"First Last, Affiliation"` string.
 
 ### Section B — Service Master Data
 
@@ -97,7 +102,7 @@ M2M relations (via junction tables):
 |---|---|---|
 | `host_institute` | varchar(300) | NOT NULL |
 | `associated_partner_note` | text | Required when "Associated partner" PI is selected |
-| `public_contact_email` | varchar(254) | Publicly visible on the services catalogue |
+| `public_contact_email` | varchar(2000) | E-mail address or `https://` support URL, intended for public display (de.NBI services page); validated by `_validate_public_contact` |
 | `internal_contact_name` | varchar(200) | Admin use only |
 | `internal_contact_email` | varchar(254) | Never exposed in API responses |
 | `service_center_id` | UUID FK | → `ServiceCenter.id`; `ON DELETE PROTECT` |
@@ -168,7 +173,7 @@ CREATE INDEX ON submissions_servicesubmission (year_established);
 
 ## `submissions_submissionchangelog`
 
-**Source:** `apps/submissions/models.py` → `SubmissionChangeLog` (line 605)
+**Source:** `apps/submissions/models.py` → `SubmissionChangeLog`
 
 Append-only audit trail of field-level changes. One row per edit event regardless of source (submitter web form, admin backend, API PATCH).
 
@@ -193,7 +198,7 @@ For a full discussion of the audit logging system, see [Admin Guide → Audit Lo
 
 ## `submissions_submissiondeletionaudit`
 
-**Source:** `apps/submissions/models.py` → `SubmissionDeletionAudit` (line 820)
+**Source:** `apps/submissions/models.py` → `SubmissionDeletionAudit`
 
 Persisted audit record written immediately before a `ServiceSubmission` is hard-deleted. Unlike `SubmissionChangeLog`, this table has **no FK to `ServiceSubmission`** — it stores the submission UUID as a plain field and is never cascade-deleted. One record is created per deletion event.
 
@@ -206,7 +211,7 @@ Persisted audit record written immediately before a `ServiceSubmission` is hard-
 | `submitter_first_name` | varchar(100) | | |
 | `submitter_last_name` | varchar(100) | | |
 | `submitter_affiliation` | varchar(300) | | |
-| `public_contact_email` | varchar(254) | | |
+| `public_contact_email` | varchar(2000) | | |
 | `deleted_by` | varchar(200) | NOT NULL | `"admin:<username>"` or `"system"` |
 | `deleted_at` | timestamptz | NOT NULL, auto_now_add | |
 | `changelog_count` | integer | NOT NULL, default 0 | Number of `SubmissionChangeLog` rows cascade-deleted |
@@ -223,7 +228,7 @@ Persisted audit record written immediately before a `ServiceSubmission` is hard-
 
 ## `submissions_submissionapikey`
 
-**Source:** `apps/submissions/models.py` → `SubmissionAPIKey` (line 670)
+**Source:** `apps/submissions/models.py` → `SubmissionAPIKey`
 
 API keys for programmatic access. One or more per submission. Plaintext is never stored.
 
@@ -239,24 +244,43 @@ API keys for programmatic access. One or more per submission. Plaintext is never
 | `is_active` | boolean | default `true` | Set `false` to revoke; never deleted |
 | `last_used_at` | timestamptz | nullable | Updated on every successful auth |
 
-**Security design** (`SubmissionAPIKey.create_for_submission` (line 750) · `SubmissionAPIKey.verify` (line 778)):
+**Security design** (`SubmissionAPIKey.create_for_submission` · `SubmissionAPIKey.verify`):
 
 - `key_hash` is `SHA-256(plaintext)`. Plaintext is generated in memory, shown once, and discarded.
 - Lookups use `hmac.compare_digest` for constant-time comparison.
-- Revoked keys (`is_active=False`) return the same HTTP 403 as an invalid key.
-- A dummy `compare_digest` is performed even on miss to prevent timing oracle attacks.
+- Revoked keys (`is_active=False`) are rejected like an unknown key: the API answers HTTP 401.
+- A `compare_digest` is also performed when no key matches, so both cases take similar time.
+
+---
+
+## `api_adminapikey`
+
+**Source:** `apps/api/models.py` → `AdminAPIKey`
+
+Machine-to-machine keys for the admin REST API (`Authorization: AdminKey <key>`). Not linked to a submission. Managed by superusers in the admin; see [Managing API Keys](admin/api-keys.md#admin-api-keys).
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | UUID | PK | |
+| `key_hash` | varchar(64) | UNIQUE, indexed | SHA-256 hex digest of the plaintext key |
+| `label` | varchar(100) | NOT NULL | Human-readable name |
+| `scope` | varchar(10) | choices, default `full` | `read` (GET/HEAD/OPTIONS) or `full` (all methods) |
+| `created_at` | timestamptz | auto_now_add | |
+| `created_by_id` | integer | FK → `auth_user`, SET_NULL, nullable | Staff user who created the key |
+| `is_active` | boolean | default `true` | Set `false` to revoke; deletion is disabled in the admin |
+| `last_used_at` | timestamptz | nullable | Updated on successful authentication |
 
 ---
 
 ## `registry_servicecategory`
 
-**Source:** `apps/registry/models.py` → `ServiceCategory` (line 28)
+**Source:** `apps/registry/models.py` → `ServiceCategory`
 
 Lookup table for service types. Managed via admin.
 
 | Column | Type | Notes |
 |---|---|---|
-| `id` | serial | PK (auto-increment) |
+| `id` | bigint | PK (auto-increment) |
 | `name` | varchar(100) | UNIQUE |
 | `is_active` | boolean | `false` hides from form; existing links preserved |
 
@@ -264,7 +288,7 @@ Lookup table for service types. Managed via admin.
 
 ## `registry_servicecenter`
 
-**Source:** `apps/registry/models.py` → `ServiceCenter` (line 63)
+**Source:** `apps/registry/models.py` → `ServiceCenter`
 
 de.NBI service centres. Used as an FK on submissions.
 
@@ -280,7 +304,7 @@ de.NBI service centres. Used as an FK on submissions.
 
 ## `registry_principalinvestigator`
 
-**Source:** `apps/registry/models.py` → `PrincipalInvestigator` (line 127)
+**Source:** `apps/registry/models.py` → `PrincipalInvestigator`
 
 Named PIs who can be selected as responsible for a service.
 
@@ -295,26 +319,26 @@ Named PIs who can be selected as responsible for a service.
 | `is_active` | boolean | `false` hides from form |
 | `is_associated_partner` | boolean | Marks the generic "Associated partner" dropdown entry |
 
-**ORCID validation** (`apps/registry/models.py` → `_validate_orcid` (line 105)): Format `0000-0000-0000-000X` plus ISO 7064 MOD 11-2 checksum verification — the last character may be `X` (value 10). The check digit is computed as `(12 − (total mod 11)) mod 11`; ORCIDs whose check digit is `1` (i.e. where the running total mod 11 equals 0) require the outer `mod 11` to be applied correctly.
+**ORCID validation** (`apps/registry/models.py` → `_validate_orcid`): Format `0000-0000-0000-000X` plus ISO 7064 MOD 11-2 checksum verification — the last character may be `X` (value 10). The check digit is computed as `(12 − (total mod 11)) mod 11`; ORCIDs whose check digit is `1` (i.e. where the running total mod 11 equals 0) require the outer `mod 11` to be applied correctly.
 
 ---
 
 ## `edam_edamterm`
 
-**Source:** `apps/edam/models.py` → `EdamTerm` (line 45)
+**Source:** `apps/edam/models.py` → `EdamTerm`
 
 Local cache of the EDAM bioscientific ontology. Seeded by `manage.py sync_edam`.
 
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
-| `id` | serial | PK | |
+| `id` | bigint | PK | |
 | `uri` | varchar(200) | UNIQUE, indexed | e.g. `http://edamontology.org/topic_0091` |
 | `accession` | varchar(40) | UNIQUE, indexed | e.g. `topic_0091` |
 | `branch` | varchar(20) | indexed | `topic`, `operation`, `data`, `format`, `identifier` |
 | `label` | varchar(200) | indexed | Human-readable name, e.g. `Proteomics` |
 | `definition` | text | | EDAM definition text |
 | `synonyms` | jsonb | default `[]` | List of synonym strings |
-| `parent_id` | integer FK | nullable, SET_NULL | Self-referential; → `EdamTerm.id` |
+| `parent_id` | bigint FK | nullable, SET_NULL | Self-referential; → `EdamTerm.id` |
 | `is_obsolete` | boolean | default `false` | Obsolete terms hidden from form but retained |
 | `sort_order` | integer | default `0` | Numeric part of accession for stable ordering |
 | `edam_version` | varchar(20) | | Release version, e.g. `1.25` |
@@ -340,11 +364,11 @@ CREATE INDEX ON edam_edamterm (label);
 
 **Source:** `apps/licenses/models.py` → `SpdxLicense`
 
-Local cache of the SPDX License List (600+ entries). Seeded by `manage.py sync_spdx_licenses` (and auto-seeded post-migrate on first deploy, refreshed fortnightly via Celery beat).
+Local cache of the SPDX License List (700+ entries). Seeded by `manage.py sync_spdx_licenses` (and auto-seeded post-migrate on first deploy, refreshed every 30 days via Celery beat).
 
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
-| `id` | serial | PK | |
+| `id` | bigint | PK | |
 | `license_id` | varchar(80) | UNIQUE, indexed | SPDX canonical id, e.g. `MIT`, `Apache-2.0` |
 | `name` | varchar(200) | indexed | Human-readable name, e.g. `MIT License` |
 | `reference_url` | varchar(500) | | Canonical SPDX page URL |
@@ -356,15 +380,15 @@ Local cache of the SPDX License List (600+ entries). Seeded by `manage.py sync_s
 
 **Sync behaviour:**
 
-- On-demand from the admin via the "Sync Now" button on the SPDX License list.
-- Monthly Celery beat task `licenses.sync` refreshes the table.
+- On-demand from the admin via the **↻ Sync Licenses from SPDX** button on the SPDX License list.
+- Celery beat task `licenses.sync` refreshes the table every 30 days.
 - Sweep step marks any rows missing from upstream as `is_deprecated=True` so references from existing submissions are preserved.
 
 ---
 
 ## `biotools_biotoolsrecord`
 
-**Source:** `apps/biotools/models.py` → `BioToolsRecord` (line 63)
+**Source:** `apps/biotools/models.py` → `BioToolsRecord`
 
 Locally cached snapshot of a bio.tools entry. One-to-one with `ServiceSubmission`.
 
@@ -393,7 +417,7 @@ Locally cached snapshot of a bio.tools entry. One-to-one with `ServiceSubmission
 | `created_at` | timestamptz | auto_now_add |
 | `updated_at` | timestamptz | auto_now |
 
-**Computed properties (not columns)** (`apps/biotools/models.py` lines 190–196):
+**Computed properties (not columns)** (`BioToolsRecord` in `apps/biotools/models.py`):
 
 - `biotools_url` → `https://bio.tools/<biotools_id>`
 - `sync_ok` → `True` when `sync_error == ""` and `last_synced_at is not None`
@@ -402,13 +426,13 @@ Locally cached snapshot of a bio.tools entry. One-to-one with `ServiceSubmission
 
 ## `biotools_biotoolsfunction`
 
-**Source:** `apps/biotools/models.py` → `BioToolsFunction` (line 208)
+**Source:** `apps/biotools/models.py` → `BioToolsFunction`
 
 One functional annotation block from bio.tools. A tool may have several.
 
 | Column | Type | Constraints | Notes |
 |---|---|---|---|
-| `id` | serial | PK | |
+| `id` | bigint | PK | |
 | `record_id` | UUID | FK → `BioToolsRecord`, CASCADE | |
 | `position` | smallint | default `0` | 0-indexed position in bio.tools function list |
 | `operations` | jsonb | | `[{uri, term}, ...]` — EDAM Operation annotations |
@@ -431,44 +455,45 @@ These are automatically managed by Django. They have no extra columns.
 | `submissions_servicesubmission_responsible_pis` | `servicesubmission_id` | `principalinvestigator_id` |
 | `submissions_servicesubmission_edam_topics` | `servicesubmission_id` | `edamterm_id` |
 | `submissions_servicesubmission_edam_operations` | `servicesubmission_id` | `edamterm_id` |
+| `submissions_servicesubmission_licenses` | `servicesubmission_id` | `spdxlicense_id` |
 
 ---
 
 ## Status Lifecycle
 
-**Source:** `apps/submissions/models.py` → `SubmissionStatus` (line 130) · status reset on approved-submission edit enforced in `apps/submissions/views.py`
+**Source:** `apps/submissions/models.py` → `SubmissionStatus` · status reset on approved-submission edit enforced in `apps/submissions/views.py`
 
 ```
-          ┌──────────┐
-          │  draft   │  ← saved by form before submission (rare)
-          └────┬─────┘
-               │ submit
-          ┌────▼──────┐
-          │ submitted │  ← default on form POST
+          ┌───────────┐
+          │ submitted │  ← set on every new registration (form and API)
           └────┬──────┘
                │ admin action
         ┌──────▼───────┐
-        │ under_review │
-        └──┬───────────┘
-           │           │
-    ┌──────▼─┐     ┌───▼──────┐
-    │approved│     │ rejected │
-    └────────┘     └──────────┘
+        │ under_review │   (optional; admins can approve or reject directly)
+        └──┬────────┬──┘
+           │        │
+    ┌──────▼─┐  ┌───▼──────┐
+    │approved│  │ rejected │
+    └────────┘  └──────────┘
+
+  deprecated  ← set by an admin, or by the owner on the edit form;
+                "Undeprecate" (admin only) returns it to submitted
 ```
 
-If a submitter edits an **approved** submission, the status resets to `submitted` for re-review.
+`draft` exists in the status choices but nothing sets it. If a submitter edits an **approved** submission and changes a field that is not in `no_reset_fields`, the status resets to `submitted` for re-review (see [Change Tracking and Status Reset](developer/lifecycle.md)).
 
 ---
 
 ## Input Sanitisation
 
-**Source:** `apps/submissions/models.py` → `_sanitise_text` (line 63) · applied in `ServiceSubmission.save()` (line 575)
+**Source:** `apps/submissions/models.py` → `_sanitise_text` · applied in `ServiceSubmission.save()`
 
 All free-text fields are sanitised on every `save()`:
 
-1. Null bytes stripped (prevents DB errors and log injection)
-2. Unicode NFC normalisation (prevents homoglyph attacks)
-3. Leading/trailing whitespace stripped
+1. Null bytes stripped
+2. Line endings normalised to LF (browsers send CRLF, API clients LF)
+3. Unicode NFC normalisation
+4. Leading/trailing whitespace stripped
 
 The sanitised fields are: `submitter_first_name`, `submitter_last_name`, `submitter_affiliation`, `service_name`, `service_description`, `toolbox_name`, `user_knowledge_required`, `host_institute`, `internal_contact_name`, `associated_partner_note`, `kpi_start_year`, `keywords_uncited`, `keywords_seo`, `comments`.
 
@@ -480,4 +505,3 @@ The sanitised fields are: `submitter_first_name`, `submitter_last_name`, `submit
 |---|---|
 | API key plaintext | Only the SHA-256 hash is stored; plaintext shown once then discarded |
 | Raw User-Agent string | Only SHA-256 hash stored in `user_agent_hash` |
-| Session data in DB | Sessions use Redis |

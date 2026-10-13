@@ -76,25 +76,52 @@ extra_css:
 exclude_docs: |
   superpowers/
 
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
 nav:
   - Home: index.md
   - Getting Started:
     - Development Setup: development.md
-    - Configuration: configuration.md
-    - Deployment: deployment.md
+    - Configuration Reference: configuration.md
+    - Deployment Guide: deployment.md
   - User Guide:
-    - User Guide: user-guide.md
-    - API Reference: api-guide.md
-  - Admin Guide: admin-guide.md
+    - Registering and Updating a Service: user-guide.md
+    - Using the API: api-guide.md
+  - Admin Guide:
+    - Admin Guide: admin-guide.md
+    - Managing API Keys: admin/api-keys.md
+    - Admin REST API: admin/api.md
+  - Operator Guide:
+    - Operator Guide Overview: operator/index.md
+    - E-mail and Notifications: operator/email.md
+    - Customising Texts: operator/customising-texts.md
+    - Reference Data and Ontology Sync: operator/data-sync.md
+    - Operations and Monitoring: operator/operations.md
+    - Security Operations: operator/security.md
+    - Backups: operator/backups.md
+    - Releases and Rollback: rollout.md
+    - Troubleshooting: operator/troubleshooting.md
   - Developer Guide:
     - Architecture: architecture.md
     - Testing: testing.md
     - Database Schema: database-schema.md
-    - Extending Models: extending/model-changes.md
-    - Adding Apps: extending/adding-apps.md
+    - Internals:
+      - Markdown Rendering: developer/markdown.md
+      - Logo Upload Pipeline and Media Serving: developer/logo-pipeline.md
+      - Change Tracking and Status Reset: developer/lifecycle.md
+      - Frontend Templates, Widgets and Drafts: developer/frontend.md
+      - Registry Catalogue Internals: developer/catalogue.md
+      - bio.tools Integration Internals: developer/biotools.md
+      - Admin Permission Enforcement: developer/admin-permissions.md
+      - Vendored Static Assets: developer/vendored-assets.md
+    - Extending Models and Database Schema: extending/model-changes.md
+    - Adding Apps and Features: extending/adding-apps.md
   - Reference:
-    - Rollout & Releases: rollout.md
-    - Hosting the Docs: docs-hosting.md
+    - Hosting the Documentation: docs-hosting.md
 
 extra:
   social:
