@@ -16,6 +16,11 @@ from .client import BioToolsClient, BioToolsError, BioToolsNotFound, BioToolsToo
 logger = logging.getLogger(__name__)
 
 
+def biotools_id_from_url(url: str) -> str:
+    """Return the bio.tools ID from a URL such as https://bio.tools/<id> ("" if none)."""
+    return (url or "").rstrip("/").split("/")[-1]
+
+
 class SyncResult(NamedTuple):
     ok: bool
     biotools_id: str
