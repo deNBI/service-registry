@@ -33,30 +33,34 @@ def connect_signals():
         When a ServiceSubmission is saved with a bio.tools URL, kick off
         a background sync.
 
-        Only triggers when:
-          - The submission has a biotools_url set
-          - The biotools_url has changed (or this is a new submission)
-
-        Uses update_fields to avoid triggering on every field save.
+        Only triggers when the submission has a biotools_url and there is no
+        record yet for the tool in that URL (new submission, changed URL, or
+        an earlier sync that never created a record). When the URL is empty,
+        a record left from an earlier URL is removed so its data is not shown.
         """
+        from apps.biotools.models import BioToolsRecord
+
+        from .sync import biotools_id_from_url
         from .tasks import sync_biotools_record
 
         if not instance.biotools_url:
+            removed, _ = BioToolsRecord.objects.filter(submission=instance).delete()
+            if removed:
+                logger.info(
+                    "Removed bio.tools record of submission %s (no bio.tools URL)",
+                    instance.pk,
+                )
             return
 
-        # Check if the biotools_url actually changed to avoid unnecessary syncs
-        # on every save (e.g. status changes, KPI updates)
-        if not created:
-            try:
-                previous = sender.objects.get(pk=instance.pk)
-                if previous.biotools_url == instance.biotools_url:
-                    # URL hasn't changed — check if we already have a record
-                    from apps.biotools.models import BioToolsRecord
-
-                    if BioToolsRecord.objects.filter(submission=instance).exists():
-                        return  # Already synced, URL unchanged — skip
-            except sender.DoesNotExist:
-                pass
+        # post_save runs after the row is written, so the previous URL cannot
+        # be read back here. Compare with the record instead: skip only when a
+        # record for the tool in the current URL exists, so ordinary saves
+        # (status changes, KPI updates) do not trigger a sync.
+        if BioToolsRecord.objects.filter(
+            submission=instance,
+            biotools_id=biotools_id_from_url(instance.biotools_url),
+        ).exists():
+            return
 
         logger.info(
             "Scheduling bio.tools sync for submission %s (url: %s)",
