@@ -566,6 +566,12 @@ class TestSyncBioToolsTask:
         }
 
 
+def _entry_for(biotools_id):
+    """A parsed bio.tools entry whose id and name follow the requested id."""
+    raw = {**FULL_RAW, "biotoolsID": biotools_id, "name": biotools_id.upper()}
+    return BioToolsClient._parse_tool(raw)
+
+
 @pytest.mark.django_db
 class TestSyncAllBioToolsTask:
     def test_empty_records_completes(self):
@@ -578,17 +584,16 @@ class TestSyncAllBioToolsTask:
         from apps.biotools.tasks import sync_all_biotools_records
         from apps.biotools.models import BioToolsRecord
 
-        # Use empty URL so signal doesn't create records automatically
+        # Create with an empty URL so the signal does not sync, then set the
+        # URLs directly (bypassing the signal).
         sub1 = ServiceSubmissionFactory(biotools_url="")
         sub2 = ServiceSubmissionFactory(biotools_url="")
-
-        # Create two records via direct model creation (bypassing sync/signal)
         for sub, bid in [(sub1, "blast"), (sub2, "interproscan")]:
             BioToolsRecord.objects.create(
-                submission=sub,
-                biotools_id=bid,
-                name=bid,
-                raw_json={},
+                submission=sub, biotools_id=bid, name=bid, raw_json={}
+            )
+            type(sub).objects.filter(pk=sub.pk).update(
+                biotools_url=f"https://bio.tools/{bid}"
             )
 
         ok_result = SyncResult(ok=True, biotools_id="x", created=False, error="")
@@ -596,8 +601,56 @@ class TestSyncAllBioToolsTask:
             ok=False, biotools_id="x", created=False, error="API error"
         )
 
-        with patch("apps.biotools.sync.sync_tool", side_effect=[ok_result, err_result]):
-            sync_all_biotools_records()  # Should complete without raising
+        # One failing sync does not stop the loop.
+        with patch(
+            "apps.biotools.sync.sync_tool", side_effect=[ok_result, err_result]
+        ) as mock_sync:
+            sync_all_biotools_records()
+
+        synced = sorted(c.kwargs["biotools_id"] for c in mock_sync.call_args_list)
+        assert synced == ["blast", "interproscan"]
+
+    def test_follows_changed_url_instead_of_stored_id(self):
+        """A record created for one tool is refreshed from the URL the
+        submission has now, not from the id stored on the record."""
+        from apps.biotools.models import BioToolsRecord
+        from apps.biotools.tasks import sync_all_biotools_records
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        BioToolsRecord.objects.create(
+            submission=sub, biotools_id="blast", name="BLAST", raw_json={}
+        )
+        type(sub).objects.filter(pk=sub.pk).update(
+            biotools_url="https://bio.tools/interproscan"
+        )
+
+        with patch(
+            "apps.biotools.client.BioToolsClient.get_tool", side_effect=_entry_for
+        ) as mock_get:
+            sync_all_biotools_records()
+
+        mock_get.assert_called_once_with("interproscan")
+        record = BioToolsRecord.objects.get(submission=sub)
+        assert record.biotools_id == "interproscan"
+
+    def test_creates_missing_record_for_submission_with_url(self):
+        """A submission whose first sync never produced a record gets one
+        from the daily sync."""
+        from apps.biotools.models import BioToolsRecord
+        from apps.biotools.tasks import sync_all_biotools_records
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        type(sub).objects.filter(pk=sub.pk).update(
+            biotools_url="https://bio.tools/blast"
+        )
+        assert not BioToolsRecord.objects.filter(submission=sub).exists()
+
+        with patch(
+            "apps.biotools.client.BioToolsClient.get_tool", side_effect=_entry_for
+        ):
+            sync_all_biotools_records()
+
+        assert BioToolsRecord.objects.get(submission=sub).biotools_id == "blast"
 
 
 # ---------------------------------------------------------------------------
@@ -653,6 +706,23 @@ class TestBioToolsSignal:
             post_save.send(ServiceSubmission, instance=sub, created=False)
             # get_tool should NOT have been called again
             mock_get.assert_not_called()
+
+    def test_signal_resyncs_when_url_changes_to_another_tool(self):
+        """Saving a new bio.tools URL replaces the record of the old tool."""
+        from apps.biotools.models import BioToolsRecord
+
+        with patch(
+            "apps.biotools.client.BioToolsClient.get_tool", side_effect=_entry_for
+        ):
+            sub = ServiceSubmissionFactory(biotools_url="https://bio.tools/blast")
+            assert BioToolsRecord.objects.get(submission=sub).biotools_id == "blast"
+
+            sub.biotools_url = "https://bio.tools/interproscan"
+            sub.save()
+
+        record = BioToolsRecord.objects.get(submission=sub)
+        assert record.biotools_id == "interproscan"
+        assert record.name == "INTERPROSCAN"
 
 
 # ---------------------------------------------------------------------------

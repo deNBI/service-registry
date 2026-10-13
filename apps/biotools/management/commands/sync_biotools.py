@@ -42,7 +42,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         from apps.biotools.models import BioToolsRecord
-        from apps.biotools.sync import sync_tool
+        from apps.biotools.sync import biotools_id_from_url, sync_tool
         from apps.submissions.models import ServiceSubmission
 
         dry_run = options["dry_run"]
@@ -62,7 +62,7 @@ class Command(BaseCommand):
                     f"Submission {submission_id} has no bio.tools URL set."
                 )
 
-            biotools_id = submission.biotools_url.rstrip("/").split("/")[-1]
+            biotools_id = biotools_id_from_url(submission.biotools_url)
             self.stdout.write(
                 f"{'[DRY RUN] Would sync' if dry_run else 'Syncing'}: "
                 f"{submission.service_name} → bio.tools:{biotools_id}"
@@ -83,7 +83,8 @@ class Command(BaseCommand):
                 self.stderr.write(self.style.ERROR(f"Sync failed: {result.error}"))
             return
 
-        # Bulk mode — sync all existing records
+        # Bulk mode: refresh all existing records, using the bio.tools ID in
+        # each submission's current URL (it may differ from the stored ID).
         records = BioToolsRecord.objects.select_related("submission").all()
         total = records.count()
 
@@ -96,23 +97,28 @@ class Command(BaseCommand):
         if dry_run:
             self.stdout.write(f"[DRY RUN] Would sync {total} record(s):")
             for r in records:
+                current = biotools_id_from_url(r.submission.biotools_url)
                 self.stdout.write(
-                    f"  {r.submission.service_name} → bio.tools:{r.biotools_id}"
+                    f"  {r.submission.service_name} → bio.tools:{current or r.biotools_id}"
                 )
             return
 
         self.stdout.write(f"Syncing {total} bio.tools record(s)...")
         ok = err = 0
         for record in records:
+            biotools_id = (
+                biotools_id_from_url(record.submission.biotools_url)
+                or record.biotools_id
+            )
             result = sync_tool(
-                biotools_id=record.biotools_id,
+                biotools_id=biotools_id,
                 submission_id=str(record.submission_id),
             )
             if result.ok:
                 ok += 1
-                self.stdout.write(f"  ✓ {record.biotools_id}")
+                self.stdout.write(f"  ✓ {biotools_id}")
             else:
                 err += 1
-                self.stderr.write(f"  ✗ {record.biotools_id}: {result.error}")
+                self.stderr.write(f"  ✗ {biotools_id}: {result.error}")
 
         self.stdout.write(self.style.SUCCESS(f"Done. OK: {ok}/{total}, Errors: {err}"))

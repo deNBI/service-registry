@@ -234,6 +234,31 @@ class TestSyncBioToolsCommand:
         call_command("sync_biotools", stdout=out)
         assert "No BioToolsRecord" in out.getvalue()
 
+    def test_bulk_sync_uses_current_url_not_stored_id(self):
+        """A record created for one tool is refreshed from the URL the
+        submission has now."""
+        from apps.biotools.models import BioToolsRecord
+        from apps.biotools.sync import SyncResult
+        from apps.submissions.models import ServiceSubmission
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        BioToolsRecord.objects.create(
+            submission=sub, biotools_id="blast", name="BLAST", raw_json={}
+        )
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            biotools_url="https://bio.tools/interproscan"
+        )
+
+        ok_result = SyncResult(
+            ok=True, biotools_id="interproscan", created=False, error=""
+        )
+        with patch("apps.biotools.sync.sync_tool", return_value=ok_result) as mock:
+            call_command("sync_biotools", stdout=StringIO(), stderr=StringIO())
+
+        mock.assert_called_once_with(
+            biotools_id="interproscan", submission_id=str(sub.pk)
+        )
+
     def test_single_submission_not_found_raises_error(self):
         import uuid
 

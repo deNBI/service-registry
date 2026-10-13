@@ -1,15 +1,16 @@
 """
 bio.tools Form Integration Views
 =================================
-HTMX endpoint called from the registration form when a user enters their
-bio.tools URL or ID.
+JSON endpoints used by the registration form when a user enters their
+bio.tools URL.
 
 Flow:
   1. User types https://bio.tools/blast in the biotools_url field
-  2. On blur, HTMX POSTs to /biotools/prefill/?id=blast
+  2. On blur, initBioToolsPrefill() (static/js/edam-autocomplete.js)
+     sends GET /biotools/prefill/?id=blast
   3. This view fetches the tool from bio.tools (with a short timeout)
   4. Returns a JSON response with fields to prefill in the form
-  5. Client-side JS populates the fields (with user confirmation prompt)
+  5. The form shows a banner; fields are filled only after "Apply prefill"
 
 The prefill is always non-destructive: fields are only suggested, never
 overwritten silently. The user must confirm before applying.
