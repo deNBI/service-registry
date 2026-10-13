@@ -6,7 +6,7 @@ DRF ViewSets for the de.NBI Service Registration Platform REST API.
 Authentication strategy
 -----------------------
 - POST /submissions/           — public, no auth needed
-- GET  /submissions/           — admin ApiKey auth (list all)
+- GET  /submissions/           — AdminKey auth (list all)
 - GET  /submissions/{id}/      — ApiKey auth (owner sees own record)
 - PATCH /submissions/{id}/     — ApiKey auth (owner updates own record)
 
@@ -86,7 +86,7 @@ class SubmissionViewSet(
     | Method | URL | Auth | Description |
     |--------|-----|------|-------------|
     | POST | /api/v1/submissions/ | None | Register a new service |
-    | GET | /api/v1/submissions/ | Admin ApiKey | List all submissions |
+    | GET | /api/v1/submissions/ | AdminKey | List all submissions |
     | GET | /api/v1/submissions/{id}/ | ApiKey | Retrieve your submission |
     | PATCH | /api/v1/submissions/{id}/ | ApiKey | Update your submission |
 
@@ -130,7 +130,7 @@ class SubmissionViewSet(
         Called during request initialisation before self.action exists.
         Use method + URL kwargs to decide auth scheme.
         - POST (create) → no authentication required
-        - GET list      → admin ApiKey
+        - GET list      → AdminKey
         - GET/PATCH detail → ApiKey (owner) or ApiKey (admin)
         """
         http_method = (
@@ -201,7 +201,7 @@ class SubmissionViewSet(
         if isinstance(self.request.user, ServiceSubmission):
             return qs.filter(id=self.request.user.id)
 
-        # Admin ApiKey: support optional query-param filters
+        # AdminKey: support optional query-param filters
         params = self.request.query_params
 
         status_filter = params.get("status")
@@ -297,7 +297,7 @@ class SubmissionViewSet(
         summary="List all submissions",
         description=(
             "Returns a paginated list of all service submissions.\n\n"
-            "Requires admin `Authorization: ApiKey <admin-key>` header.\n\n"
+            "Requires an Admin API key: `Authorization: AdminKey <key>`.\n\n"
             "**Filters:**\n"
             "- `?status=submitted|under_review|approved|rejected|deprecated`\n"
             "- `?service_center=<short_name>`\n"

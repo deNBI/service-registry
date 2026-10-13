@@ -103,7 +103,7 @@ class AltchaChallengeView(View):
 
     Returns a fresh ALTCHA challenge as JSON.  The challenge is signed with
     ``ALTCHA_HMAC_KEY`` and expires after 10 minutes.  The browser widget
-    fetches this endpoint automatically when the user focuses the form.
+    fetches this endpoint when the user ticks the ALTCHA checkbox.
     """
 
     def get(self, request: HttpRequest) -> JsonResponse:

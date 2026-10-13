@@ -4,12 +4,12 @@ API Models
 AdminAPIKey — scoped long-lived keys for machine-to-machine admin access.
 
 These keys are independent of Django's per-user Token model and are managed
-through the Django admin under **API → Admin API Keys**.  Each key carries
+through the Django admin under **API Keys → Admin API Keys** (superusers only).  Each key carries
 an explicit scope:
 
   read  — HTTP GET / HEAD / OPTIONS only.
-           Safe to embed in third-party applications (websites, dashboards).
-           Even if a read key leaks it cannot mutate any registry data.
+           Cannot change data, but can read every submission in every
+           status and PI e-mail addresses; keep it confidential.
 
   full  — All HTTP methods (GET, POST, PATCH, DELETE).
            Treat like a password; restrict to trusted internal consumers.
@@ -31,7 +31,7 @@ class AdminAPIKey(models.Model):
 
     Workflow
     --------
-    1. Create a key in the Django admin (Auth → Admin API Keys → Add).
+    1. Create a key in the Django admin (API Keys → Admin API Keys → Add).
     2. Copy the plaintext from the one-time banner — it is never shown again.
     3. Send requests with:  Authorization: AdminKey <plaintext>
     4. Revoke by setting is_active = False.
