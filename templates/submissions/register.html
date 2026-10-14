@@ -32,6 +32,7 @@
           data-draft-key="denbi_draft_register"
           data-draft-ttl-days="{{ FORM_DRAFT_TTL_DAYS }}">
       {% csrf_token %}
+      <input type="hidden" name="form_token" value="{{ form_token }}">
 
       {% include "submissions/partials/form_body.html" %}
 
