@@ -6,6 +6,7 @@ Each class covers one behaviour that must hold when requests overlap:
   TestEmailQueuedAfterCommit  - notifications are queued only once the data is committed
   TestStaleWebEditForm        - the owner's edit form refuses to overwrite newer changes
   TestStaleAdminChangeForm    - the admin change form (and its status buttons) likewise
+  TestDoubleSubmit            - one registration per form token / Idempotency-Key
 
 The overlap is staged deterministically: the competing write is made between
 the moment the form is loaded and the moment it is posted.
@@ -719,3 +720,293 @@ class TestStoredRowIsLockedWhileSaving:
                 == 302
             )
         assert seen and all(seen)
+
+
+# ---------------------------------------------------------------------------
+# One registration per form token / Idempotency-Key
+# ---------------------------------------------------------------------------
+
+REGISTER = "submissions:register"
+
+
+def _api_payload():
+    from django.utils import timezone
+
+    from tests.factories import ServiceCenterFactory
+
+    return {
+        "date_of_entry": timezone.now().date().isoformat(),
+        "submitter_first_name": "John",
+        "submitter_last_name": "Doe",
+        "submitter_affiliation": "Example Institute",
+        "register_as_elixir": False,
+        "service_name": "Example Service",
+        "service_description": LONG_TEXT * 2,
+        "year_established": 2021,
+        "service_category_ids": [ServiceCategoryFactory().pk],
+        "is_toolbox": False,
+        "publications_pmids": "12345678",
+        "responsible_pi_ids": [str(PIFactory().pk)],
+        "host_institute": "Example Institute",
+        "service_center_id": str(ServiceCenterFactory().pk),
+        "public_contact_email": "contact@example.com",
+        "internal_contact_name": "Jane Doe",
+        "internal_contact_email": "jane@example.com",
+        "website_url": "https://example.com",
+        "terms_of_use_url": "https://example.com/terms",
+        "licenses": [],
+        "license_note": "Custom license",
+        "kpi_monitoring": "planned",
+        "kpi_start_year": "2021",
+        "survey_participation": True,
+        "data_protection_consent": True,
+    }
+
+
+@pytest.mark.django_db
+class TestDoubleSubmitWebForm:
+    def _token(self, client):
+        resp = client.get(reverse(REGISTER))
+        assert resp.status_code == 200
+        token = _hidden_value(resp, "form_token")
+        assert token
+        return token
+
+    def _data(self, token):
+        from tests.helpers import base_form_data
+
+        data = base_form_data()
+        if token is not None:
+            data["form_token"] = token
+        return data
+
+    def test_register_page_carries_a_fresh_token_per_render(self, client):
+        first = self._token(client)
+        second = self._token(client)
+        assert re.fullmatch(r"[0-9a-f]{32}", first)
+        assert first != second
+
+    def test_saved_form_draft_never_restores_the_token(self, client):
+        html = client.get(reverse(REGISTER)).content.decode()
+        skip = re.search(r"SKIP_NAMES = new Set\(\[([^\]]*)\]", html)
+        assert skip and "'form_token'" in skip.group(1)
+
+    def test_second_post_with_the_same_token_creates_no_second_service(self, client):
+        token = self._token(client)
+        data = self._data(token)
+        first = client.post(reverse(REGISTER), data)
+        mails_after_first = len(mail.outbox)
+        second = client.post(reverse(REGISTER), data)
+        assert first.status_code == 302
+        assert second.status_code == 302
+        assert second.url == first.url
+        assert ServiceSubmission.objects.count() == 1
+        assert len(mail.outbox) == mails_after_first
+
+    def test_only_one_key_is_issued(self, client):
+        from apps.submissions.models import SubmissionAPIKey
+
+        token = self._token(client)
+        data = self._data(token)
+        client.post(reverse(REGISTER), data)
+        client.post(reverse(REGISTER), data)
+        assert SubmissionAPIKey.objects.count() == 1
+
+    def test_the_key_is_shown_on_the_page_both_posts_lead_to(self, client):
+        token = self._token(client)
+        data = self._data(token)
+        client.post(reverse(REGISTER), data)
+        second = client.post(reverse(REGISTER), data)
+        page = client.get(second.url)
+        assert page.status_code == 200
+        assert b"api-key-display" in page.content
+
+    def test_a_new_token_registers_a_new_service(self, client):
+        first = self._data(self._token(client))
+        second = self._data(self._token(client))
+        client.post(reverse(REGISTER), first)
+        client.post(reverse(REGISTER), second)
+        assert ServiceSubmission.objects.count() == 2
+
+    def test_post_without_a_token_is_accepted_as_before(self, client):
+        client.post(reverse(REGISTER), self._data(None))
+        client.post(reverse(REGISTER), self._data(None))
+        assert ServiceSubmission.objects.count() == 2
+
+    def test_malformed_token_is_ignored(self, client):
+        data = self._data("not a token")
+        client.post(reverse(REGISTER), data)
+        client.post(reverse(REGISTER), data)
+        assert ServiceSubmission.objects.count() == 2
+
+    def test_invalid_form_does_not_use_up_the_token(self, client):
+        token = self._token(client)
+        bad = self._data(token)
+        bad["service_description"] = "too short"
+        assert client.post(reverse(REGISTER), bad).status_code == 422
+        good = self._data(token)
+        assert client.post(reverse(REGISTER), good).status_code == 302
+        assert ServiceSubmission.objects.count() == 1
+
+    def test_error_page_offers_a_fresh_token(self, client):
+        token = self._token(client)
+        bad = self._data(token)
+        bad["service_description"] = "too short"
+        resp = client.post(reverse(REGISTER), bad)
+        assert _hidden_value(resp, "form_token")
+
+    def test_failed_save_releases_the_token_for_a_retry(self, client):
+        token = self._token(client)
+        data = self._data(token)
+        client.raise_request_exception = False
+        with mock.patch(
+            "apps.submissions.views.SubmissionAPIKey.create_for_submission",
+            side_effect=RuntimeError("write failed"),
+        ):
+            assert client.post(reverse(REGISTER), data).status_code == 500
+        retry = client.post(reverse(REGISTER), data)
+        assert retry.status_code == 302
+
+    def test_request_arriving_while_the_first_is_running_waits_for_it(self, client):
+        from django.core.cache import cache
+
+        from apps.submissions import idempotency
+
+        token = self._token(client)
+        data = self._data(token)
+        first = client.post(reverse(REGISTER), data)
+        sub = ServiceSubmission.objects.get()
+        # Put the token back into the state of a request still being handled,
+        # then let it finish while the second request is waiting.
+        key = idempotency.cache_key(idempotency.WEB_FORM, token)
+        cache.set(key, idempotency.PENDING)
+
+        def finish(_seconds):
+            cache.set(key, str(sub.pk))
+
+        with mock.patch("apps.submissions.idempotency.time.sleep", side_effect=finish):
+            second = client.post(reverse(REGISTER), data)
+        assert second.status_code == 302
+        assert second.url == first.url
+        assert ServiceSubmission.objects.count() == 1
+
+    def test_request_giving_up_on_a_stuck_first_one_asks_to_reload(self, client):
+        from django.core.cache import cache
+
+        from apps.submissions import idempotency
+
+        token = self._token(client)
+        data = self._data(token)
+        cache.set(
+            idempotency.cache_key(idempotency.WEB_FORM, token), idempotency.PENDING
+        )
+        with mock.patch("apps.submissions.idempotency.time.sleep") as slept:
+            resp = client.post(reverse(REGISTER), data)
+        assert slept.call_count == idempotency.WAIT_ATTEMPTS
+        assert resp.status_code == 409
+        assert "already being processed" in resp.content.decode()
+        assert ServiceSubmission.objects.count() == 0
+        # The retry form carries a new token and the entered values.
+        assert _hidden_value(resp, "form_token") not in (None, token)
+        assert data["service_name"] in resp.content.decode()
+
+
+@pytest.mark.django_db
+class TestDoubleSubmitApi:
+    URL = "/api/v1/submissions/"
+
+    def _post(self, api_client, payload, key=None):
+        headers = {"HTTP_IDEMPOTENCY_KEY": key} if key is not None else {}
+        return api_client.post(self.URL, payload, format="json", **headers)
+
+    @pytest.fixture
+    def api_client(self):
+        from rest_framework.test import APIClient
+
+        return APIClient()
+
+    def test_browsers_on_allowed_origins_may_send_the_key(self, client, settings):
+        settings.CORS_ALLOWED_ORIGINS = ["https://client.example.org"]
+        response = client.options(
+            self.URL,
+            HTTP_ORIGIN="https://client.example.org",
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS="idempotency-key",
+        )
+        allowed = response["Access-Control-Allow-Headers"].lower()
+        assert "idempotency-key" in allowed
+
+    def test_repeated_request_with_the_same_key_is_refused(self, api_client):
+        payload = _api_payload()
+        first = self._post(api_client, payload, key="example-request-1")
+        mails_after_first = len(mail.outbox)
+        second = self._post(api_client, payload, key="example-request-1")
+        assert first.status_code == 201
+        assert second.status_code == 409
+        assert "Idempotency-Key" in str(second.json())
+        assert ServiceSubmission.objects.count() == 1
+        assert len(mail.outbox) == mails_after_first
+
+    def test_a_different_key_registers_another_service(self, api_client):
+        payload = _api_payload()
+        assert (
+            self._post(api_client, payload, key="example-request-1").status_code == 201
+        )
+        assert (
+            self._post(api_client, payload, key="example-request-2").status_code == 201
+        )
+        assert ServiceSubmission.objects.count() == 2
+
+    def test_requests_without_a_key_behave_as_before(self, api_client):
+        payload = _api_payload()
+        assert self._post(api_client, payload).status_code == 201
+        assert self._post(api_client, payload).status_code == 201
+        assert ServiceSubmission.objects.count() == 2
+
+    def test_invalid_payload_does_not_use_up_the_key(self, api_client):
+        bad = _api_payload()
+        bad["service_description"] = "too short"
+        assert self._post(api_client, bad, key="example-request-1").status_code == 400
+        good = _api_payload()
+        assert self._post(api_client, good, key="example-request-1").status_code == 201
+
+    def test_failed_save_releases_the_key_for_a_retry(self, api_client):
+        payload = _api_payload()
+        api_client.raise_request_exception = False
+        with mock.patch(
+            "apps.api.views.SubmissionAPIKey.create_for_submission",
+            side_effect=RuntimeError("write failed"),
+        ):
+            assert (
+                self._post(api_client, payload, key="example-request-1").status_code
+                == 500
+            )
+        assert (
+            self._post(api_client, payload, key="example-request-1").status_code == 201
+        )
+
+    @pytest.mark.parametrize("key", ["x" * 256, "bad\tkey", "café"])
+    def test_out_of_range_key_is_rejected(self, api_client, key):
+        resp = self._post(api_client, _api_payload(), key=key)
+        assert resp.status_code == 400
+        assert ServiceSubmission.objects.count() == 0
+
+    def test_empty_key_counts_as_no_key(self, api_client):
+        payload = _api_payload()
+        assert self._post(api_client, payload, key="").status_code == 201
+        assert self._post(api_client, payload, key="").status_code == 201
+
+    def test_key_in_flight_is_refused_without_waiting(self, api_client):
+        from django.core.cache import cache
+
+        from apps.submissions import idempotency
+
+        cache.set(
+            idempotency.cache_key(idempotency.API_REQUEST, "example-request-1"),
+            idempotency.PENDING,
+        )
+        with mock.patch("apps.submissions.idempotency.time.sleep") as slept:
+            resp = self._post(api_client, _api_payload(), key="example-request-1")
+        assert resp.status_code == 409
+        slept.assert_not_called()
+        assert ServiceSubmission.objects.count() == 0
