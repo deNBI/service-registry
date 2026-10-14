@@ -1377,7 +1377,16 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 changes=changes,
             )
 
-            send_submission_notification.delay(str(sub.id), event="status_changed")
+            # Queue the e-mail once the status is committed: the change-form
+            # buttons run inside the admin's transaction, and a worker that
+            # picked the task up earlier would read the old status (or mail
+            # about a change that is then rolled back). Bulk actions run
+            # outside a transaction, so there the task is queued right away.
+            transaction.on_commit(
+                lambda pk=str(sub.id): send_submission_notification.delay(
+                    pk, event="status_changed"
+                )
+            )
             self._log(request, sub, "; ".join(log_parts))
             updated += 1
         self.message_user(
