@@ -21,11 +21,13 @@ from django.db import transaction
 from django.utils.timezone import now
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from rest_framework import filters, mixins, status, viewsets
+from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
+from apps.submissions import idempotency
 from apps.submissions.diff_utils import build_diff, snapshot, snapshot_m2m
 from apps.submissions.http_utils import get_client_ip, hash_user_agent
 from apps.submissions.models import (
@@ -40,6 +42,7 @@ from apps.submissions.tasks import (
 )
 
 from .authentication import AdminAPIKeyAuthentication, SubmissionAPIKeyAuthentication
+from .exceptions import IdempotencyConflict
 from .permissions import IsAdminOrOwner, IsAdminTokenUser
 from .serializers import (
     PrincipalInvestigatorAdminSerializer,
@@ -249,14 +252,49 @@ class SubmissionViewSet(
             "This key is shown exactly once — save it immediately. "
             "You will need it to retrieve or update your submission.\n\n"
             "Use it in subsequent requests as:\n"
-            "```\nAuthorization: ApiKey <your-key>\n```"
+            "```\nAuthorization: ApiKey <your-key>\n```\n\n"
+            "To make a retry safe, send an `Idempotency-Key` header with a value "
+            "you choose (for example a UUID). A second request with the same value "
+            "registers nothing and returns `409`; use a new value for a new service."
         ),
+        parameters=[
+            OpenApiParameter(
+                "Idempotency-Key",
+                str,
+                OpenApiParameter.HEADER,
+                required=False,
+                description="Optional. 1 to 255 printable ASCII characters.",
+            )
+        ],
         responses={201: SubmissionCreateSerializer},
     )
     def create(self, request, *args, **kwargs):
+        idempotency_key = request.headers.get("Idempotency-Key", "")
+        if idempotency_key and not idempotency.valid_api_key(idempotency_key):
+            raise ValidationError(
+                {
+                    "Idempotency-Key": (
+                        "Use 1 to 255 printable ASCII characters (for example a UUID)."
+                    )
+                }
+            )
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        # A repeated request (client retry after a timeout) must not register a
+        # second service: the first one's key was only shown in its response.
+        if idempotency_key and not idempotency.claim(
+            idempotency.API_REQUEST, idempotency_key
+        ):
+            raise IdempotencyConflict
+        try:
+            return self._create_submission(request, serializer, idempotency_key)
+        except Exception:
+            if idempotency_key:
+                idempotency.release(idempotency.API_REQUEST, idempotency_key)
+            raise
+
+    def _create_submission(self, request, serializer, idempotency_key):
         submission = serializer.save(
             status="submitted",
             submission_ip=get_client_ip(request) or None,
@@ -280,6 +318,10 @@ class SubmissionViewSet(
             submission,
             context={"request": request, "api_key_plaintext": plaintext},
         )
+        if idempotency_key:
+            idempotency.complete(
+                idempotency.API_REQUEST, idempotency_key, submission.id
+            )
         return Response(output.data, status=status.HTTP_201_CREATED)
 
     @extend_schema(

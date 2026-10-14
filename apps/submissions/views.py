@@ -18,6 +18,7 @@ import datetime
 import json
 import logging
 import unicodedata
+import uuid
 
 from django.conf import settings
 from django.contrib import messages
@@ -43,6 +44,7 @@ from .diff_utils import (
     snapshot,
     snapshot_m2m,
 )
+from . import idempotency
 from .forms import SubmissionForm, UpdateKeyForm
 from .http_utils import get_client_ip, hash_user_agent
 from .markdown_render import markdown_enabled, render_with_notice
@@ -152,7 +154,14 @@ class RegisterView(View):
     template_name = "submissions/register.html"
 
     def _context(self, form):
-        return {"form": form, "altcha_enabled": bool(settings.ALTCHA_HMAC_KEY)}
+        # Every render of the form gets its own one-time token (see
+        # apps.submissions.idempotency): posting the same form twice registers
+        # one service.
+        return {
+            "form": form,
+            "altcha_enabled": bool(settings.ALTCHA_HMAC_KEY),
+            "form_token": uuid.uuid4().hex,
+        }
 
     def get(self, request: HttpRequest) -> HttpResponse:
         form = SubmissionForm()
@@ -169,6 +178,41 @@ class RegisterView(View):
         if not form.is_valid():
             return render(request, self.template_name, self._context(form), status=422)
 
+        # A form without a (well-formed) token is registered as before.
+        token = request.POST.get("form_token", "")
+        if not idempotency.valid_form_token(token):
+            token = ""
+        if token and not idempotency.claim(idempotency.WEB_FORM, token):
+            return self._repeated_post(request, form, token)
+
+        try:
+            return self._register(request, form, token)
+        except Exception:
+            # Free the token so the user can submit the form again.
+            if token:
+                idempotency.release(idempotency.WEB_FORM, token)
+            raise
+
+    def _repeated_post(self, request, form, token):
+        """The same form was already posted: do not register it again."""
+        existing = idempotency.wait_for_result(idempotency.WEB_FORM, token)
+        if existing and existing != idempotency.PENDING:
+            return redirect("submissions:success", submission_id=existing)
+        if existing == idempotency.PENDING:
+            message = (
+                "This registration is already being processed. If you are not "
+                "taken to the confirmation page, wait a moment and submit the "
+                "form again."
+            )
+        else:
+            message = (
+                "An earlier attempt to submit this form did not finish. "
+                "Please submit the form again."
+            )
+        form.add_error(None, message)
+        return render(request, self.template_name, self._context(form), status=409)
+
+    def _register(self, request, form, token):
         # Save submission
         submission: ServiceSubmission = form.save(commit=False)
         submission.status = "submitted"
@@ -213,6 +257,8 @@ class RegisterView(View):
         request.session["pending_keys"] = pending_keys
         request.session.modified = True
 
+        if token:
+            idempotency.complete(idempotency.WEB_FORM, token, submission.id)
         return redirect("submissions:success", submission_id=submission.id)
 
 
