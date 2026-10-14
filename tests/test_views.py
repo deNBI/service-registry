@@ -902,7 +902,7 @@ class TestEditView:
     ):
         """
         A raw form field difference that resolves to the same value after
-        form.clean() (e.g. trailing whitespace stripped by _sanitise()) must
+        form.clean() (e.g. trailing whitespace stripped by _sanitise_text()) must
         NOT trigger a status reset.  This covers the stale-localStorage-draft
         scenario: the browser submits a slightly different raw string, but the
         actual content is unchanged.

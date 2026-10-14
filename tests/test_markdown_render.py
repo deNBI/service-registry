@@ -532,6 +532,14 @@ def test_anchor_attribute_filter_drops_other_attributes():
         ("&amp;lt;b&amp;gt;", "&lt;b&gt;"),  # decoded exactly once
         ("&lt;script&gt;", "<script>"),  # plain text; templates escape it
         ("caf&eacute; &#233; &#xE9;", "café é é"),
+        # Only references that end in a semicolon are decoded: the old web
+        # form always wrote them that way, typed text keeps the rest.
+        (
+            "Law&ethics, data&copy-number, a&not b",
+            "Law&ethics, data&copy-number, a&not b",
+        ),
+        ("&#65 &amp &lt", "&#65 &amp &lt"),
+        ("R&D x&times;y", "R&D x×y"),
         ("", ""),
         (None, ""),
     ],

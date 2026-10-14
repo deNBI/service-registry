@@ -28,6 +28,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
+from apps.submissions.markdown_render import decode_legacy_entities
 from apps.submissions.validation import (
     normalize_newlines,
     validate_description_length as _validate_desc,
@@ -84,6 +85,34 @@ def _sanitise_text(value: str) -> str:
     value = normalize_newlines(value.replace("\x00", ""))
     value = unicodedata.normalize("NFC", value)
     return value.strip()
+
+
+#: Fields the web form used to HTML-escape on input (R&D was saved as R&amp;D).
+#: Rows saved back then still hold entities, so display surfaces decode them
+#: once (decode_legacy_entities); new rows hold the text as typed.
+LEGACY_ESCAPED_FIELDS: tuple[str, ...] = (
+    "service_name",
+    "submitter_first_name",
+    "submitter_last_name",
+    "submitter_affiliation",
+)
+
+
+def keep_stored_text(stored: str | None, new: str) -> str:
+    """Return ``stored`` when ``new`` reads the same once legacy entities are
+    decoded, otherwise ``new``.
+
+    A legacy row holds ``R&amp;D`` while the edit form and API clients send
+    ``R&D``. Those are the same text on every display surface, so resubmitting
+    it is not a change and must not rewrite the stored value. Both sides are
+    normalised like form input, because a decoded value such as a trailing
+    ``&nbsp;`` comes back from the form stripped.
+    """
+    if stored and _sanitise_text(decode_legacy_entities(stored)) == _sanitise_text(
+        decode_legacy_entities(new)
+    ):
+        return stored
+    return new
 
 
 def _validate_https_url(value: str) -> None:

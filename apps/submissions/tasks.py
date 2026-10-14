@@ -37,6 +37,7 @@ from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
 from .markdown_render import decode_legacy_entities
+from .models import LEGACY_ESCAPED_FIELDS
 
 logger = logging.getLogger(__name__)
 
@@ -56,12 +57,22 @@ except FileNotFoundError:
 
 
 def _email_subject(key: str, **kwargs) -> str:
-    """Return an email subject line from the YAML, with placeholder substitution."""
+    """Return an email subject line from the YAML, with placeholder substitution.
+
+    A service name saved by the old web form holds HTML entities, which a
+    subject line would show literally, so they are decoded first. The result
+    is always a single line: any run of whitespace (a line break in a name)
+    becomes one space, because mail headers cannot contain line breaks.
+    """
+    if "service_name" in kwargs:
+        kwargs["service_name"] = decode_legacy_entities(kwargs["service_name"])
     subjects = _EMAIL_TEXTS.get("subjects", {})
     template = subjects.get(key, "")
     if not template:
-        return f"[de.NBI Registry] {kwargs.get('service_name', 'Notification')}"
-    return template.format(**kwargs)
+        subject = f"[de.NBI Registry] {kwargs.get('service_name', 'Notification')}"
+    else:
+        subject = template.format(**kwargs)
+    return " ".join(subject.split())
 
 
 def _event_label(event: str) -> str:
@@ -118,18 +129,18 @@ def render_plaintext(template_name: str, context: dict) -> str:
     return template.template.render(Context(context, autoescape=False))
 
 
-def _decoded_description_context(context: dict) -> dict:
-    """Return a copy of an email context with the service description's
-    legacy HTML entities decoded once (decode_legacy_entities), for both the
-    .txt and the .html body.
+def _decoded_email_context(context: dict) -> dict:
+    """Return a copy of an email context with legacy HTML entities decoded
+    once (decode_legacy_entities), for both the .txt and the .html body.
 
-    Rows saved before Markdown support hold entities (the old web form
-    escaped its input), which emails would otherwise show literally
-    (x &gt; 5), unlike the catalogue and the API. Adds
-    service_description_text and decodes the description's before/after
-    values in the change list; other fields are left as stored. The .txt
-    body is rendered unescaped and the .html body autoescapes the decoded
-    values exactly once.
+    Rows saved before Markdown support hold entities in the service
+    description (the old web form escaped its input) and, to this day, in the
+    service name and the submitter's names and affiliation. Emails would show
+    them literally (x &gt; 5, R&amp;D), unlike the catalogue and the API. Adds
+    service_description_text and decodes the before/after values of the
+    changes to those fields; other fields are left as stored. The templates
+    decode the names themselves (legacy_decoded). The .txt body is rendered
+    unescaped and the .html body autoescapes the decoded values exactly once.
     """
     ctx = dict(context)
     # Both callers always pass the submission.
@@ -137,13 +148,14 @@ def _decoded_description_context(context: dict) -> dict:
         ctx["submission"].service_description
     )
     if ctx.get("changes"):
+        decoded_fields = {"service_description", *LEGACY_ESCAPED_FIELDS}
         ctx["changes"] = [
             {
                 **ch,
                 "old": decode_legacy_entities(ch["old"]),
                 "new": decode_legacy_entities(ch["new"]),
             }
-            if ch.get("field") == "service_description"
+            if ch.get("field") in decoded_fields
             else ch
             for ch in ctx["changes"]
         ]
@@ -255,7 +267,7 @@ def send_submission_notification(
         "changes": changes or [],
         "admin_url": admin_url,
     }
-    context = _decoded_description_context(context)
+    context = _decoded_email_context(context)
 
     text_body = render_plaintext("submissions/email/notification.txt", context)
     html_body = render_to_string("submissions/email/notification.html", context)
@@ -330,7 +342,7 @@ def _send_submitter_email(
         service_name=submission.service_name,
         **(subject_kwargs or {}),
     )
-    context = _decoded_description_context(
+    context = _decoded_email_context(
         {
             **_site_email_context(),
             "submission": submission,
