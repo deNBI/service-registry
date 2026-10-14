@@ -24,6 +24,7 @@ from django.template import loader
 from django.utils import timezone
 from django.utils.html import escape, format_html, format_html_join, mark_safe
 
+from .choices import keep_linked
 from .concurrency import (
     FINGERPRINT_FIELD,
     StaleFormError,
@@ -126,6 +127,13 @@ class ServiceSubmissionAdminForm(forms.ModelForm):
 
         if "logo" in self.fields:
             self.fields["logo"].help_text = logo_help_text()
+        # The model limits EDAM choices to non-obsolete terms; keep the ones the
+        # service already has so saving the page does not unlink them.
+        for name in ("edam_topics", "edam_operations"):
+            if name in self.fields:
+                self.fields[name].queryset = keep_linked(
+                    self.fields[name].queryset, self.instance, name
+                )
 
     def clean_logo(self):
         # Same checks as the public form and the API, for new uploads only.

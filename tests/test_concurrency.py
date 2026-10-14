@@ -8,6 +8,7 @@ Each class covers one behaviour that must hold when requests overlap:
   TestStaleAdminChangeForm    - the admin change form (and its status buttons) likewise
   TestDoubleSubmit            - one registration per form token / Idempotency-Key
   TestRevokedKeyStaysRevoked  - a revoked API key can never be re-activated
+  TestEditKeepsSelectedLinks  - edits keep links to retired EDAM terms and reference rows
 
 The overlap is staged deterministically: the competing write is made between
 the moment the form is loaded and the moment it is posted.
@@ -1053,3 +1054,310 @@ class TestRevokedKeyStaysRevoked:
         )
         assert SubmissionAPIKey.objects.get(pk=key.pk).is_active is True
         assert SubmissionAPIKey.verify(plaintext)[1] is True
+
+
+# ---------------------------------------------------------------------------
+# Edits keep links to retired EDAM terms and deactivated reference rows
+# ---------------------------------------------------------------------------
+
+
+def _edam_term(branch, n, *, obsolete=False):
+    from apps.edam.models import EdamTerm
+
+    return EdamTerm.objects.create(
+        uri=f"http://edamontology.org/{branch}_{9000 + n}",
+        accession=f"{branch}_{9000 + n}",
+        branch=branch,
+        label=f"Example {branch} {n}",
+        sort_order=9000 + n,
+        is_obsolete=obsolete,
+    )
+
+
+def _browser_post(form, sub, **overrides):
+    """POST data a browser would send for the rendered edit form.
+
+    A browser only sends options it was given, so values that the form did not
+    offer are left out, exactly as when the page is submitted for real.
+    """
+    data = edit_form_data(sub)
+    for name in (
+        "service_categories",
+        "responsible_pis",
+        "edam_topics",
+        "edam_operations",
+    ):
+        offered = {
+            str(pk) for pk in form.fields[name].queryset.values_list("pk", flat=True)
+        }
+        held = [str(o.pk) for o in getattr(sub, name).all()]
+        data[name] = [pk for pk in held if pk in offered]
+    offered_centres = {
+        str(pk)
+        for pk in form.fields["service_center"].queryset.values_list("pk", flat=True)
+    }
+    data["service_center"] = (
+        str(sub.service_center_id)
+        if str(sub.service_center_id) in offered_centres
+        else ""
+    )
+    data.update(overrides)
+    return data
+
+
+@pytest.mark.django_db
+class TestEditKeepsSelectedLinks:
+    def _edit(self, client, sub, **overrides):
+        _grant(client, sub)
+        url = reverse("submissions:edit", args=[sub.pk])
+        form = client.get(url).context["form"]
+        return client.post(url, _browser_post(form, sub, **overrides)), form
+
+    def test_edam_topic_marked_obsolete_stays_linked(self, client):
+        sub = _approved_sub()
+        topic = _edam_term("topic", 1)
+        sub.edam_topics.add(topic)
+        topic.is_obsolete = True
+        topic.save()
+        resp, _ = self._edit(client, sub, comments="note")
+        assert resp.status_code == 302, resp.content[:300]
+        assert list(sub.edam_topics.all()) == [topic]
+
+    def test_edam_operation_marked_obsolete_stays_linked(self, client):
+        sub = _approved_sub()
+        op = _edam_term("operation", 1)
+        sub.edam_operations.add(op)
+        op.is_obsolete = True
+        op.save()
+        resp, _ = self._edit(client, sub, comments="note")
+        assert resp.status_code == 302, resp.content[:300]
+        assert list(sub.edam_operations.all()) == [op]
+
+    def test_deactivated_category_stays_linked(self, client):
+        sub = _approved_sub()
+        category = sub.service_categories.get()
+        other = ServiceCategoryFactory()
+        sub.service_categories.add(other)
+        category.is_active = False
+        category.save()
+        resp, _ = self._edit(client, sub, comments="note")
+        assert resp.status_code == 302, resp.content[:300]
+        assert set(sub.service_categories.all()) == {category, other}
+
+    def test_deactivated_pi_stays_linked(self, client):
+        sub = _approved_sub()
+        pi = sub.responsible_pis.get()
+        other = PIFactory()
+        sub.responsible_pis.add(other)
+        pi.is_active = False
+        pi.save()
+        resp, _ = self._edit(client, sub, comments="note")
+        assert resp.status_code == 302, resp.content[:300]
+        assert set(sub.responsible_pis.all()) == {pi, other}
+
+    def test_only_category_deactivated_does_not_block_the_edit(self, client):
+        sub = _approved_sub()
+        category = sub.service_categories.get()
+        category.is_active = False
+        category.save()
+        resp, _ = self._edit(client, sub, comments="note")
+        assert resp.status_code == 302, resp.content[:300]
+        assert list(sub.service_categories.all()) == [category]
+
+    def test_deactivated_service_centre_stays_selected(self, client):
+        sub = _approved_sub()
+        centre = sub.service_center
+        centre.is_active = False
+        centre.save()
+        resp, _ = self._edit(client, sub, comments="note")
+        assert resp.status_code == 302, resp.content[:300]
+        assert ServiceSubmission.objects.get(pk=sub.pk).service_center_id == centre.pk
+
+    def test_kept_link_does_not_send_an_exempt_only_edit_back_to_review(
+        self, client, exempt
+    ):
+        sub = _approved_sub()
+        topic = _edam_term("topic", 2)
+        sub.edam_topics.add(topic)
+        topic.is_obsolete = True
+        topic.save()
+        resp, _ = self._edit(client, sub, github_url="https://github.com/example/tool")
+        assert resp.status_code == 302
+        assert ServiceSubmission.objects.get(pk=sub.pk).status == "approved"
+        assert list(sub.edam_topics.all()) == [topic]
+
+    def test_links_can_still_be_removed_deliberately(self, client):
+        sub = _approved_sub()
+        topic = _edam_term("topic", 3)
+        sub.edam_topics.add(topic)
+        topic.is_obsolete = True
+        topic.save()
+        _grant(client, sub)
+        url = reverse("submissions:edit", args=[sub.pk])
+        data = edit_form_data(sub, edam_topics=[])
+        assert client.post(url, data).status_code == 302
+        assert sub.edam_topics.count() == 0
+
+    def test_unlinked_retired_rows_are_still_not_offered(self, client):
+        sub = _approved_sub()
+        other_topic = _edam_term("topic", 4, obsolete=True)
+        other_category = ServiceCategoryFactory(is_active=False)
+        other_pi = PIFactory(is_active=False)
+        _grant(client, sub)
+        form = client.get(reverse("submissions:edit", args=[sub.pk])).context["form"]
+        assert other_topic.pk not in form.fields["edam_topics"].queryset.values_list(
+            "pk", flat=True
+        )
+        assert other_category.pk not in form.fields[
+            "service_categories"
+        ].queryset.values_list("pk", flat=True)
+        assert other_pi.pk not in form.fields["responsible_pis"].queryset.values_list(
+            "pk", flat=True
+        )
+
+    def test_retired_rows_cannot_be_newly_linked_through_the_form(self, client):
+        sub = _approved_sub()
+        retired = ServiceCategoryFactory(is_active=False)
+        _grant(client, sub)
+        url = reverse("submissions:edit", args=[sub.pk])
+        data = edit_form_data(sub, service_categories=[retired.pk])
+        assert client.post(url, data).status_code == 422
+
+    def test_retired_links_are_rendered_as_selected(self, client):
+        sub = _approved_sub()
+        category = sub.service_categories.get()
+        category.is_active = False
+        category.save()
+        _grant(client, sub)
+        html = client.get(reverse("submissions:edit", args=[sub.pk])).content.decode()
+        assert re.search(rf'<option value="{category.pk}"[^>]*selected', html)
+
+    def test_control_active_rows_are_rendered_and_kept(self, client):
+        sub = _approved_sub()
+        topic = _edam_term("topic", 5)
+        sub.edam_topics.add(topic)
+        resp, form = self._edit(client, sub, comments="note")
+        assert resp.status_code == 302
+        assert topic.pk in form.fields["edam_topics"].queryset.values_list(
+            "pk", flat=True
+        )
+        assert list(sub.edam_topics.all()) == [topic]
+
+    def test_admin_change_form_keeps_retired_links(self, superuser_client):
+        sub = _approved_sub()
+        topic = _edam_term("topic", 6)
+        sub.edam_topics.add(topic)
+        topic.is_obsolete = True
+        topic.save()
+        category = sub.service_categories.get()
+        category.is_active = False
+        category.save()
+        payload = edit_form_payload(sub, comments="note", edam_topics=[topic.pk])
+        resp = superuser_client.post(reverse(CHANGE, args=[sub.pk]), payload)
+        assert resp.status_code == 302
+        assert list(sub.edam_topics.all()) == [topic]
+        assert list(sub.service_categories.all()) == [category]
+
+
+@pytest.mark.django_db
+class TestApiPatchKeepsSelectedLinks:
+    def _client(self, sub):
+        from rest_framework.test import APIClient
+
+        _, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        api = APIClient()
+        api.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        return api
+
+    def _patch(self, sub, data):
+        return self._client(sub).patch(
+            f"/api/v1/submissions/{sub.pk}/", data, format="json"
+        )
+
+    def test_resending_a_deactivated_category_is_accepted(self):
+        sub = _approved_sub()
+        category = sub.service_categories.get()
+        category.is_active = False
+        category.save()
+        resp = self._patch(
+            sub, {"service_category_ids": [category.pk], "comments": "note"}
+        )
+        assert resp.status_code == 200, resp.content
+        assert list(sub.service_categories.all()) == [category]
+
+    def test_resending_a_deactivated_pi_is_accepted(self):
+        sub = _approved_sub()
+        pi = sub.responsible_pis.get()
+        pi.is_active = False
+        pi.save()
+        resp = self._patch(sub, {"responsible_pi_ids": [str(pi.pk)]})
+        assert resp.status_code == 200, resp.content
+        assert list(sub.responsible_pis.all()) == [pi]
+
+    def test_resending_a_deactivated_centre_is_accepted(self):
+        sub = _approved_sub()
+        centre = sub.service_center
+        centre.is_active = False
+        centre.save()
+        resp = self._patch(sub, {"service_center_id": str(centre.pk)})
+        assert resp.status_code == 200, resp.content
+        assert ServiceSubmission.objects.get(pk=sub.pk).service_center_id == centre.pk
+
+    def test_resending_an_obsolete_edam_topic_is_accepted(self):
+        sub = _approved_sub()
+        topic = _edam_term("topic", 7)
+        sub.edam_topics.add(topic)
+        topic.is_obsolete = True
+        topic.save()
+        resp = self._patch(sub, {"edam_topic_ids": [topic.pk]})
+        assert resp.status_code == 200, resp.content
+        assert list(sub.edam_topics.all()) == [topic]
+
+    def test_resending_an_obsolete_edam_operation_is_accepted(self):
+        sub = _approved_sub()
+        op = _edam_term("operation", 7)
+        sub.edam_operations.add(op)
+        op.is_obsolete = True
+        op.save()
+        resp = self._patch(sub, {"edam_operation_ids": [op.pk]})
+        assert resp.status_code == 200, resp.content
+        assert list(sub.edam_operations.all()) == [op]
+
+    def test_a_patch_that_leaves_the_fields_out_keeps_the_links(self):
+        sub = _approved_sub()
+        category = sub.service_categories.get()
+        category.is_active = False
+        category.save()
+        resp = self._patch(sub, {"comments": "note"})
+        assert resp.status_code == 200
+        assert list(sub.service_categories.all()) == [category]
+
+    def test_retired_rows_are_still_refused_when_not_already_linked(self):
+        sub = _approved_sub()
+        retired_category = ServiceCategoryFactory(is_active=False)
+        retired_pi = PIFactory(is_active=False)
+        retired_topic = _edam_term("topic", 8, obsolete=True)
+        for field, value in (
+            ("service_category_ids", [retired_category.pk]),
+            ("responsible_pi_ids", [str(retired_pi.pk)]),
+            ("edam_topic_ids", [retired_topic.pk]),
+        ):
+            assert self._patch(sub, {field: value}).status_code == 400, field
+
+    def test_a_retired_row_of_another_service_is_refused(self):
+        sub = _approved_sub()
+        other = _approved_sub()
+        category = other.service_categories.get()
+        category.is_active = False
+        category.save()
+        resp = self._patch(sub, {"service_category_ids": [category.pk]})
+        assert resp.status_code == 400
+
+    def test_creating_a_service_still_refuses_retired_rows(self):
+        from rest_framework.test import APIClient
+
+        retired = ServiceCategoryFactory(is_active=False)
+        payload = _api_payload()
+        payload["service_category_ids"] = [retired.pk]
+        resp = APIClient().post("/api/v1/submissions/", payload, format="json")
+        assert resp.status_code == 400
