@@ -16,7 +16,6 @@ import unicodedata
 from datetime import date
 from pathlib import Path
 
-import bleach
 import yaml
 from django import forms
 from django.core.exceptions import ValidationError
@@ -26,14 +25,18 @@ from django.db.models import Q
 
 from apps.licenses.models import SpdxLicense
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
+from .markdown_render import decode_legacy_entities
 from .models import (
     DESCRIPTION_MAX_LENGTH,
     DESCRIPTION_MIN_LENGTH,
+    LEGACY_ESCAPED_FIELDS,
     PUBLICATIONS_MAX_COUNT,
     KpiMonitoring,
     ServiceSubmission,
     _DOI_RE,
     _PMID_RE,
+    _sanitise_text,
+    keep_stored_text,
 )
 from .validation import normalize_newlines
 from .widgets import (
@@ -54,23 +57,6 @@ try:
         _FORM_TEXTS = yaml.safe_load(f) or {}
 except FileNotFoundError:
     pass  # Graceful fallback — fields keep their model help_text
-
-# ---------------------------------------------------------------------------
-# Bleach sanitiser — strips HTML tags from free-text fields
-# ---------------------------------------------------------------------------
-_ALLOWED_TAGS: list[str] = []  # No HTML allowed in any field
-_ALLOWED_ATTRS: dict = {}
-
-
-def _sanitise(value: str) -> str:
-    """Strip HTML tags and normalise unicode NFC."""
-    if not value:
-        return value
-    cleaned = bleach.clean(
-        value, tags=_ALLOWED_TAGS, attributes=_ALLOWED_ATTRS, strip=True
-    )
-    return unicodedata.normalize("NFC", cleaned).strip()
-
 
 # ---------------------------------------------------------------------------
 # Custom field: comma-separated PMIDs / DOIs
@@ -350,6 +336,12 @@ class SubmissionForm(forms.ModelForm):
 
         # Fallback when form_texts.yaml has no logo help text.
         self.fields["logo"].help_text = logo_help_text()
+        # Rows saved by the old form hold HTML entities in these fields; show
+        # (and compare against) the text as it reads everywhere else.
+        if not self.instance._state.adding:
+            for name in LEGACY_ESCAPED_FIELDS:
+                if name in self.initial:
+                    self.initial[name] = decode_legacy_entities(self.initial[name])
         # Auto-populate date_of_entry with today if not already set
         if not self.instance.pk and not self.data.get("date_of_entry"):
             self.fields["date_of_entry"].initial = date.today()
@@ -397,11 +389,12 @@ class SubmissionForm(forms.ModelForm):
             .exclude(institute="")
             .values_list("institute", flat=True)
         )
-        past_affiliations = set(
-            ServiceSubmission.objects.exclude(submitter_affiliation="").values_list(
-                "submitter_affiliation", flat=True
-            )
-        )
+        past_affiliations = {
+            decode_legacy_entities(value)
+            for value in ServiceSubmission.objects.exclude(
+                submitter_affiliation=""
+            ).values_list("submitter_affiliation", flat=True)
+        }
         base_suggestions = sorted(pi_institutes | past_affiliations, key=str.casefold)
 
         def _held_value(field_name: str) -> str:
@@ -409,7 +402,7 @@ class SubmissionForm(forms.ModelForm):
             if self.is_bound:
                 return (self.data.get(field_name) or "").strip()
             if self.instance and self.instance.pk:
-                return (getattr(self.instance, field_name, "") or "").strip()
+                return (self.initial.get(field_name) or "").strip()
             return ""
 
         def _seed_combobox(field_name: str) -> None:
@@ -468,27 +461,36 @@ class SubmissionForm(forms.ModelForm):
 
     # -- Cross-field validation --
 
+    def _clean_plain_text(self, name: str) -> str:
+        """Plain-text field: stored as typed (NFC, LF line endings, stripped),
+        exactly like the REST API. Output surfaces escape it; nothing is
+        HTML-escaped or removed here. An existing row whose text only differs
+        by legacy entities keeps its stored value (see keep_stored_text)."""
+        value = _sanitise_text(self.cleaned_data.get(name) or "")
+        if not self.instance._state.adding:
+            value = keep_stored_text(getattr(self.instance, name), value)
+        return value
+
     def clean_submitter_first_name(self) -> str:
-        value = _sanitise(self.cleaned_data.get("submitter_first_name", ""))
+        value = self._clean_plain_text("submitter_first_name")
         if len(value) < 2:
             raise ValidationError(_("First name must be at least 2 characters."))
         return value
 
     def clean_submitter_last_name(self) -> str:
-        value = _sanitise(self.cleaned_data.get("submitter_last_name", ""))
+        value = self._clean_plain_text("submitter_last_name")
         if len(value) < 2:
             raise ValidationError(_("Last name must be at least 2 characters."))
         return value
 
     def clean_submitter_affiliation(self) -> str:
-        value = _sanitise(self.cleaned_data.get("submitter_affiliation", ""))
+        value = self._clean_plain_text("submitter_affiliation")
         if len(value) < 2:
             raise ValidationError(_("Affiliation must be at least 2 characters."))
         return value
 
     def clean_service_name(self) -> str:
-        value = self.cleaned_data.get("service_name", "")
-        value = _sanitise(value)
+        value = self._clean_plain_text("service_name")
         if len(value) < 3:
             raise ValidationError(_("Service name must be at least 3 characters."))
         return value

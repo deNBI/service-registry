@@ -1,4 +1,4 @@
-{% load static catalogue_tags markdown_tags %}
+{% load static catalogue_tags markdown_tags submission_text %}
 {% catalogue_service_url service as service_url %}
 
 <div class="catalogue-list-item">
@@ -9,9 +9,9 @@
       {% if service.logo %}
       <img src="{{ service.logo.url }}" alt="" class="catalogue-avatar-img" loading="lazy"
            onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-      <span class="catalogue-avatar-initial" style="display:none;">{{ service.service_name|first|upper }}</span>
+      <span class="catalogue-avatar-initial" style="display:none;">{{ service.service_name|legacy_decoded|first|upper }}</span>
       {% else %}
-      <span class="catalogue-avatar-initial">{{ service.service_name|first|upper }}</span>
+      <span class="catalogue-avatar-initial">{{ service.service_name|legacy_decoded|first|upper }}</span>
       {% endif %}
     </div>
 
@@ -24,9 +24,9 @@
           {% if service_url %}
           <a href="{{ service_url }}" target="_blank" rel="noopener noreferrer"
              class="text-decoration-none text-dark catalogue-list-name-link">
-            {{ service.service_name }}
+            {{ service.service_name|legacy_decoded }}
           </a>
-          {% else %}{{ service.service_name }}{% endif %}
+          {% else %}{{ service.service_name|legacy_decoded }}{% endif %}
           <span class="catalogue-list-visit-arrow" aria-hidden="true">→</span>
         </h3>
 
@@ -35,14 +35,14 @@
           {% if service.github_url %}
           <a href="{{ service.github_url }}" target="_blank" rel="noopener noreferrer"
              class="catalogue-list-icon-link"
-             title="View on GitHub" aria-label="View {{ service.service_name }} on GitHub">
+             title="View on GitHub" aria-label="View {{ service.service_name|legacy_decoded }} on GitHub">
             <img src="{% static 'img/icons/github.svg' %}" alt="" width="18" height="18">
           </a>
           {% endif %}
           {% if service.biotools_url %}
           <a href="{{ service.biotools_url }}" target="_blank" rel="noopener noreferrer"
              class="catalogue-list-icon-link"
-             title="View on bio.tools" aria-label="View {{ service.service_name }} on bio.tools">
+             title="View on bio.tools" aria-label="View {{ service.service_name|legacy_decoded }} on bio.tools">
             <img src="{% static 'img/icons/biotools.png' %}" alt="" width="18" height="18" style="object-fit:contain;">
           </a>
           {% endif %}

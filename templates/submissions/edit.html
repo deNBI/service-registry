@@ -1,7 +1,7 @@
 {% extends "base/base.html" %}
-{% load i18n static %}
+{% load i18n static submission_text %}
 
-{% block title %}Edit: {{ submission.service_name }} — de.NBI{% endblock %}
+{% block title %}Edit: {{ submission.service_name|legacy_decoded }} — de.NBI{% endblock %}
 {% block meta_description %}Edit your de.NBI service registration.{% endblock %}
 
 {% block breadcrumb %}
@@ -10,7 +10,7 @@
     <ol class="breadcrumb mb-0">
       <li class="breadcrumb-item"><a href="/">Home</a></li>
       <li class="breadcrumb-item"><a href="{% url 'submissions:update' %}">Update</a></li>
-      <li class="breadcrumb-item active">Edit: {{ submission.service_name|truncatechars:40 }}</li>
+      <li class="breadcrumb-item active">Edit: {{ submission.service_name|legacy_decoded|truncatechars:40 }}</li>
     </ol>
   </div>
 </nav>
@@ -26,7 +26,7 @@
     </p>
 
     <div class="alert alert-info mb-4">
-      <strong>Editing:</strong> {{ submission.service_name }}<br>
+      <strong>Editing:</strong> {{ submission.service_name|legacy_decoded }}<br>
       <small>Last updated: {{ submission.updated_at|date:"Y-m-d H:i" }} UTC &bull;
              Status: {{ submission.get_status_display }}</small>
     </div>
@@ -94,7 +94,7 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
-        <p>You are about to mark <strong>{{ submission.service_name }}</strong> as deprecated.</p>
+        <p>You are about to mark <strong>{{ submission.service_name|legacy_decoded }}</strong> as deprecated.</p>
         <p class="text-muted small mb-0">This signals that the service is no longer active. Only registry admins can reverse this action.</p>
       </div>
       <div class="modal-footer">
