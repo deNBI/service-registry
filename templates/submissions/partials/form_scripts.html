@@ -187,7 +187,8 @@ document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
 // localStorage draft — save & restore form fields across page loads
 // Draft key is per-form (data-draft-key on the <form>). Registration and edit
 // use separate buckets so they cannot overwrite each other.
-// Excluded: CSRF token, data_protection_consent (must re-check deliberately),
+// Excluded: CSRF token, the form's hidden version token (a stored value would
+// replace the fresh one), data_protection_consent (must re-check deliberately),
 // altcha (stale challenges are rejected server-side), logo (file input).
 // ---------------------------------------------------------------------------
 (function formDraft() {
@@ -201,7 +202,7 @@ document.querySelectorAll('[name="is_toolbox"]').forEach(function(radio) {
   // Falls back to 7 days if the attribute is absent or non-numeric.
   const TTL_MS = (parseInt(form.dataset.draftTtlDays, 10) || 7) * 24 * 60 * 60 * 1000;
 
-  const SKIP_NAMES = new Set(['csrfmiddlewaretoken', 'data_protection_consent', 'altcha', 'logo']);
+  const SKIP_NAMES = new Set(['csrfmiddlewaretoken', 'loaded_fingerprint', 'data_protection_consent', 'altcha', 'logo']);
   let isRestoringDraft = false;
 
   // Detect server-side errors so the user sees the real error, not the draft

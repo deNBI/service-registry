@@ -4,6 +4,8 @@ Concurrency and data-integrity guards
 Each class covers one behaviour that must hold when requests overlap:
 
   TestEmailQueuedAfterCommit  - notifications are queued only once the data is committed
+  TestStaleWebEditForm        - the owner's edit form refuses to overwrite newer changes
+  TestStaleAdminChangeForm    - the admin change form (and its status buttons) likewise
 
 The overlap is staged deterministically: the competing write is made between
 the moment the form is loaded and the moment it is posted.
@@ -18,11 +20,17 @@ from django.db import transaction
 from django.urls import reverse
 
 from apps.submissions.lifecycle import get_no_reset_fields
+from apps.submissions.models import (
+    ServiceSubmission,
+    SubmissionChangeLog,
+)
 from tests.factories import (
     APIKeyFactory,
+    PIFactory,
+    ServiceCategoryFactory,
     ServiceSubmissionFactory,
 )
-from tests.helpers import edit_form_payload
+from tests.helpers import edit_form_data, edit_form_payload
 
 CHANGE = "admin:submissions_servicesubmission_change"
 CHANGELIST = "admin:submissions_servicesubmission_changelist"
@@ -144,3 +152,449 @@ class TestEmailQueuedAfterCommit:
         assert seen == [False]
         sub.refresh_from_db()
         assert sub.status == "approved"
+
+
+@pytest.mark.django_db
+class TestContentFingerprint:
+    def _fp(self, sub):
+        from apps.submissions.concurrency import content_fingerprint
+
+        return content_fingerprint(ServiceSubmission.objects.get(pk=sub.pk))
+
+    def test_same_for_unchanged_data(self):
+        sub = _approved_sub()
+        assert self._fp(sub) == self._fp(sub)
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("service_description", "Another description. " + LONG_TEXT),
+            ("comments", "note"),
+            ("website_url", "https://example.org/other"),
+            ("status", "rejected"),
+            ("survey_participation", False),
+        ],
+    )
+    def test_changes_with_a_tracked_field(self, field, value):
+        sub = _approved_sub()
+        before = self._fp(sub)
+        ServiceSubmission.objects.filter(pk=sub.pk).update(**{field: value})
+        assert self._fp(sub) != before
+
+    def test_changes_with_linked_rows(self):
+        sub = _approved_sub()
+        before = self._fp(sub)
+        sub.service_categories.add(ServiceCategoryFactory())
+        assert self._fp(sub) != before
+
+    def test_ignores_bookkeeping_columns(self):
+        sub = _approved_sub()
+        before = self._fp(sub)
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            last_change_summary={"changed_by": "submitter", "changes": []},
+            submission_ip="203.0.113.7",
+        )
+        assert self._fp(sub) == before
+
+    def test_blank_fingerprint_skips_the_check_without_a_query(
+        self, django_assert_num_queries
+    ):
+        from apps.submissions.concurrency import ensure_unchanged
+
+        sub = _approved_sub()
+        with django_assert_num_queries(0):
+            ensure_unchanged(sub.pk, "")
+
+    def test_deleted_service_counts_as_changed(self):
+        import uuid
+
+        from apps.submissions.concurrency import StaleFormError, ensure_unchanged
+
+        with pytest.raises(StaleFormError):
+            ensure_unchanged(uuid.uuid4(), "0" * 64)
+
+
+# ---------------------------------------------------------------------------
+# The owner's edit form refuses to overwrite newer changes
+# ---------------------------------------------------------------------------
+
+
+def _approved_sub(**kw):
+    kw.setdefault("biotools_url", "")
+    sub = ServiceSubmissionFactory(status="approved", **kw)
+    return sub
+
+
+@pytest.mark.django_db
+class TestStaleWebEditForm:
+    def _open(self, client, sub):
+        _grant(client, sub)
+        resp = client.get(reverse("submissions:edit", args=[sub.pk]))
+        assert resp.status_code == 200
+        return resp, _hidden_value(resp, "loaded_fingerprint")
+
+    def _post(self, client, sub, token, **overrides):
+        data = edit_form_data(sub, **overrides)
+        if token is not None:
+            data["loaded_fingerprint"] = token
+        return client.post(reverse("submissions:edit", args=[sub.pk]), data)
+
+    def test_edit_page_carries_the_fingerprint(self, client):
+        sub = _approved_sub()
+        _, token = self._open(client, sub)
+        assert token and re.fullmatch(r"[0-9a-f]{64}", token)
+
+    def test_fingerprint_is_the_same_on_every_load_of_unchanged_data(self, client):
+        sub = _approved_sub()
+        _, first = self._open(client, sub)
+        _, second = self._open(client, sub)
+        assert first == second
+
+    def test_saved_form_draft_never_restores_the_fingerprint(self, client):
+        """The browser's draft restore must not overwrite the hidden value."""
+        sub = _approved_sub()
+        resp, _ = self._open(client, sub)
+        skip = re.search(r"SKIP_NAMES = new Set\(\[([^\]]*)\]", resp.content.decode())
+        assert skip and "'loaded_fingerprint'" in skip.group(1)
+
+    def test_unchanged_resave_still_works(self, client):
+        sub = _approved_sub()
+        _, token = self._open(client, sub)
+        resp = self._post(client, sub, token)
+        assert resp.status_code == 302
+        assert ServiceSubmission.objects.get(pk=sub.pk).status == "approved"
+
+    def test_edit_without_concurrent_change_is_stored(self, client):
+        sub = _approved_sub()
+        _, token = self._open(client, sub)
+        resp = self._post(client, sub, token, comments="Example note")
+        assert resp.status_code == 302
+        stored = ServiceSubmission.objects.get(pk=sub.pk)
+        assert stored.comments == "Example note"
+
+    def test_newer_admin_change_is_not_reverted(self, client, exempt):
+        sub = _approved_sub()
+        _, token = self._open(client, sub)
+        owner_payload = edit_form_data(
+            sub, github_url="https://github.com/example/new-home"
+        )
+        owner_payload["loaded_fingerprint"] = token
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            website_url="https://example.org/fixed"
+        )
+        resp = client.post(reverse("submissions:edit", args=[sub.pk]), owner_payload)
+        assert resp.status_code == 409
+        stored = ServiceSubmission.objects.get(pk=sub.pk)
+        assert stored.website_url == "https://example.org/fixed"
+        assert stored.github_url == ""
+        assert stored.status == "approved"
+        assert not SubmissionChangeLog.objects.filter(submission=sub).exists()
+        assert mail.outbox == []
+
+    def test_conflict_page_explains_and_keeps_the_entered_values(self, client):
+        sub = _approved_sub()
+        _, token = self._open(client, sub)
+        ServiceSubmission.objects.filter(pk=sub.pk).update(comments="Changed by Jane")
+        resp = self._post(client, sub, token, keywords_seo="my own words")
+        assert resp.status_code == 409
+        html = resp.content.decode()
+        assert "changed while you were editing" in html
+        assert "my own words" in html
+
+    def test_second_tab_save_is_refused_after_first_tab_saved(self, client):
+        sub = _approved_sub()
+        _, token_a = self._open(client, sub)
+        _, token_b = self._open(client, sub)
+        assert token_a == token_b
+        first = self._post(client, sub, token_a, comments="from tab A")
+        assert first.status_code == 302
+        sub.refresh_from_db()
+        second = self._post(client, sub, token_b, comments="from tab B")
+        assert second.status_code == 409
+        assert ServiceSubmission.objects.get(pk=sub.pk).comments == "from tab A"
+
+    def test_reloaded_page_after_a_save_can_be_saved_again(self, client):
+        sub = _approved_sub()
+        _, token = self._open(client, sub)
+        self._post(client, sub, token, comments="first")
+        sub.refresh_from_db()
+        _, fresh = self._open(client, sub)
+        assert fresh != token
+        resp = self._post(client, sub, fresh, comments="second")
+        assert resp.status_code == 302
+        assert ServiceSubmission.objects.get(pk=sub.pk).comments == "second"
+
+    def test_changed_categories_count_as_a_change(self, client):
+        sub = _approved_sub()
+        _, token = self._open(client, sub)
+        sub.service_categories.add(ServiceCategoryFactory())
+        resp = self._post(client, sub, token, comments="x")
+        assert resp.status_code == 409
+
+    def test_changed_pis_count_as_a_change(self, client):
+        sub = _approved_sub()
+        _, token = self._open(client, sub)
+        sub.responsible_pis.add(PIFactory())
+        resp = self._post(client, sub, token, comments="x")
+        assert resp.status_code == 409
+
+    def test_form_without_fingerprint_is_still_accepted(self, client):
+        """Pages rendered before the check existed carry no fingerprint."""
+        sub = _approved_sub()
+        _grant(client, sub)
+        resp = self._post(client, sub, None, comments="older page")
+        assert resp.status_code == 302
+
+    def test_validation_error_page_keeps_the_loaded_fingerprint(self, client):
+        sub = _approved_sub()
+        _, token = self._open(client, sub)
+        assert token
+        # Another field is edited too: the instance holds that value by now.
+        resp = self._post(
+            client, sub, token, service_description="too short", comments="my note"
+        )
+        assert resp.status_code == 422
+        assert _hidden_value(resp, "loaded_fingerprint") == token
+        # Corrected and posted again with the token the error page carried.
+        again = self._post(
+            client,
+            sub,
+            _hidden_value(resp, "loaded_fingerprint"),
+            service_description=LONG_TEXT * 2,
+            comments="my note",
+        )
+        assert again.status_code == 302
+
+    def test_legacy_row_with_unnormalised_text_resaves(self, client):
+        sub = _approved_sub()
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            keywords_seo="  line one\r\nline two  ", comments="caf\u0065\u0301"
+        )
+        sub.refresh_from_db()
+        _, token = self._open(client, sub)
+        resp = self._post(client, sub, token, comments="plain")
+        assert resp.status_code == 302
+
+    def test_refused_save_stores_nothing_of_the_edit(self, client):
+        sub = _approved_sub()
+        _, token = self._open(client, sub)
+        ServiceSubmission.objects.filter(pk=sub.pk).update(comments="Changed by Jane")
+        before_cats = set(sub.service_categories.values_list("pk", flat=True))
+        new_cat = ServiceCategoryFactory()
+        resp = self._post(
+            client,
+            sub,
+            token,
+            service_categories=[new_cat.pk],
+            keywords_seo="new words",
+        )
+        assert resp.status_code == 409
+        stored = ServiceSubmission.objects.get(pk=sub.pk)
+        assert stored.keywords_seo != "new words"
+        assert set(stored.service_categories.values_list("pk", flat=True)) == (
+            before_cats
+        )
+        assert stored.status == "approved"
+
+
+# ---------------------------------------------------------------------------
+# The admin change form (and its status and key buttons)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestStaleAdminChangeForm:
+    def _open(self, admin_client, sub):
+        resp = admin_client.get(reverse(CHANGE, args=[sub.pk]))
+        assert resp.status_code == 200
+        return resp, _hidden_value(resp, "loaded_fingerprint")
+
+    def _post(self, admin_client, sub, token, **overrides):
+        payload = edit_form_payload(sub, **overrides)
+        if token is not None:
+            payload["loaded_fingerprint"] = token
+        return admin_client.post(reverse(CHANGE, args=[sub.pk]), payload)
+
+    def test_change_page_carries_the_fingerprint(self, superuser_client):
+        sub = _approved_sub()
+        _, token = self._open(superuser_client, sub)
+        assert token and re.fullmatch(r"[0-9a-f]{64}", token)
+
+    def test_admin_and_owner_form_agree_on_the_fingerprint(
+        self, superuser_client, client
+    ):
+        sub = _approved_sub()
+        _, admin_token = self._open(superuser_client, sub)
+        _grant(client, sub)
+        owner = client.get(reverse("submissions:edit", args=[sub.pk]))
+        assert _hidden_value(owner, "loaded_fingerprint") == admin_token
+
+    def test_unchanged_resave_still_works(self, superuser_client):
+        sub = _approved_sub()
+        _, token = self._open(superuser_client, sub)
+        resp = self._post(superuser_client, sub, token)
+        assert resp.status_code == 302
+        assert resp.url == reverse("admin:submissions_servicesubmission_changelist")
+
+    def test_edit_without_concurrent_change_is_stored(self, superuser_client):
+        sub = _approved_sub()
+        _, token = self._open(superuser_client, sub)
+        resp = self._post(superuser_client, sub, token, comments="Checked by Jane")
+        assert resp.status_code == 302
+        assert ServiceSubmission.objects.get(pk=sub.pk).comments == "Checked by Jane"
+
+    def test_owner_change_made_after_the_page_loaded_is_not_reverted(
+        self, superuser_client, client, exempt
+    ):
+        sub = _approved_sub()
+        _, token = self._open(superuser_client, sub)
+        # The owner changes an exempt field; the service stays approved.
+        _grant(client, sub)
+        owner_payload = edit_form_data(
+            sub, github_url="https://github.com/example/new-home"
+        )
+        owner_payload["loaded_fingerprint"] = _hidden_value(
+            client.get(reverse("submissions:edit", args=[sub.pk])),
+            "loaded_fingerprint",
+        )
+        assert (
+            client.post(
+                reverse("submissions:edit", args=[sub.pk]), owner_payload
+            ).status_code
+            == 302
+        )
+        # The admin saves the page loaded earlier.
+        resp = self._post(superuser_client, sub, token, comments="Checked by Jane")
+        assert resp.status_code == 302
+        assert resp.url == reverse(CHANGE, args=[sub.pk])
+        stored = ServiceSubmission.objects.get(pk=sub.pk)
+        assert stored.github_url == "https://github.com/example/new-home"
+        assert stored.comments == ""
+
+    def test_refusal_shows_an_error_message(self, superuser_client):
+        sub = _approved_sub()
+        _, token = self._open(superuser_client, sub)
+        ServiceSubmission.objects.filter(pk=sub.pk).update(comments="Changed by John")
+        resp = self._post(superuser_client, sub, token, comments="Checked by Jane")
+        page = superuser_client.get(resp.url)
+        messages_text = [str(m) for m in page.context["messages"]]
+        assert any("changed while you were editing" in m for m in messages_text)
+
+    @pytest.mark.parametrize(
+        "button,end",
+        [("_approve", "approved"), ("_reject", "rejected")],
+    )
+    def test_status_button_on_a_stale_page_changes_nothing(
+        self, superuser_client, button, end
+    ):
+        sub = ServiceSubmissionFactory(status="under_review", biotools_url="")
+        _, token = self._open(superuser_client, sub)
+        owner_text = "Reply to the reviewer. " + LONG_TEXT
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            service_description=owner_text
+        )
+        mail.outbox.clear()
+        resp = self._post(superuser_client, sub, token, **{button: "1"})
+        assert resp.status_code == 302
+        stored = ServiceSubmission.objects.get(pk=sub.pk)
+        assert stored.status == "under_review"
+        assert stored.service_description == owner_text
+        assert mail.outbox == []
+        assert not SubmissionChangeLog.objects.filter(submission=sub).exists()
+
+    def test_status_button_on_a_current_page_still_works(self, superuser_client):
+        sub = ServiceSubmissionFactory(status="under_review", biotools_url="")
+        _, token = self._open(superuser_client, sub)
+        resp = self._post(superuser_client, sub, token, _approve="1")
+        assert resp.status_code == 302
+        assert ServiceSubmission.objects.get(pk=sub.pk).status == "approved"
+
+    def test_key_button_on_a_stale_page_changes_nothing(self, superuser_client):
+        sub = _approved_sub()
+        key, _ = APIKeyFactory.create_with_plaintext(submission=sub)
+        _, token = self._open(superuser_client, sub)
+        ServiceSubmission.objects.filter(pk=sub.pk).update(comments="Changed by John")
+        self._post(superuser_client, sub, token, _revoke_all_keys="1")
+        key.refresh_from_db()
+        assert key.is_active
+        assert ServiceSubmission.objects.get(pk=sub.pk).comments == "Changed by John"
+
+    def test_page_without_fingerprint_is_still_accepted(self, superuser_client):
+        sub = _approved_sub()
+        resp = self._post(superuser_client, sub, None, comments="older page")
+        assert resp.status_code == 302
+        assert ServiceSubmission.objects.get(pk=sub.pk).comments == "older page"
+
+    def test_validation_error_page_keeps_the_loaded_fingerprint(self, superuser_client):
+        sub = _approved_sub()
+        _, token = self._open(superuser_client, sub)
+        assert token
+        resp = self._post(
+            superuser_client,
+            sub,
+            token,
+            service_description="too short",
+            comments="my note",
+        )
+        assert resp.status_code == 200
+        assert _hidden_value(resp, "loaded_fingerprint") == token
+        again = self._post(
+            superuser_client,
+            sub,
+            _hidden_value(resp, "loaded_fingerprint"),
+            service_description=LONG_TEXT * 2,
+            comments="my note",
+        )
+        assert again.status_code == 302
+
+    def test_add_form_has_no_fingerprint(self, superuser_client):
+        resp = superuser_client.get(reverse("admin:submissions_servicesubmission_add"))
+        assert resp.status_code == 200
+        assert _hidden_value(resp, "loaded_fingerprint") is None
+
+
+@pytest.mark.django_db(transaction=True)
+class TestStoredRowIsLockedWhileSaving:
+    """SQLite ignores row locks, so check that the lock is requested, and that it
+    is requested inside the transaction that stores the edit (a lock taken in
+    autocommit mode would be released before the write)."""
+
+    def _record_locks(self):
+        from django.db.models.query import QuerySet
+
+        seen = []
+        original = QuerySet.select_for_update
+
+        def spy(queryset, *args, **kwargs):
+            if queryset.model is ServiceSubmission:
+                seen.append(_in_atomic_block())
+            return original(queryset, *args, **kwargs)
+
+        return seen, mock.patch.object(QuerySet, "select_for_update", spy)
+
+    def test_owner_edit_locks_the_row_inside_its_transaction(self, client):
+        sub = _approved_sub()
+        _grant(client, sub)
+        url = reverse("submissions:edit", args=[sub.pk])
+        token = _hidden_value(client.get(url), "loaded_fingerprint")
+        data = edit_form_data(sub, comments="note")
+        data["loaded_fingerprint"] = token
+        seen, patcher = self._record_locks()
+        with patcher:
+            assert client.post(url, data).status_code == 302
+        assert seen and all(seen)
+
+    def test_admin_save_locks_the_row_inside_its_transaction(self, superuser_client):
+        sub = _approved_sub()
+        page = superuser_client.get(reverse(CHANGE, args=[sub.pk]))
+        payload = edit_form_payload(sub, comments="note")
+        payload["loaded_fingerprint"] = _hidden_value(page, "loaded_fingerprint")
+        seen, patcher = self._record_locks()
+        with patcher:
+            assert (
+                superuser_client.post(
+                    reverse(CHANGE, args=[sub.pk]), payload
+                ).status_code
+                == 302
+            )
+        assert seen and all(seen)

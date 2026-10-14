@@ -21,6 +21,7 @@ import unicodedata
 
 from django.conf import settings
 from django.contrib import messages
+from django.db import transaction
 from django.http import Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils.decorators import method_decorator
@@ -30,6 +31,12 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 from django_ratelimit.decorators import ratelimit
 
+from .concurrency import (
+    FINGERPRINT_FIELD,
+    StaleFormError,
+    content_fingerprint,
+    ensure_unchanged,
+)
 from .diff_utils import (
     build_diff,
     filter_sanitization_artifacts,
@@ -358,11 +365,12 @@ class EditView(View):
 
         return key.submission
 
-    def _context(self, form, submission):
+    def _context(self, form, submission, loaded_fingerprint):
         return {
             "form": form,
             "submission": submission,
             "altcha_enabled": bool(settings.ALTCHA_HMAC_KEY),
+            "loaded_fingerprint": loaded_fingerprint,
         }
 
     def get(self, request: HttpRequest, submission_id) -> HttpResponse:
@@ -374,7 +382,11 @@ class EditView(View):
             return redirect("submissions:update")
 
         form = SubmissionForm(instance=submission)
-        return render(request, self.template_name, self._context(form, submission))
+        return render(
+            request,
+            self.template_name,
+            self._context(form, submission, content_fingerprint(submission)),
+        )
 
     def post(self, request: HttpRequest, submission_id) -> HttpResponse:
         submission = self._get_submission(request, submission_id)
@@ -470,13 +482,19 @@ class EditView(View):
             messages.success(request, "Your service has been marked as deprecated.")
             return redirect("submissions:update")
 
+        # The form posts the fingerprint of the content it was loaded with. An
+        # error page hands the same value back, so a corrected form is still
+        # checked against the version the user originally saw (the instance
+        # itself already holds the posted values by then).
+        loaded_fingerprint = request.POST.get(FINGERPRINT_FIELD, "")
+
         if not _verify_altcha(request):
             form = SubmissionForm(request.POST, request.FILES, instance=submission)
             form.add_error(None, "CAPTCHA verification failed. Please try again.")
             return render(
                 request,
                 self.template_name,
-                self._context(form, submission),
+                self._context(form, submission, loaded_fingerprint),
                 status=400,
             )
 
@@ -492,7 +510,7 @@ class EditView(View):
             return render(
                 request,
                 self.template_name,
-                self._context(form, submission),
+                self._context(form, submission, loaded_fingerprint),
                 status=422,
             )
 
@@ -551,8 +569,21 @@ class EditView(View):
             updated.primary_maturity_tag = None
             updated.secondary_maturity_tags = []
 
-        updated.save()
-        form.save_m2m()
+        # Content and related rows are stored together, and only if the service
+        # still matches the version the form was loaded with.
+        try:
+            with transaction.atomic():
+                ensure_unchanged(submission.pk, loaded_fingerprint)
+                updated.save()
+                form.save_m2m()
+        except StaleFormError:
+            form.add_error(None, StaleFormError.message)
+            return render(
+                request,
+                self.template_name,
+                self._context(form, submission, loaded_fingerprint),
+                status=409,
+            )
 
         # Snapshot AFTER saving and compute the diff.
         after_scalar = snapshot(updated)

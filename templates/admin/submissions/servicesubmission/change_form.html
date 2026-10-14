@@ -1,0 +1,6 @@
+{% extends "admin/change_form.html" %}
+
+{% block form_top %}
+{{ block.super }}
+{% if loaded_fingerprint %}<input type="hidden" name="loaded_fingerprint" value="{{ loaded_fingerprint }}">{% endif %}
+{% endblock %}

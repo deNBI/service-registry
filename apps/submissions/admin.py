@@ -19,11 +19,17 @@ from django.contrib import admin, messages
 from django.forms.widgets import CheckboxSelectMultiple
 from django.contrib.admin.models import CHANGE, LogEntry
 from django.db import transaction
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.template import loader
 from django.utils import timezone
 from django.utils.html import escape, format_html, format_html_join, mark_safe
 
+from .concurrency import (
+    FINGERPRINT_FIELD,
+    StaleFormError,
+    content_fingerprint,
+    ensure_unchanged,
+)
 from .csv_utils import csv_safe
 from .diff_utils import build_diff, snapshot, snapshot_m2m
 from .markdown_render import markdown_enabled, render_submission_description
@@ -540,6 +546,28 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             f'<div style="font-size:.85rem">{"".join(parts)}{footer}</div>'
         )
 
+    def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        try:
+            return super().changeform_view(request, object_id, form_url, extra_context)
+        except StaleFormError:
+            # The service changed after this form was loaded; the whole save
+            # (including any status or key button) was rolled back.
+            self.message_user(request, StaleFormError.message, messages.ERROR)
+            return HttpResponseRedirect(request.get_full_path())
+
+    def render_change_form(
+        self, request, context, add=False, change=False, form_url="", obj=None
+    ):
+        if change and obj is not None:
+            # After a failed save the posted fingerprint is handed back: obj
+            # already holds the posted values then, not the loaded ones.
+            context["loaded_fingerprint"] = (
+                request.POST.get(FINGERPRINT_FIELD, "")
+                if request.method == "POST"
+                else content_fingerprint(obj)
+            )
+        return super().render_change_form(request, context, add, change, form_url, obj)
+
     # ── Diff capture — save_model / save_related / response_change ─────────────
 
     def save_model(self, request, obj, form, change):
@@ -550,8 +578,14 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         from the database to get a true "before" snapshot.  The snapshot is
         stored on the request object so save_related() can compare it after
         M2M relations are committed.
+
+        The form is refused first if the service changed after it was loaded
+        (the whole change-form POST runs in one transaction, so the refusal
+        undoes everything, including the status and key buttons handled later
+        in response_change).
         """
         if change and obj.pk:
+            ensure_unchanged(obj.pk, request.POST.get(FINGERPRINT_FIELD, ""))
             try:
                 original = obj.__class__.objects.get(pk=obj.pk)
                 request._diff_before_scalar = snapshot(original)
