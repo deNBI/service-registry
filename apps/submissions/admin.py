@@ -1981,6 +1981,13 @@ class SubmissionAPIKeyAdmin(admin.ModelAdmin):
             ]
         return super().get_fieldsets(request, obj)
 
+    def get_readonly_fields(self, request, obj=None):
+        readonly = super().get_readonly_fields(request, obj)
+        if obj is not None and not obj.is_active:
+            # A revoked key can never be re-activated (see SubmissionAPIKey).
+            return (*readonly, "is_active")
+        return readonly
+
     def save_model(self, request, obj, form, change):
         if not change:
             # The standard save path leaves key_hash="" (the field is non-editable
@@ -2002,6 +2009,15 @@ class SubmissionAPIKeyAdmin(admin.ModelAdmin):
             request._new_api_key_plaintext = plaintext
         else:
             super().save_model(request, obj, form, change)
+            if request.POST.get("is_active") and not obj.is_active:
+                # The page was loaded while the key was active; it has been
+                # revoked since, and a revoked key stays revoked.
+                self.message_user(
+                    request,
+                    "This key was revoked and cannot be re-activated. "
+                    "Issue a new key instead.",
+                    messages.WARNING,
+                )
 
     def response_add(self, request, obj, post_url_continue=None):
         plaintext = getattr(request, "_new_api_key_plaintext", None)
