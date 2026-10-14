@@ -419,9 +419,11 @@ REST_FRAMEWORK = {
     "MAX_PAGINATE_BY": env_int("API_MAX_PAGE_SIZE", 100),
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
     "DEFAULT_PARSER_CLASSES": ["rest_framework.parsers.JSONParser"],
+    # Project subclasses identify clients like RATELIMIT_IP_META_KEY (see
+    # apps/api/throttling.py).
     "DEFAULT_THROTTLE_CLASSES": [
-        "rest_framework.throttling.AnonRateThrottle",
-        "rest_framework.throttling.UserRateThrottle",
+        "apps.api.throttling.AnonRateThrottle",
+        "apps.api.throttling.UserRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
         "anon": "10/min",
