@@ -26,6 +26,7 @@ from django.db.models import Q
 
 from apps.licenses.models import SpdxLicense
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
+from .choices import keep_linked
 from .models import (
     DESCRIPTION_MAX_LENGTH,
     DESCRIPTION_MIN_LENGTH,
@@ -359,15 +360,23 @@ class SubmissionForm(forms.ModelForm):
         # so Django's field-level validation doesn't fire before clean() can check.
         self.fields["kpi_start_year"].required = False
 
-        # Limit dropdowns to active entries only
-        self.fields["service_categories"].queryset = ServiceCategory.objects.filter(
-            is_active=True
+        # Limit dropdowns to active entries only, but keep any row the service
+        # already links to so an edit never drops (or fails on) a link to a
+        # category, centre or PI that was deactivated since.
+        self.fields["service_categories"].queryset = keep_linked(
+            ServiceCategory.objects.filter(is_active=True),
+            self.instance,
+            "service_categories",
         )
-        self.fields["service_center"].queryset = ServiceCenter.objects.filter(
-            is_active=True
+        self.fields["service_center"].queryset = keep_linked(
+            ServiceCenter.objects.filter(is_active=True),
+            self.instance,
+            "service_center",
         )
-        self.fields["responsible_pis"].queryset = PrincipalInvestigator.objects.filter(
-            is_active=True
+        self.fields["responsible_pis"].queryset = keep_linked(
+            PrincipalInvestigator.objects.filter(is_active=True),
+            self.instance,
+            "responsible_pis",
         )
 
         # Licenses — hide deprecated from new picks, but keep any already selected
@@ -381,14 +390,19 @@ class SubmissionForm(forms.ModelForm):
                 )
         self.fields["licenses"].queryset = license_qs.order_by("license_id")
 
-        # EDAM term querysets — only active, non-obsolete terms per branch
+        # EDAM term querysets: non-obsolete terms per branch, plus any term
+        # the service already has (it may have been marked obsolete since).
         from apps.edam.models import EdamTerm
 
-        self.fields["edam_topics"].queryset = EdamTerm.objects.filter(
-            branch="topic", is_obsolete=False
+        self.fields["edam_topics"].queryset = keep_linked(
+            EdamTerm.objects.filter(branch="topic", is_obsolete=False),
+            self.instance,
+            "edam_topics",
         ).order_by("label")
-        self.fields["edam_operations"].queryset = EdamTerm.objects.filter(
-            branch="operation", is_obsolete=False
+        self.fields["edam_operations"].queryset = keep_linked(
+            EdamTerm.objects.filter(branch="operation", is_obsolete=False),
+            self.instance,
+            "edam_operations",
         ).order_by("label")
 
         # Affiliation combobox — suggestions from PI institutes + past submissions

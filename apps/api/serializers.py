@@ -24,6 +24,7 @@ from apps.biotools.models import BioToolsFunction, BioToolsRecord
 from apps.edam.models import EdamTerm
 from apps.licenses.models import SpdxLicense
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
+from apps.submissions.choices import keep_linked
 from apps.submissions.models import (
     DESCRIPTION_MAX_LENGTH,
     DESCRIPTION_MIN_LENGTH,
@@ -113,44 +114,67 @@ class PrincipalInvestigatorAdminSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 
 
+class LinkedOrAllowedPrimaryKeyField(serializers.PrimaryKeyRelatedField):
+    """
+    Primary-key field that, on update, also accepts the rows the submission
+    already links to (``linked_field`` names the model field), even when they
+    are no longer in the allowed queryset (a deactivated category, an obsolete
+    EDAM term). Without it a client could not send back the value it just read.
+    New links still have to come from the allowed queryset.
+    """
+
+    def __init__(self, *, linked_field, **kwargs):
+        self.linked_field = linked_field
+        super().__init__(**kwargs)
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        return keep_linked(queryset, self.root.instance, self.linked_field)
+
+
 class SubmissionDetailSerializer(serializers.ModelSerializer):
     """
     Full serializer for submission detail (GET) and update (PATCH).
     Excludes all internal / sensitive fields.
     """
 
-    service_center_id = serializers.PrimaryKeyRelatedField(
+    service_center_id = LinkedOrAllowedPrimaryKeyField(
         queryset=ServiceCenter.objects.filter(is_active=True),
+        linked_field="service_center",
         source="service_center",
         write_only=True,
     )
     service_center = ServiceCenterSerializer(read_only=True)
     service_categories = ServiceCategorySerializer(many=True, read_only=True)
-    service_category_ids = serializers.PrimaryKeyRelatedField(
+    service_category_ids = LinkedOrAllowedPrimaryKeyField(
         queryset=ServiceCategory.objects.filter(is_active=True),
+        linked_field="service_categories",
         source="service_categories",
         many=True,
         write_only=True,
     )
     responsible_pis = PrincipalInvestigatorSerializer(many=True, read_only=True)
-    responsible_pi_ids = serializers.PrimaryKeyRelatedField(
+    responsible_pi_ids = LinkedOrAllowedPrimaryKeyField(
         queryset=PrincipalInvestigator.objects.filter(is_active=True),
+        linked_field="responsible_pis",
         source="responsible_pis",
         many=True,
         write_only=True,
     )
     # EDAM annotations (read: full objects; write: list of PKs)
     edam_topics = serializers.SerializerMethodField()
-    edam_topic_ids = serializers.PrimaryKeyRelatedField(
+    edam_topic_ids = LinkedOrAllowedPrimaryKeyField(
         queryset=EdamTerm.objects.filter(branch="topic", is_obsolete=False),
+        linked_field="edam_topics",
         source="edam_topics",
         many=True,
         write_only=True,
         required=False,
     )
     edam_operations = serializers.SerializerMethodField()
-    edam_operation_ids = serializers.PrimaryKeyRelatedField(
+    edam_operation_ids = LinkedOrAllowedPrimaryKeyField(
         queryset=EdamTerm.objects.filter(branch="operation", is_obsolete=False),
+        linked_field="edam_operations",
         source="edam_operations",
         many=True,
         write_only=True,
