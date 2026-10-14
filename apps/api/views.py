@@ -369,12 +369,17 @@ class SubmissionViewSet(
         # (_sanitise_text: strip null bytes → NFC → strip whitespace) so echoing
         # the same name in a different byte form (whitespace, Unicode NFD, …) is
         # correctly treated as unchanged and does not raise a spurious warning.
-        from apps.submissions.models import _sanitise_text
+        # A legacy name stored with entities (R&amp;D) counts as echoed when the
+        # client sends it decoded (R&D).
+        from apps.submissions.models import _sanitise_text, keep_stored_text
 
         requested_name = request.data.get("service_name")
         service_name_change_ignored = (
             requested_name is not None
-            and _sanitise_text(str(requested_name)) != instance.service_name
+            and keep_stored_text(
+                instance.service_name, _sanitise_text(str(requested_name))
+            )
+            != instance.service_name
         )
 
         serializer = self.get_serializer(instance, data=request.data, partial=True)

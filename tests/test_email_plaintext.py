@@ -336,7 +336,8 @@ def test_text_email_raw_description_unchanged(settings):
 def test_change_tables_decode_description_entities_only():
     """The description's before/after values in the change tables are
     decoded once in both the .txt and the .html body (the HTML autoescapes
-    the decoded value exactly once); other fields stay as stored."""
+    the decoded value exactly once); fields that never held entities stay as
+    stored (the name fields are covered in test_plain_text_output.py)."""
     from apps.submissions.tasks import send_submission_notification
 
     sub = _submission(service_description=LEGACY_DESC)
@@ -348,8 +349,8 @@ def test_change_tables_decode_description_entities_only():
             "new": LEGACY_DESC,
         },
         {
-            "field": "service_name",
-            "label": "Service Name",
+            "field": "host_institute",
+            "label": "Host Institute",
             "old": "R&amp;D",
             "new": "Bob's Tool & Co",
         },

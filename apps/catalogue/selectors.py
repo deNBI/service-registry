@@ -1,3 +1,5 @@
+import html
+
 from django.db import models
 
 from apps.submissions.models import ServiceSubmission, SubmissionStatus
@@ -46,8 +48,14 @@ def get_approved_services(
 
 
 def _apply_search(qs, search_term: str):
+    # Names saved by the old web form hold & < > as entities (R&amp;D); match
+    # that spelling too so a search for "R&D" finds both kinds of row.
+    legacy_term = html.escape(search_term, quote=False)
+    name_q = models.Q(service_name__icontains=search_term)
+    if legacy_term != search_term:
+        name_q |= models.Q(service_name__icontains=legacy_term)
     q = (
-        models.Q(service_name__icontains=search_term)
+        name_q
         | models.Q(service_categories__name__icontains=search_term)
         | models.Q(service_center__short_name__icontains=search_term)
         | models.Q(service_center__full_name__icontains=search_term)

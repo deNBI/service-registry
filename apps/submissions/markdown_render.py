@@ -115,6 +115,10 @@ def markdown_enabled() -> bool:
     )
 
 
+# A named, decimal or hexadecimal character reference closed by a semicolon.
+_CHAR_REF_RE = re.compile(r"&(?:[A-Za-z][A-Za-z0-9]*|#[0-9]+|#[xX][0-9A-Fa-f]+);")
+
+
 def decode_legacy_entities(text: str) -> str:
     """Decode HTML entities once, for surfaces that show the description as
     plain text (flag-off catalogue and API, plain-text emails).
@@ -123,8 +127,12 @@ def decode_legacy_entities(text: str) -> str:
     web form HTML-escaped its input (x &gt; 5); newer rows are raw. Markdown
     rendering decodes entities itself, so decoding here makes every display
     surface agree in both flag states. The stored value is never changed.
+
+    Only character references that end in a semicolon are decoded. The old
+    form always wrote them that way, while html.unescape alone would also
+    decode the "&eth" in typed text such as "Law&ethics".
     """
-    return _html.unescape(text or "")
+    return _CHAR_REF_RE.sub(lambda m: _html.unescape(m.group(0)), text or "")
 
 
 # Only ever applied to bleach output, where every '<' in text is escaped, so

@@ -1,8 +1,8 @@
-de.NBI Service Registration Platform — Notification
+{% load submission_text %}de.NBI Service Registration Platform — Notification
 ========================================
 
 Event: {{ event_label|upper }}
-Service: {{ submission.service_name }}
+Service: {{ submission.service_name|legacy_decoded }}
 Status: {{ submission.get_status_display }}
 Submission ID: {{ submission.id }}
 Timestamp: {{ submission.updated_at|date:"Y-m-d H:i" }} UTC
@@ -19,7 +19,7 @@ Admin Portal: {{ admin_url }}
 {% endif %}
 --- SERVICE DETAILS ---
 
-Submitter: {{ submission.submitter_name }}
+Submitter: {{ submission.submitter_name|legacy_decoded }}
 Host Institute: {{ submission.host_institute }}
 Service Centre: {{ submission.service_center }}
 ELIXIR-DE Registration: {% if submission.register_as_elixir %}Yes{% else %}No{% endif %}
