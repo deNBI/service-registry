@@ -851,6 +851,34 @@ class SubmissionAPIKey(models.Model):
         status = "active" if self.is_active else "revoked"
         return f"{self.label} [{status}] — {self.submission.service_name}"
 
+    def save(self, *args, **kwargs) -> None:
+        """Keep a revoked key revoked.
+
+        A copy of the key loaded before it was revoked (an open admin form, a
+        long-running task) must not switch it back on when it is saved. The
+        stored row is locked and, if it is already revoked, this instance is
+        revoked as well before it is written.
+        """
+        update_fields = kwargs.get("update_fields")
+        if (
+            self._state.adding
+            or not self.is_active
+            or (update_fields is not None and "is_active" not in update_fields)
+        ):
+            super().save(*args, **kwargs)
+            return
+        with transaction.atomic():
+            stored = (
+                type(self)
+                .objects.select_for_update()
+                .filter(pk=self.pk)
+                .values_list("is_active", flat=True)
+                .first()
+            )
+            if stored is False:
+                self.is_active = False
+            super().save(*args, **kwargs)
+
     # ------------------------------------------------------------------
     # Class-level key operations
     # ------------------------------------------------------------------
