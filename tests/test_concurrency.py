@@ -7,6 +7,7 @@ Each class covers one behaviour that must hold when requests overlap:
   TestStaleWebEditForm        - the owner's edit form refuses to overwrite newer changes
   TestStaleAdminChangeForm    - the admin change form (and its status buttons) likewise
   TestDoubleSubmit            - one registration per form token / Idempotency-Key
+  TestRevokedKeyStaysRevoked  - a revoked API key can never be re-activated
 
 The overlap is staged deterministically: the competing write is made between
 the moment the form is loaded and the moment it is posted.
@@ -600,6 +601,25 @@ class TestStoredRowIsLockedWhileSaving:
             )
         assert seen and all(seen)
 
+    def test_key_save_locks_the_key_row_inside_its_transaction(self):
+        from django.db.models.query import QuerySet
+
+        from apps.submissions.models import SubmissionAPIKey
+
+        key, _ = APIKeyFactory.create_with_plaintext(submission=_approved_sub())
+        seen = []
+        original = QuerySet.select_for_update
+
+        def spy(queryset, *args, **kwargs):
+            if queryset.model is SubmissionAPIKey:
+                seen.append(_in_atomic_block())
+            return original(queryset, *args, **kwargs)
+
+        key.label = "Renamed"
+        with mock.patch.object(QuerySet, "select_for_update", spy):
+            key.save()
+        assert seen == [True]
+
 
 # ---------------------------------------------------------------------------
 # One registration per form token / Idempotency-Key
@@ -878,3 +898,158 @@ class TestDoubleSubmitApi:
         assert resp.status_code == 409
         slept.assert_not_called()
         assert ServiceSubmission.objects.count() == 0
+
+
+# ---------------------------------------------------------------------------
+# A revoked API key can never be re-activated
+# ---------------------------------------------------------------------------
+
+KEY_CHANGE = "admin:submissions_submissionapikey_change"
+
+
+@pytest.mark.django_db
+class TestRevokedKeyStaysRevoked:
+    def _key(self):
+        sub = _approved_sub()
+        return APIKeyFactory.create_with_plaintext(submission=sub)
+
+    def test_saving_a_stale_copy_does_not_re_activate_a_revoked_key(self):
+        from apps.submissions.models import SubmissionAPIKey
+
+        key, plaintext = self._key()
+        stale = SubmissionAPIKey.objects.get(pk=key.pk)  # loaded while active
+        SubmissionAPIKey.objects.get(pk=key.pk).revoke()  # revoked meanwhile
+        stale.label = "Renamed"
+        stale.save()
+        stored = SubmissionAPIKey.objects.get(pk=key.pk)
+        assert stored.is_active is False
+        assert stored.label == "Renamed"
+        _, authenticated = SubmissionAPIKey.verify(plaintext)
+        assert authenticated is False
+
+    def test_the_stale_copy_itself_reports_the_key_as_revoked_after_saving(self):
+        from apps.submissions.models import SubmissionAPIKey
+
+        key, _ = self._key()
+        stale = SubmissionAPIKey.objects.get(pk=key.pk)
+        SubmissionAPIKey.objects.get(pk=key.pk).revoke()
+        stale.save()
+        assert stale.is_active is False
+
+    def test_setting_the_flag_on_a_revoked_key_is_ignored(self):
+        from apps.submissions.models import SubmissionAPIKey
+
+        key, plaintext = self._key()
+        key.revoke()
+        again = SubmissionAPIKey.objects.get(pk=key.pk)
+        again.is_active = True
+        again.save()
+        assert SubmissionAPIKey.objects.get(pk=key.pk).is_active is False
+        assert SubmissionAPIKey.verify(plaintext)[1] is False
+
+    def test_setting_the_flag_with_update_fields_is_ignored(self):
+        from apps.submissions.models import SubmissionAPIKey
+
+        key, _ = self._key()
+        key.revoke()
+        again = SubmissionAPIKey.objects.get(pk=key.pk)
+        again.is_active = True
+        again.save(update_fields=["is_active"])
+        assert SubmissionAPIKey.objects.get(pk=key.pk).is_active is False
+
+    def test_an_active_key_can_still_be_revoked_and_renamed(self):
+        from apps.submissions.models import SubmissionAPIKey
+
+        key, plaintext = self._key()
+        key.label = "CI pipeline"
+        key.save()
+        assert SubmissionAPIKey.verify(plaintext)[1] is True
+        key.revoke()
+        assert SubmissionAPIKey.objects.get(pk=key.pk).is_active is False
+
+    def test_saving_other_fields_of_a_revoked_key_works(self):
+        from apps.submissions.models import SubmissionAPIKey
+
+        key, _ = self._key()
+        key.revoke()
+        revoked = SubmissionAPIKey.objects.get(pk=key.pk)
+        revoked.label = "Retired"
+        revoked.save(update_fields=["label"])
+        stored = SubmissionAPIKey.objects.get(pk=key.pk)
+        assert (stored.label, stored.is_active) == ("Retired", False)
+
+    def test_a_new_key_can_be_created_active(self):
+        key, plaintext = self._key()
+        from apps.submissions.models import SubmissionAPIKey
+
+        assert SubmissionAPIKey.verify(plaintext)[1] is True
+
+    def _payload(self, key, **extra):
+        data = {
+            "label": key.label,
+            "submission": str(key.submission_id),
+            "created_by": key.created_by,
+            "scope": key.scope,
+            "_save": "Save",
+        }
+        data.update(extra)
+        return data
+
+    def test_stale_admin_key_form_does_not_re_activate_the_key(self, superuser_client):
+        from apps.submissions.models import SubmissionAPIKey
+
+        key, plaintext = self._key()
+        page = superuser_client.get(reverse(KEY_CHANGE, args=[key.pk]))
+        assert page.status_code == 200
+        # The page was loaded while the key was active; it is revoked meanwhile.
+        key.revoke()
+        resp = superuser_client.post(
+            reverse(KEY_CHANGE, args=[key.pk]),
+            self._payload(key, is_active="on", label="Renamed"),
+        )
+        assert resp.status_code == 302
+        stored = SubmissionAPIKey.objects.get(pk=key.pk)
+        assert stored.is_active is False
+        assert stored.label == "Renamed"
+        assert SubmissionAPIKey.verify(plaintext)[1] is False
+
+    def test_stale_admin_key_form_tells_the_admin(self, superuser_client):
+        key, _ = self._key()
+        key.revoke()
+        resp = superuser_client.post(
+            reverse(KEY_CHANGE, args=[key.pk]), self._payload(key, is_active="on")
+        )
+        page = superuser_client.get(resp.url)
+        texts = [str(m) for m in page.context["messages"]]
+        assert any("cannot be re-activated" in t for t in texts)
+
+    def test_revoked_key_page_has_no_active_checkbox(self, superuser_client):
+        key, _ = self._key()
+        key.revoke()
+        page = superuser_client.get(reverse(KEY_CHANGE, args=[key.pk]))
+        assert 'name="is_active"' not in page.content.decode()
+
+    def test_active_key_page_keeps_the_checkbox_and_can_revoke(self, superuser_client):
+        from apps.submissions.models import SubmissionAPIKey
+
+        key, plaintext = self._key()
+        page = superuser_client.get(reverse(KEY_CHANGE, args=[key.pk]))
+        assert 'name="is_active"' in page.content.decode()
+        resp = superuser_client.post(
+            reverse(KEY_CHANGE, args=[key.pk]),
+            self._payload(key),  # box unticked
+        )
+        assert resp.status_code == 302
+        assert SubmissionAPIKey.objects.get(pk=key.pk).is_active is False
+        assert SubmissionAPIKey.verify(plaintext)[1] is False
+
+    def test_active_key_stays_active_when_the_box_stays_ticked(self, superuser_client):
+        from apps.submissions.models import SubmissionAPIKey
+
+        key, plaintext = self._key()
+        superuser_client.post(
+            reverse(KEY_CHANGE, args=[key.pk]),
+            self._payload(key, is_active="on", label="Renamed"),
+        )
+        assert SubmissionAPIKey.objects.get(pk=key.pk).is_active is True
+        assert SubmissionAPIKey.verify(plaintext)[1] is True
