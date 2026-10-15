@@ -391,18 +391,22 @@ class SubmissionForm(forms.ModelForm):
             branch="operation", is_obsolete=False
         ).order_by("label")
 
-        # Affiliation combobox — suggestions from PI institutes + past submissions
+        # Institute combobox suggestions: only public values (active PI
+        # institutes and host institutes of published services). Submitter
+        # affiliations are private and are never suggested.
+        from apps.catalogue.models import PublishedService
+
         pi_institutes = set(
             PrincipalInvestigator.objects.filter(is_active=True)
             .exclude(institute="")
             .values_list("institute", flat=True)
         )
-        past_affiliations = set(
-            ServiceSubmission.objects.exclude(submitter_affiliation="").values_list(
-                "submitter_affiliation", flat=True
+        published_hosts = set(
+            PublishedService.objects.exclude(host_institute="").values_list(
+                "host_institute", flat=True
             )
         )
-        base_suggestions = sorted(pi_institutes | past_affiliations, key=str.casefold)
+        base_suggestions = sorted(pi_institutes | published_hosts, key=str.casefold)
 
         def _held_value(field_name: str) -> str:
             """Current held value for a combobox field: prefer bound POST, else instance."""

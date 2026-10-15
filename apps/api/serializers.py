@@ -717,6 +717,13 @@ class BioToolsRecordSerializer(serializers.ModelSerializer):
         return resolved
 
 
+class BioToolsRecordPublicSerializer(BioToolsRecordSerializer):
+    """bio.tools record as shown without admin credentials: no sync_error field."""
+
+    class Meta(BioToolsRecordSerializer.Meta):
+        fields = [f for f in BioToolsRecordSerializer.Meta.fields if f != "sync_error"]
+
+
 class BioToolsRecordSummarySerializer(serializers.ModelSerializer):
     """
     Compact bio.tools summary for embedding inside list responses.

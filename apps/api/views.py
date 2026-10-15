@@ -767,6 +767,20 @@ class BioToolsRecordViewSet(
 
     serializer_class = BioToolsRecordSerializer
 
+    def get_serializer_class(self):
+        """Admins see the full record; everyone else gets it without the
+        internal sync error text."""
+        from apps.api.serializers import (
+            BioToolsRecordPublicSerializer,
+            BioToolsRecordSerializer,
+        )
+
+        if getattr(self, "action", None) == "retrieve":
+            request = getattr(self, "request", None)
+            if request is None or not IsAdminTokenUser().has_permission(request, self):
+                return BioToolsRecordPublicSerializer
+        return BioToolsRecordSerializer
+
     def get_queryset(self):
         from apps.biotools.models import BioToolsRecord
 
