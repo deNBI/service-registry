@@ -19,11 +19,16 @@ from django.utils import timezone
 
 from apps.catalogue.models import PublishedRevision, PublishedService
 from apps.catalogue.public_fields import (
+    ALL_PUBLIC_FIELDS,
     PUBLIC_FK_FIELDS,
     PUBLIC_M2M_FIELDS,
     PUBLIC_SCALAR_FIELDS,
 )
-from apps.submissions.models import ServiceSubmission, SubmissionStatus
+from apps.submissions.models import (
+    ServiceSubmission,
+    SubmissionStatus,
+    clean_text_fields,
+)
 from apps.submissions.selectors import first_approved_at, latest_public_decisions
 
 
@@ -83,6 +88,28 @@ def _existing(model, pks) -> list:
     One query (none for an empty list: Django skips an empty ``__in``)."""
     found = model.objects.filter(pk__in=pks).values_list("pk", flat=True)
     return sorted(_ref(pk) for pk in found)
+
+
+def _canonical_refs(model, values) -> set:
+    """The ids in ``values`` in the form ``_existing`` reports them, however
+    they are written (for example a UUID in upper case)."""
+    pk_field = model._meta.pk
+    return {_ref(pk_field.to_python(value)) for value in values}
+
+
+def existing_references(contents) -> dict:
+    """For each many-to-many field, the ids named by any of ``contents`` whose
+    reference row still exists. One query per relation however many contents
+    there are, for a page that compares many services at once."""
+    contents = list(contents)
+    found = {}
+    for name in PUBLIC_M2M_FIELDS:
+        model = ServiceSubmission._meta.get_field(name).related_model
+        wanted = set()
+        for content in contents:
+            wanted |= _canonical_refs(model, content.get(name, ()))
+        found[name] = set(_existing(model, wanted))
+    return found
 
 
 def _apply(ps: PublishedService, content: dict) -> None:
@@ -275,3 +302,60 @@ def rebuild_from_revision(submission_id) -> PublishedService:
         ps.save()
         _apply_m2m(ps, content)
         return ps
+
+
+def restorable_content(submission, content: dict, existing=None) -> dict:
+    """What restoring ``content`` writes into the working copy of ``submission``.
+
+    The result holds exactly the current public fields, so a version that
+    still has a field which is no longer public compares like any other. A
+    field the version does not have (it was written before the field became
+    public) keeps the value the working copy holds, for every kind of field:
+    there is nothing published to restore, and the read model's default
+    (empty, NULL) would blank a required value or leave a required relation
+    empty. The text fields that a save cleans are cleaned the same way, so
+    the result equals what the working copy holds after the restore and its
+    save. The maturity tag is only taken from the version on an approved
+    service: tags are not valid on any other status, so the working copy keeps
+    its own. Links to reference rows deleted since the version was written
+    are left out, as the restore leaves them out; ``existing`` is the result
+    of ``existing_references`` for this content when the caller has already
+    looked the rows up for many versions at once.
+    """
+    if existing is None:
+        existing = existing_references([content])
+    restored = {
+        name: value
+        for name, value in complete_content(content).items()
+        if name in ALL_PUBLIC_FIELDS
+    }
+    for name in PUBLIC_SCALAR_FIELDS:
+        if name not in content:
+            restored[name] = _plain(getattr(submission, name))
+    for name in PUBLIC_FK_FIELDS:
+        if name not in content:
+            restored[name] = _ref(getattr(submission, f"{name}_id"))
+    for name in PUBLIC_M2M_FIELDS:
+        if name not in content:
+            restored[name] = _m2m_refs(submission, name)
+    clean_text_fields(restored)
+    for name in PUBLIC_M2M_FIELDS:
+        if name in content:
+            model = ServiceSubmission._meta.get_field(name).related_model
+            kept = _canonical_refs(model, restored[name]) & existing[name]
+            restored[name] = sorted(kept)
+    if submission.status != SubmissionStatus.APPROVED:
+        restored["primary_maturity_tag"] = submission.primary_maturity_tag
+    return restored
+
+
+def apply_content_to_working_copy(submission, content: dict) -> None:
+    """Copy revision content back into the working copy (restore action)."""
+    restored = restorable_content(submission, content)
+    for name in PUBLIC_SCALAR_FIELDS:
+        setattr(submission, name, restored[name])
+    for name in PUBLIC_FK_FIELDS:
+        setattr(submission, f"{name}_id", restored.get(name))
+    submission.save()
+    for name in PUBLIC_M2M_FIELDS:
+        getattr(submission, name).set(restored[name])

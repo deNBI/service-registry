@@ -86,6 +86,33 @@ def _sanitise_text(value: str) -> str:
     return value.strip()
 
 
+# The free-text fields that ServiceSubmission.save() cleans.
+CLEANED_TEXT_FIELDS = (
+    "submitter_first_name",
+    "submitter_last_name",
+    "submitter_affiliation",
+    "service_name",
+    "service_description",
+    "toolbox_name",
+    "user_knowledge_required",
+    "host_institute",
+    "internal_contact_name",
+    "associated_partner_note",
+    "kpi_start_year",
+    "keywords_uncited",
+    "keywords_seo",
+    "comments",
+)
+
+
+def clean_text_fields(values: dict) -> None:
+    """Clean in place the entries of ``values`` (field name to value) that
+    ServiceSubmission.save() cleans, the way it stores them."""
+    for name in CLEANED_TEXT_FIELDS:
+        if values.get(name):
+            values[name] = _sanitise_text(values[name])
+
+
 def _validate_https_url(value: str) -> None:
     """Reject any URL that does not use the https:// scheme."""
     if value and not value.startswith("https://"):
@@ -212,9 +239,9 @@ class StatusChangedError(Exception):
     )
 
 
-# Written only by set_status, the maturity tag action, the admin change form
-# and the web edit (its full save clears the tags when it sends the service
-# back to review). A full save from an edit loaded earlier
+# Written only by set_status, the maturity tag action, the admin change form,
+# the restore action and the web edit (its full save clears the tags when it
+# sends the service back to review). A full save from an edit loaded earlier
 # must not write older values of these back.
 REVIEW_FIELDS = ("status", "primary_maturity_tag", "secondary_maturity_tags")
 
@@ -676,26 +703,10 @@ class ServiceSubmission(models.Model):
 
     def save(self, *args, **kwargs) -> None:
         """Sanitise free-text fields before saving."""
-        text_fields = [
-            "submitter_first_name",
-            "submitter_last_name",
-            "submitter_affiliation",
-            "service_name",
-            "service_description",
-            "toolbox_name",
-            "user_knowledge_required",
-            "host_institute",
-            "internal_contact_name",
-            "associated_partner_note",
-            "kpi_start_year",
-            "keywords_uncited",
-            "keywords_seo",
-            "comments",
-        ]
-        for field in text_fields:
-            value = getattr(self, field, "")
-            if value:
-                setattr(self, field, _sanitise_text(value))
+        values = {name: getattr(self, name, "") for name in CLEANED_TEXT_FIELDS}
+        clean_text_fields(values)
+        for name, value in values.items():
+            setattr(self, name, value)
         update_fields = kwargs.get("update_fields")
         if self._state.adding:
             # The creation event (apps/submissions/signals.py) is written in

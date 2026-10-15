@@ -19,6 +19,7 @@ from apps.edam.models import EdamTerm
 from apps.licenses.models import SpdxLicense
 from apps.submissions.lifecycle import set_status
 from apps.submissions.models import (
+    CLEANED_TEXT_FIELDS,
     ServiceSubmission,
     SubmissionChangeLog,
     SubmissionStatusEvent,
@@ -962,6 +963,157 @@ class TestLocking:
         assert locked_models == []
 
 
+class TestRestoreContent:
+    def test_apply_content_to_working_copy(self):
+        sub = _approved()
+        cat = ServiceCategoryFactory()
+        sub.service_categories.add(cat)
+        rev = publishing.publish(sub, reason="approval", actor="admin:jane")
+        sub.service_name = "Edited name"
+        sub.comments = "Keep this private note"
+        sub.save()
+        sub.service_categories.clear()
+        publishing.apply_content_to_working_copy(sub, rev.content)
+        sub.refresh_from_db()
+        assert sub.service_name == rev.content["service_name"]
+        assert cat in sub.service_categories.all()
+        assert sub.comments == "Keep this private note"
+
+    def test_apply_content_restores_the_service_centre(self):
+        from tests.factories import ServiceCenterFactory
+
+        sub = _approved()
+        rev = publishing.publish(sub, reason="approval", actor="admin:jane")
+        original = sub.service_center_id
+        sub.service_center = ServiceCenterFactory()
+        sub.save()
+        publishing.apply_content_to_working_copy(sub, rev.content)
+        sub.refresh_from_db()
+        assert sub.service_center_id == original
+
+    def test_apply_content_skips_deleted_reference_rows(self):
+        sub = _approved()
+        cat = ServiceCategoryFactory()
+        sub.service_categories.add(cat)
+        rev = publishing.publish(sub, reason="approval", actor="admin:jane")
+        sub.service_categories.remove(cat)
+        cat.delete()
+        publishing.apply_content_to_working_copy(sub, rev.content)
+        assert cat.pk not in {c.pk for c in sub.service_categories.all()}
+
+
+def _text_field_names(*, cleaned):
+    """Public text fields of the working copy that a save does / does not clean."""
+    from django.db import models
+
+    return [
+        name
+        for name in PUBLIC_SCALAR_FIELDS
+        if isinstance(
+            ServiceSubmission._meta.get_field(name), models.CharField | models.TextField
+        )
+        and not ServiceSubmission._meta.get_field(name).choices
+        and (name in CLEANED_TEXT_FIELDS) is cleaned
+    ]
+
+
+class TestRestorableContentMatchesWhatASaveStores:
+    """The content a restore is compared with is what the working copy holds
+    after the restore and its save."""
+
+    DIRTY = "Example\r\nfu\u0308r text "
+
+    def _stored_after_save(self, sub, name):
+        setattr(sub, name, self.DIRTY)
+        sub.save()
+        return getattr(ServiceSubmission.objects.get(pk=sub.pk), name)
+
+    @pytest.mark.parametrize("name", _text_field_names(cleaned=True))
+    def test_cleaned_text_fields_equal_the_saved_value(self, name):
+        sub = _approved()
+        content = publishing.build_content(sub)
+        restored = publishing.restorable_content(sub, {**content, name: self.DIRTY})
+        assert restored[name] == self._stored_after_save(sub, name)
+        assert restored[name] != self.DIRTY
+
+    @pytest.mark.parametrize("name", _text_field_names(cleaned=False))
+    def test_other_text_fields_are_kept_as_they_are(self, name):
+        sub = _approved()
+        content = publishing.build_content(sub)
+        restored = publishing.restorable_content(sub, {**content, name: self.DIRTY})
+        assert restored[name] == self._stored_after_save(sub, name) == self.DIRTY
+
+    def test_the_cleaned_fields_are_the_ones_the_save_cleans(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        for name in CLEANED_TEXT_FIELDS:
+            setattr(sub, name, "  Example text \r\n")
+        sub.save()
+        sub.refresh_from_db()
+        assert {getattr(sub, name) for name in CLEANED_TEXT_FIELDS} == {"Example text"}
+
+    def test_the_save_cleans_exactly_these_free_text_fields(self):
+        """A field dropped from the list would no longer be cleaned on save
+        and would make the restore compare uncleaned text."""
+        assert set(CLEANED_TEXT_FIELDS) == {
+            "submitter_first_name",
+            "submitter_last_name",
+            "submitter_affiliation",
+            "service_name",
+            "service_description",
+            "toolbox_name",
+            "user_knowledge_required",
+            "host_institute",
+            "internal_contact_name",
+            "associated_partner_note",
+            "kpi_start_year",
+            "keywords_uncited",
+            "keywords_seo",
+            "comments",
+        }
+
+
+class TestRestorableContentReferenceRows:
+    def test_rows_deleted_since_the_version_are_dropped(self):
+        sub = _approved()
+        keep, gone = ServiceCategoryFactory(), ServiceCategoryFactory()
+        content = {**publishing.build_content(sub)}
+        content["service_categories"] = sorted([keep.pk, gone.pk])
+        gone.delete()
+        restored = publishing.restorable_content(sub, content)
+        assert restored["service_categories"] == [keep.pk]
+
+    def test_each_relation_is_read_with_one_query_whatever_the_number_of_values(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        sub = _approved()
+        content = {
+            **publishing.build_content(sub),
+            **{name: [] for name in PUBLIC_M2M_FIELDS},
+        }
+        counts = {}
+        for size in (2, 20):
+            rows = [ServiceCategoryFactory() for _ in range(size)]
+            with CaptureQueriesContext(connection) as queries:
+                restored = publishing.restorable_content(
+                    sub, {**content, "service_categories": [r.pk for r in rows]}
+                )
+            assert len(restored["service_categories"]) == size
+            counts[size] = len(queries)
+        assert counts == {2: 1, 20: 1}
+
+    def test_several_values_come_back_in_the_order_of_the_version(self):
+        from tests.factories import PIFactory
+
+        sub = _approved()
+        sub.service_categories.set([ServiceCategoryFactory() for _ in range(6)])
+        sub.responsible_pis.set([PIFactory() for _ in range(6)])
+        content = publishing.build_content(sub)
+        restored = publishing.restorable_content(sub, content)
+        for name in PUBLIC_M2M_FIELDS:
+            assert restored[name] == content[name]
+
+
 # A value for every kind of public scalar field that differs from what the
 # read model shows for a field a version does not have.
 WORKING_VALUES = {
@@ -1008,6 +1160,52 @@ def _with_a_value_in_every_public_field(n=1):
     )
     sub.licenses.set([_licence(f"Example-{n}.0")])
     return ServiceSubmission.objects.get(pk=sub.pk)
+
+
+class TestRestorableContentFields:
+    def test_every_scalar_kind_has_a_working_value(self):
+        assert set(WORKING_VALUES) == set(PUBLIC_SCALAR_FIELDS)
+
+    def test_a_key_that_is_not_a_public_field_any_more_is_dropped(self):
+        sub = _approved()
+        content = {**publishing.build_content(sub), "retired_field": "Example"}
+        restored = publishing.restorable_content(sub, content)
+        assert set(restored) == set(ALL_PUBLIC_FIELDS)
+        assert publishing.content_hash(restored) == publishing.content_hash(
+            publishing.build_content(sub)
+        )
+
+    @pytest.mark.parametrize("name", ALL_PUBLIC_FIELDS)
+    def test_a_field_missing_from_a_version_keeps_the_working_copy_value(self, name):
+        sub = _with_a_value_in_every_public_field()
+        expected = publishing.build_content(sub)[name]
+        if name not in PUBLIC_FK_FIELDS:
+            # Not the value a missing field is given for the public copy.
+            assert expected != publishing.complete_content({})[name]
+        older = {k: v for k, v in publishing.build_content(sub).items() if k != name}
+        assert publishing.restorable_content(sub, older)[name] == expected
+
+    def test_a_field_the_version_has_is_taken_from_the_version(self):
+        sub = _with_a_value_in_every_public_field()
+        content = {**publishing.build_content(sub), "website_url": "https://x.org/v"}
+        assert publishing.restorable_content(sub, content)["website_url"] == (
+            "https://x.org/v"
+        )
+
+    def test_a_kept_text_value_is_cleaned_the_way_a_save_cleans_it(self):
+        sub = _with_a_value_in_every_public_field()
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            keywords_seo="  working,\r\nkeywords "
+        )
+        sub = ServiceSubmission.objects.get(pk=sub.pk)
+        older = {
+            k: v
+            for k, v in publishing.build_content(sub).items()
+            if k != "keywords_seo"
+        }
+        assert publishing.restorable_content(sub, older)["keywords_seo"] == (
+            "working,\nkeywords"
+        )
 
 
 def _count_queries(func):
@@ -1061,6 +1259,71 @@ class TestBuildContentRelationQueries:
             )
         )
         assert plain_queries == prefetched_queries
+
+
+class TestExistingReferencesAcrossVersions:
+    def _contents(self, sub, count):
+        content = publishing.build_content(sub)
+        contents = []
+        for _ in range(count):
+            contents.append(
+                {
+                    **content,
+                    "service_categories": [ServiceCategoryFactory().pk],
+                    "responsible_pis": [PIFactory().pk],
+                }
+            )
+        return contents
+
+    def test_one_query_per_relation_whatever_the_number_of_versions(self):
+        sub = _with_a_value_in_every_public_field()
+        counts = {}
+        for count in (2, 12):
+            contents = self._contents(sub, count)
+            found, counts[count] = _count_queries(
+                lambda: publishing.existing_references(contents)
+            )
+            assert len(found["service_categories"]) == count
+        assert counts[2] == counts[12] <= len(PUBLIC_M2M_FIELDS)
+
+    def test_any_iterable_of_versions_is_accepted(self):
+        sub = _with_a_value_in_every_public_field()
+        contents = self._contents(sub, 3)
+        from_list = publishing.existing_references(contents)
+        assert publishing.existing_references(iter(contents)) == from_list
+        assert len(from_list["responsible_pis"]) == 3
+
+    def test_deleted_rows_are_not_reported(self):
+        sub = _approved()
+        keep, gone = ServiceCategoryFactory(), ServiceCategoryFactory()
+        content = {**publishing.build_content(sub)}
+        content["service_categories"] = [keep.pk, gone.pk]
+        gone.delete()
+        found = publishing.existing_references([content])
+        assert found["service_categories"] == {keep.pk}
+
+    def test_a_restorable_content_with_the_references_given_runs_no_query(self):
+        sub = _with_a_value_in_every_public_field()
+        content = publishing.build_content(sub)
+        found = publishing.existing_references([content])
+        restored, queries = _count_queries(
+            lambda: publishing.restorable_content(sub, content, existing=found)
+        )
+        assert queries == 0
+        assert restored == publishing.restorable_content(sub, content)
+
+    def test_a_row_is_found_whichever_way_its_id_is_written(self):
+        sub = _approved()
+        pi = PIFactory()
+        content = {**publishing.build_content(sub)}
+        content["responsible_pis"] = [str(pi.pk).upper()]
+        assert publishing.restorable_content(sub, content)["responsible_pis"] == [
+            str(pi.pk)
+        ]
+        found = publishing.existing_references([content])
+        assert publishing.restorable_content(sub, content, existing=found)[
+            "responsible_pis"
+        ] == [str(pi.pk)]
 
 
 def test_changelog_model_is_untouched_by_publishing():
