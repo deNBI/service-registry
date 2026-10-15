@@ -11,6 +11,25 @@ import pytest
 pytest.register_assert_rewrite("tests.helpers")
 
 
+def pytest_collection_modifyitems(config, items):
+    """Tests marked ``postgres`` run only with config.settings_test_postgres.
+
+    ``make test-postgres`` sets REQUIRE_POSTGRES: then a run that is not on
+    PostgreSQL stops instead of passing with those tests skipped."""
+    import os
+
+    from django.conf import settings
+
+    if settings.DATABASES["default"]["ENGINE"].endswith("postgresql"):
+        return
+    if os.environ.get("REQUIRE_POSTGRES"):
+        pytest.exit("REQUIRE_POSTGRES is set but the tests do not use PostgreSQL", 3)
+    skip = pytest.mark.skip(reason="needs PostgreSQL (make test-postgres)")
+    for item in items:
+        if item.get_closest_marker("postgres"):
+            item.add_marker(skip)
+
+
 @pytest.fixture
 def rf():
     from django.test import RequestFactory
