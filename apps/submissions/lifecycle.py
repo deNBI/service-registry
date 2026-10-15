@@ -96,8 +96,9 @@ def set_status(submission, new_status, *, actor: str, extra_fields=()) -> bool:
 
     Locks the row, reads the current status from the database (not from the
     possibly stale instance), saves ``status`` plus ``extra_fields`` and writes
-    one SubmissionStatusEvent, all in one transaction. Maturity tags are only
-    valid on approved services, so any other status clears them. ``updated_at``
+    one SubmissionStatusEvent, all in one transaction, then lets the publishing
+    layer react (apps.catalogue.publishing.on_status_change). Maturity tags are
+    only valid on approved services, so any other status clears them. ``updated_at``
     is only written when it is listed in ``extra_fields``.
 
     When ``new_status`` is the stored status, nothing is changed and the result
@@ -106,6 +107,7 @@ def set_status(submission, new_status, *, actor: str, extra_fields=()) -> bool:
     from django.db import transaction
     from django.utils import timezone
 
+    from apps.catalogue.publishing import on_status_change
     from apps.submissions.models import (
         ServiceSubmission,
         SubmissionStatus,
@@ -139,4 +141,6 @@ def set_status(submission, new_status, *, actor: str, extra_fields=()) -> bool:
             changed_at=now,
             changed_by=actor,
         )
+        # Inside the same transaction: a failing publish undoes the status change.
+        on_status_change(submission, new_status, actor=actor)
     return True

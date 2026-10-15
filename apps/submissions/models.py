@@ -226,6 +226,25 @@ def _review_value(name, value):
     return value or None
 
 
+class ServiceSubmissionQuerySet(models.QuerySet):
+    def delete(self):
+        """Lock the rows before Django collects what refers to them.
+
+        A publish of one of these services that is running at the same time
+        then finishes first, so its revision is deleted with the service and
+        the tombstone receiver sees it.
+        """
+        with transaction.atomic():
+            pks = list(self.values_list("pk", flat=True))
+            list(
+                self.model._base_manager.select_for_update()
+                .filter(pk__in=pks)
+                .order_by("pk")
+                .values_list("pk", flat=True)
+            )
+            return super().delete()
+
+
 class ServiceSubmission(models.Model):
     """
     A single service registration submitted to de.NBI & ELIXIR-DE.
@@ -238,6 +257,8 @@ class ServiceSubmission(models.Model):
     Sensitive internal fields (internal_contact_email, submission_ip,
     user_agent_hash) are never serialised in API responses.
     """
+
+    objects = ServiceSubmissionQuerySet.as_manager()
 
     # -- Meta --
     id = models.UUIDField(
@@ -722,7 +743,7 @@ class ServiceSubmission(models.Model):
         These fields are only written by the code paths named at
         REVIEW_FIELDS. A full save comes from an edit that loaded the service
         earlier; if a review changed them in the meantime, saving would put
-        the old values back, so the edit is refused.
+        the old values back (and publish them), so the edit is refused.
         """
         stored = (
             type(self)
@@ -743,6 +764,13 @@ class ServiceSubmission(models.Model):
             expected = remembered.get(name, _review_value(name, getattr(self, name)))
             if _review_value(name, stored[name]) != expected:
                 raise StatusChangedError(self.pk)
+
+    def delete(self, *args, **kwargs):
+        """Lock the row before Django collects what refers to it (see
+        ServiceSubmissionQuerySet.delete)."""
+        with transaction.atomic():
+            type(self)._base_manager.select_for_update().filter(pk=self.pk).exists()
+            return super().delete(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------

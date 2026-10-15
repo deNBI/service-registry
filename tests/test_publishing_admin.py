@@ -13,7 +13,7 @@ from tests.factories import (
 pytestmark = pytest.mark.django_db
 
 
-def _approved(**kw):
+def _published(**kw):
     sub = ServiceSubmissionFactory(biotools_url="", **kw)
     set_status(sub, "approved", actor="admin:jane")
     return sub
@@ -49,7 +49,7 @@ class TestStatusHistoryIsReadOnly:
     def test_a_posted_delete_flag_removes_nothing(self, superuser_client):
         from tests.helpers import edit_form_payload
 
-        sub = _approved()
+        sub = _published()
         events = list(sub.status_events.order_by("id"))
         payload = edit_form_payload(sub)
         payload.update(
@@ -67,45 +67,3 @@ class TestStatusHistoryIsReadOnly:
             payload,
         )
         assert sub.status_events.count() == len(events)
-
-
-CLEANED_TEXT_FIELDS = [
-    "service_name",
-    "service_description",
-    "toolbox_name",
-    "user_knowledge_required",
-    "host_institute",
-    "keywords_seo",
-]
-# Stored text that a full save rewrites: line ends, edge whitespace, and
-# decomposed characters.
-UNCLEAN_TEXT = {
-    "crlf": "Example first line\r\nExample second line",
-    "trailing_space": "Example text with a trailing space ",
-    "decomposed": "Example für text",
-}
-
-
-# A change to each kind of public field, written straight to the database
-# (as a rejected edit leaves it).
-FIELD_EDITS = {
-    "service_name": "Example Renamed Service",
-    "service_description": "A different example description that is long enough.\r\nWith a second line.",
-    "user_knowledge_required": "Some other knowledge.",
-    "primary_maturity_tag": "mature",
-    "host_institute": "Example Other Institute",
-    "year_established": 2001,
-    "is_toolbox": True,
-    "toolbox_name": "Example Toolbox Name",
-    "website_url": "https://example.org/other",
-    "terms_of_use_url": "https://example.org/terms-other",
-    "license_note": "Other note",
-    "public_contact_email": "jane.doe@example.org",
-    "github_url": "https://github.com/example/other",
-    "biotools_url": "https://bio.tools/example_other",
-    "fairsharing_url": "https://fairsharing.org/other",
-    "other_registry_url": "https://example.org/registry-other",
-    "keywords_seo": "other, keywords",
-    "publications_pmids": "12345",
-    "logo": "logos/other.png",
-}

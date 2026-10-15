@@ -10,6 +10,7 @@ from apps.submissions.models import (
 )
 from apps.submissions.selectors import (
     first_approved_at,
+    latest_public_decisions,
     status_history_broken,
     was_ever_approved,
 )
@@ -298,6 +299,29 @@ def _grant(client, sub):
     session.save()
 
 
+class TestPublicDecisions:
+    def test_the_latest_approval_or_deprecation_decides(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        other = ServiceSubmissionFactory(biotools_url="")
+        for status in ("approved", "deprecated", "submitted", "rejected"):
+            set_status(sub, status, actor="admin:jane")
+        set_status(other, "approved", actor="admin:jane")
+        decisions = latest_public_decisions([sub.pk, other.pk])
+        assert decisions == {sub.pk: "deprecated", other.pk: "approved"}
+
+    def test_a_submission_without_either_is_absent(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        set_status(sub, "under_review", actor="admin:jane")
+        assert latest_public_decisions([sub.pk]) == {}
+
+    def test_only_the_asked_submissions_are_returned(self):
+        a = ServiceSubmissionFactory(status="approved", biotools_url="")
+        b = ServiceSubmissionFactory(status="approved", biotools_url="")
+        assert set(latest_public_decisions([a.pk])) == {a.pk}
+        queryset = ServiceSubmission.objects.filter(pk=b.pk).values("pk")
+        assert set(latest_public_decisions(queryset)) == {b.pk}
+
+
 class TestBrokenHistories:
     @pytest.mark.allow_status_drift
     def test_a_continuous_history_is_not_reported(self):
@@ -358,6 +382,8 @@ class TestWebPaths:
     def test_edit_ignores_a_status_sent_by_the_client(
         self, client, settings, exempt, status
     ):
+        from apps.catalogue.models import PublishedService
+
         settings.ALTCHA_HMAC_KEY = ""
         sub = ServiceSubmissionFactory(status="under_review", biotools_url="")
         _grant(client, sub)
@@ -371,6 +397,7 @@ class TestWebPaths:
             "https://github.com/example/moved",
         )
         assert len(_transitions(sub)) == 1
+        assert not PublishedService.objects.filter(pk=sub.pk).exists()
 
     def test_self_deprecate_records_event_and_clears_tags(self, client):
         sub = ServiceSubmissionFactory(
@@ -498,6 +525,8 @@ class TestApiPaths:
 
     @pytest.mark.parametrize("status", ["approved", "deprecated", "rejected"])
     def test_patch_ignores_a_status_sent_by_the_client(self, exempt, status):
+        from apps.catalogue.models import PublishedService
+
         sub = ServiceSubmissionFactory(status="under_review", biotools_url="")
         client, _ = self._client(sub)
         resp = client.patch(
@@ -512,6 +541,7 @@ class TestApiPaths:
             "https://github.com/example/moved",
         )
         assert len(_transitions(sub)) == 1
+        assert not PublishedService.objects.filter(pk=sub.pk).exists()
 
     def _client(self, sub):
         key_obj, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
@@ -836,6 +866,22 @@ class TestOwnerAuditEntries:
         assert (stored.status, stored.primary_maturity_tag) == ("approved", "mature")
         assert len(_transitions(sub)) == 1
 
+    def test_a_failed_audit_entry_undoes_a_live_edit(
+        self, client, exempt, monkeypatch, settings
+    ):
+        from apps.catalogue.models import PublishedRevision
+
+        settings.ALTCHA_HMAC_KEY = ""
+        sub = ServiceSubmissionFactory(biotools_url="")
+        set_status(sub, "approved", actor="admin:jane")
+        _grant(client, sub)
+        self._fail_log_writes(monkeypatch)
+        data = edit_form_data(sub, github_url="https://github.com/example/moved")
+        with pytest.raises(RuntimeError):
+            client.post(reverse("submissions:edit", args=[sub.pk]), data)
+        assert ServiceSubmission.objects.get(pk=sub.pk).github_url == sub.github_url
+        assert PublishedRevision.objects.filter(submission=sub).count() == 1
+
     def test_a_failed_audit_entry_undoes_a_self_deprecation(self, client, monkeypatch):
         sub = ServiceSubmissionFactory(
             status="approved", primary_maturity_tag="mature", biotools_url=""
@@ -967,11 +1013,14 @@ class TestStatusChangedWhileEditing:
 
     @staticmethod
     def _tag_elsewhere(sub, **tags):
-        """An admin assigns maturity tags in another request."""
+        """An admin assigns maturity tags in another request; they go public."""
+        from apps.catalogue import publishing
+
         row = ServiceSubmission.objects.get(pk=sub.pk)
         for name, value in tags.items():
             setattr(row, name, value)
         row.save(update_fields=list(tags))
+        publishing.republish(row, reason="tag_change", actor="admin:jane")
 
     @pytest.mark.parametrize(
         "tags",
@@ -983,7 +1032,8 @@ class TestStatusChangedWhileEditing:
     )
     def test_saving_after_a_tag_change_is_refused(self, tags):
         """Tags are set by admins only; an edit loaded before they changed
-        must not write the old tags back."""
+        must not write the old tags back (and publish that)."""
+        from apps.catalogue.models import PublishedService
         from apps.submissions.models import StatusChangedError
 
         sub = self._approved()
@@ -993,8 +1043,11 @@ class TestStatusChangedWhileEditing:
         with pytest.raises(StatusChangedError):
             loaded.save()
         stored = ServiceSubmission.objects.get(pk=sub.pk)
+        public = PublishedService.objects.get(pk=sub.pk)
         for name, value in tags.items():
             assert getattr(stored, name) == value
+        # Only the primary tag is public.
+        assert public.primary_maturity_tag == stored.primary_maturity_tag
         assert stored.github_url != "https://github.com/example/moved"
 
     def test_an_instance_may_change_its_own_tags(self):
@@ -1070,6 +1123,7 @@ class TestStatusChangedWhileEditing:
 
     def test_saving_an_instance_whose_row_was_deleted_is_refused(self):
         """A late save must not bring a deleted service back."""
+        from apps.catalogue.models import PublishedService, WithdrawnService
         from apps.submissions.models import StatusChangedError
 
         sub = self._approved()
@@ -1080,6 +1134,8 @@ class TestStatusChangedWhileEditing:
             loaded.save()
         assert not ServiceSubmission.objects.filter(pk=sub.pk).exists()
         assert not SubmissionStatusEvent.objects.filter(submission_id=sub.pk).exists()
+        assert WithdrawnService.objects.filter(pk=sub.pk).exists()
+        assert not PublishedService.objects.filter(pk=sub.pk).exists()
 
     def test_saving_an_up_to_date_instance_works(self):
         sub = ServiceSubmissionFactory(
@@ -1093,6 +1149,8 @@ class TestStatusChangedWhileEditing:
 
     def test_web_edit_is_refused(self, client, exempt):
         from unittest import mock
+
+        from apps.catalogue.models import PublishedService
 
         sub = self._approved()
         _grant(client, sub)
@@ -1111,6 +1169,8 @@ class TestStatusChangedWhileEditing:
         assert resp.status_code == 409
         assert "status of this service changed" in resp.content.decode()
         self._assert_edit_refused(sub)
+        published = PublishedService.objects.get(pk=sub.pk)
+        assert published.github_url != "https://github.com/example/moved"
 
     def _stale(self, real_get_object):
         """get_object() that returns the service as it was before the
@@ -1163,21 +1223,3 @@ class TestStatusChangedWhileEditing:
         page = superuser_client.get(resp["Location"]).content.decode()
         assert "status of this service changed" in page
         self._assert_edit_refused(sub)
-
-
-_STATUSES = ["draft", "submitted", "under_review", "approved", "rejected", "deprecated"]
-_UNRECORDED = ["submitted", "under_review", "approved", "rejected", "deprecated"]
-# (state of the public copy, status written without an event, next status):
-# the unrecorded status differs from the one the history ends in, and the next
-# status differs from the unrecorded one.
-_CATCH_UP_CASES = [
-    (copy_state, unrecorded, next_status)
-    for copy_state, last_recorded in [
-        ("active", "approved"),
-        ("deprecated", "deprecated"),
-    ]
-    for unrecorded in _UNRECORDED
-    if unrecorded != last_recorded
-    for next_status in _STATUSES
-    if next_status != unrecorded
-]

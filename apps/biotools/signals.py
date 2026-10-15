@@ -66,8 +66,8 @@ def connect_signals():
         )
         # Queue the task only once the saving transaction has committed: the
         # task reads the submission from the database. An edit stores content,
-        # relations and audit entries in one transaction, which can take longer
-        # than any fixed delay.
+        # relations, publishing and audit entries in one transaction, which can
+        # take longer than any fixed delay.
         submission_id = str(instance.pk)
         transaction.on_commit(
             lambda: sync_biotools_record.apply_async(args=[submission_id])

@@ -2,8 +2,9 @@
 
 The scan is a heuristic over common code shapes. Shapes it cannot see (a
 field list held in a variable, raw SQL) are caught at run time instead: the
-status-history check after every database test and ``ServiceSubmission.save``,
-which refuses a full save that would undo a status change.
+status-history check after every database test, ``verify_published``
+(``status_history_drift``) and ``ServiceSubmission.save``, which refuses a
+full save that would undo a status change.
 """
 
 import ast

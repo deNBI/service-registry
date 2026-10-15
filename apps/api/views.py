@@ -25,6 +25,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+from apps.catalogue.publishing import republish
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
 from apps.submissions.diff_utils import build_diff, snapshot, snapshot_m2m
 from apps.submissions.http_utils import get_client_ip, hash_user_agent
@@ -440,6 +441,10 @@ class SubmissionViewSet(
                     changes = build_diff(
                         before, {**snapshot(instance), **snapshot_m2m(instance)}
                     )
+
+            # No-op unless the service is still approved (a reset above leaves
+            # it submitted): an edit that keeps it approved goes live at once.
+            republish(instance, reason="live_edit", actor=self._api_actor(request))
 
             if changes:
                 self._record_api_change(request, instance, changes)

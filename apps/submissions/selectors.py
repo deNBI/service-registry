@@ -42,6 +42,18 @@ def status_history_drift() -> list[tuple[str, str, str | None]]:
     return [(str(pk), status, last) for pk, status, last in rows if status != last]
 
 
+def latest_public_decisions(submission_ids) -> dict:
+    """Map submission id to the status of its latest approval or deprecation
+    event (the last row written). That event decides whether a published copy
+    is active or deprecated; later moves to other statuses do not change it.
+    ``submission_ids`` is any iterable or queryset of ids."""
+    events = SubmissionStatusEvent.objects.filter(
+        to_status__in=[SubmissionStatus.APPROVED, SubmissionStatus.DEPRECATED],
+        submission_id__in=submission_ids,
+    )
+    return dict(events.order_by("id").values_list("submission_id", "to_status"))
+
+
 def status_history_broken() -> list[str]:
     """Ids of submissions whose status events do not form one chain: the first
     event has no from-status and every later event starts at the status the

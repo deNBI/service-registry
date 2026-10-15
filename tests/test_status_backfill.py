@@ -384,10 +384,14 @@ def test_migration_runs_forwards_and_backwards_on_real_state():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_rolling_back_past_the_backfill_leaves_a_history_that_is_not_one_chain():
+def test_rolling_back_past_the_backfill_leaves_a_history_that_verify_reports():
     """Going back past the backfill removes the reconstructed rows but keeps
     the rows written since; applying it again skips services that have rows, so
     their history no longer starts at the creation."""
+    from io import StringIO
+
+    from django.core.management import CommandError, call_command
+
     from apps.submissions.lifecycle import set_status
     from apps.submissions.selectors import status_history_broken
 
@@ -417,5 +421,99 @@ def test_rolling_back_past_the_backfill_leaves_a_history_that_is_not_one_chain()
             for e in SubmissionStatusEvent.objects.filter(submission=sub)
         ] == [("approved", "rejected")]
         assert status_history_broken() == [str(sub.pk)]
+        out = StringIO()
+        with pytest.raises(CommandError, match="status_history_broken=1"):
+            call_command("verify_published", stdout=out)
+        assert str(sub.pk) in out.getvalue()
+    finally:
+        MigrationExecutor(connection).migrate(leaf())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rolling_back_the_publishing_tables_loses_the_revision_history():
+    """Going back past catalogue 0001 drops every revision. Applying the
+    migrations again publishes approved services once more from their working
+    copy, as a single backfill revision."""
+    from io import StringIO
+
+    from django.core.management import call_command
+    from django.db import connection as conn
+
+    from apps.catalogue import publishing
+    from apps.catalogue.models import PublishedRevision, PublishedService
+    from apps.submissions.lifecycle import set_status
+
+    sub = ServiceSubmissionFactory(biotools_url="")
+    set_status(sub, "approved", actor="admin:jane")
+    ServiceSubmission.objects.filter(pk=sub.pk).update(service_name="Example Edited")
+    publishing.republish(sub, reason="admin_edit", actor="admin:jane")
+    assert PublishedRevision.objects.filter(submission=sub).count() == 2
+    table = PublishedService._meta.db_table
+
+    def leaf():
+        return MigrationExecutor(connection).loader.graph.leaf_nodes()
+
+    try:
+        MigrationExecutor(connection).migrate([("catalogue", None)])
+        assert table not in conn.introspection.table_names()
+        MigrationExecutor(connection).migrate(leaf())
+        assert table in conn.introspection.table_names()
+        revisions = PublishedRevision.objects.filter(submission=sub)
+        assert [(r.number, r.reason) for r in revisions] == [(1, "backfill")]
+        assert PublishedService.objects.get(pk=sub.pk).service_name == "Example Edited"
+        out = StringIO()
+        call_command("verify_published", stdout=out)
+        assert "0 problems" in out.getvalue()
+    finally:
+        MigrationExecutor(connection).migrate(leaf())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rolling_back_the_release_and_applying_it_again_rebuilds_a_clean_state():
+    """Rollback for this release: catalogue back to zero and submissions back
+    to 0019, then the previous code runs. That code records status changes in
+    the change log only. Applying the migrations again rebuilds the status
+    history from the change log and publishes from the current content, and
+    the result passes verify_published."""
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    from apps.catalogue.models import PublishedService
+    from apps.submissions.lifecycle import set_status
+
+    def leaf():
+        return MigrationExecutor(connection).loader.graph.leaf_nodes()
+
+    live = ServiceSubmissionFactory(biotools_url="")
+    set_status(live, "approved", actor="admin:jane")
+    waiting = ServiceSubmissionFactory(biotools_url="")
+    try:
+        MigrationExecutor(connection).migrate(
+            [("catalogue", None), ("submissions", "0019_logo_help_text")]
+        )
+        # The previous code changes two statuses: row update plus change log.
+        later = timezone.now() + timedelta(minutes=5)
+        for sub, old, new, code in (
+            (waiting, "Submitted", "Approved", "approved"),
+            (live, "Approved", "Deprecated", "deprecated"),
+        ):
+            ServiceSubmission.objects.filter(pk=sub.pk).update(status=code)
+            SubmissionChangeLog.objects.create(
+                submission_id=sub.pk,
+                changed_by="admin:john",
+                changed_at=later,
+                changes=[
+                    {"field": "status", "label": "Status", "old": old, "new": new}
+                ],
+            )
+        MigrationExecutor(connection).migrate(leaf())
+        assert _rows(waiting)[-1] == ("submitted", "approved", "admin:john", False)
+        assert _rows(live)[-1] == ("approved", "deprecated", "admin:john", False)
+        assert PublishedService.objects.get(pk=waiting.pk).state == "active"
+        assert PublishedService.objects.get(pk=live.pk).state == "deprecated"
+        out = StringIO()
+        call_command("verify_published", stdout=out)
+        assert "0 problems" in out.getvalue()
     finally:
         MigrationExecutor(connection).migrate(leaf())

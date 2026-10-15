@@ -31,6 +31,8 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 from django_ratelimit.decorators import ratelimit
 
+from apps.catalogue.publishing import republish
+
 from .diff_utils import (
     build_diff,
     filter_sanitization_artifacts,
@@ -581,6 +583,11 @@ class EditView(View):
                         updated,
                         SubmissionStatus.SUBMITTED,
                         actor=CHANGELOG_ACTOR_SUBMITTER,
+                    )
+                else:
+                    # An edit that keeps the service approved goes live at once.
+                    republish(
+                        updated, reason="live_edit", actor=CHANGELOG_ACTOR_SUBMITTER
                     )
 
                 # Snapshot AFTER saving and compute the diff.
