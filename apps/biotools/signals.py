@@ -8,6 +8,7 @@ triggers a background refresh.
 
 import logging
 
+from django.db import transaction
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
@@ -67,8 +68,11 @@ def connect_signals():
             instance.pk,
             instance.biotools_url,
         )
-        # Delay by 2 seconds so the transaction commits before the task reads the DB
-        sync_biotools_record.apply_async(
-            args=[str(instance.pk)],
-            countdown=2,
+        # Queue the task only once the saving transaction has committed: the
+        # task reads the submission from the database. An edit stores content,
+        # relations and audit entries in one transaction, which can take longer
+        # than any fixed delay.
+        submission_id = str(instance.pk)
+        transaction.on_commit(
+            lambda: sync_biotools_record.apply_async(args=[submission_id])
         )
