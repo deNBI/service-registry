@@ -21,6 +21,7 @@ import unicodedata
 
 from django.conf import settings
 from django.contrib import messages
+from django.db import transaction
 from django.http import Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils.decorators import method_decorator
@@ -38,6 +39,7 @@ from .diff_utils import (
 )
 from .forms import SubmissionForm, UpdateKeyForm
 from .http_utils import get_client_ip, hash_user_agent
+from .lifecycle import set_status
 from .markdown_render import markdown_enabled, render_with_notice
 from .validation import normalize_newlines
 from .models import (
@@ -47,6 +49,7 @@ from .models import (
     SECONDARY_MATURITY_TAG_CHOICES,
     ServiceSubmission,
     SubmissionAPIKey,
+    StatusChangedError,
     SubmissionChangeLog,
     SubmissionStatus,
 )
@@ -163,8 +166,9 @@ class RegisterView(View):
             return render(request, self.template_name, self._context(form), status=422)
 
         # Save submission
+        # New submissions start at the model's default status ("submitted");
+        # the creation receiver records that in the status history.
         submission: ServiceSubmission = form.save(commit=False)
-        submission.status = "submitted"
         submission.submission_ip = get_client_ip(request) or None
         submission.user_agent_hash = hash_user_agent(request)
         submission.save()
@@ -386,80 +390,96 @@ class EditView(View):
 
         # Handle deprecation request (separate action, not a form save)
         if "_deprecate" in request.POST:
-            if submission.status != SubmissionStatus.DEPRECATED:
-                # Capture display values before mutation so the diff shows human labels.
-                old_status_display = (
-                    submission.get_status_display() or submission.status
+            deprecated_now = False
+            # The status change and its audit entry are stored together. The
+            # row is read again under its lock, so the audit entry names the
+            # status the service really had.
+            with transaction.atomic():
+                submission = (
+                    ServiceSubmission.objects.select_for_update()
+                    .filter(pk=submission.pk)
+                    .first()
                 )
-                old_primary_tag = submission.primary_maturity_tag
-                old_secondary_tags = list(submission.secondary_maturity_tags or [])
+                if submission is None:
+                    raise Http404
+                if submission.status != SubmissionStatus.DEPRECATED:
+                    # Capture display values before mutation so the diff shows
+                    # human labels.
+                    old_status_display = (
+                        submission.get_status_display() or submission.status
+                    )
+                    old_primary_tag = submission.primary_maturity_tag
+                    old_secondary_tags = list(submission.secondary_maturity_tags or [])
 
-                submission.status = SubmissionStatus.DEPRECATED
-                # Maturity tags are only valid on approved services; clear them
-                # so the service doesn't get stuck in an invalid state.
-                submission.primary_maturity_tag = None
-                submission.secondary_maturity_tags = []
-                submission.save(
-                    update_fields=[
-                        "status",
-                        "primary_maturity_tag",
-                        "secondary_maturity_tags",
+                    # Maturity tags are only valid on approved services; clear
+                    # them so the service doesn't get stuck in an invalid state.
+                    submission.primary_maturity_tag = None
+                    submission.secondary_maturity_tags = []
+                    set_status(
+                        submission,
+                        SubmissionStatus.DEPRECATED,
+                        actor=CHANGELOG_ACTOR_SUBMITTER,
+                        extra_fields=[
+                            "primary_maturity_tag",
+                            "secondary_maturity_tags",
+                        ],
+                    )
+
+                    # Build field-level diff for the audit log (mirrors
+                    # build_diff format and the admin _change_status pattern).
+                    new_status_display = (
+                        submission.get_status_display() or SubmissionStatus.DEPRECATED
+                    )
+                    changes = [
+                        {
+                            "field": "status",
+                            "label": "Status",
+                            "old": old_status_display,
+                            "new": new_status_display,
+                        }
                     ]
-                )
+                    if old_primary_tag:
+                        changes.append(
+                            {
+                                "field": "primary_maturity_tag",
+                                "label": "Primary Maturity Tag",
+                                "old": str(
+                                    dict(PRIMARY_MATURITY_TAG_CHOICES).get(
+                                        old_primary_tag, old_primary_tag
+                                    )
+                                ),
+                                "new": "—",
+                            }
+                        )
+                    if old_secondary_tags:
+                        changes.append(
+                            {
+                                "field": "secondary_maturity_tags",
+                                "label": "Secondary Maturity Tags",
+                                "old": ", ".join(
+                                    str(dict(SECONDARY_MATURITY_TAG_CHOICES).get(t, t))
+                                    for t in old_secondary_tags
+                                ),
+                                "new": "—",
+                            }
+                        )
 
-                # Build field-level diff for the audit log (mirrors build_diff format
-                # and the admin _change_status pattern).
-                new_status_display = (
-                    submission.get_status_display() or SubmissionStatus.DEPRECATED
-                )
-                changes = [
-                    {
-                        "field": "status",
-                        "label": "Status",
-                        "old": old_status_display,
-                        "new": new_status_display,
+                    changed_at = now()
+                    submission.last_change_summary = {
+                        "changed_by": CHANGELOG_ACTOR_SUBMITTER,
+                        "changed_at": changed_at.isoformat(),
+                        "changes": changes,
                     }
-                ]
-                if old_primary_tag:
-                    changes.append(
-                        {
-                            "field": "primary_maturity_tag",
-                            "label": "Primary Maturity Tag",
-                            "old": str(
-                                dict(PRIMARY_MATURITY_TAG_CHOICES).get(
-                                    old_primary_tag, old_primary_tag
-                                )
-                            ),
-                            "new": "—",
-                        }
+                    submission.save(update_fields=["last_change_summary"])
+                    SubmissionChangeLog.objects.create(
+                        submission=submission,
+                        changed_by=CHANGELOG_ACTOR_SUBMITTER,
+                        changed_at=changed_at,
+                        changes=changes,
                     )
-                if old_secondary_tags:
-                    changes.append(
-                        {
-                            "field": "secondary_maturity_tags",
-                            "label": "Secondary Maturity Tags",
-                            "old": ", ".join(
-                                str(dict(SECONDARY_MATURITY_TAG_CHOICES).get(t, t))
-                                for t in old_secondary_tags
-                            ),
-                            "new": "—",
-                        }
-                    )
+                    deprecated_now = True
 
-                changed_at = now()
-                submission.last_change_summary = {
-                    "changed_by": CHANGELOG_ACTOR_SUBMITTER,
-                    "changed_at": changed_at.isoformat(),
-                    "changes": changes,
-                }
-                submission.save(update_fields=["last_change_summary"])
-                SubmissionChangeLog.objects.create(
-                    submission=submission,
-                    changed_by=CHANGELOG_ACTOR_SUBMITTER,
-                    changed_at=changed_at,
-                    changes=changes,
-                )
-
+            if deprecated_now:
                 send_submission_notification.delay(
                     str(submission.id), event="status_changed"
                 )
@@ -541,7 +561,6 @@ class EditView(View):
             non_exempt_changed = actually_changed - exempt
 
             if non_exempt_changed or (not exempt and actually_changed):
-                updated.status = "submitted"
                 status_reset = True
 
         # When status is reset to "submitted", clear maturity tags to maintain
@@ -551,41 +570,62 @@ class EditView(View):
             updated.primary_maturity_tag = None
             updated.secondary_maturity_tags = []
 
-        updated.save()
-        form.save_m2m()
+        # Content, related rows, the status change and the audit entry are
+        # stored together or not at all.
+        try:
+            with transaction.atomic():
+                updated.save()
+                form.save_m2m()
+                if status_reset:
+                    set_status(
+                        updated,
+                        SubmissionStatus.SUBMITTED,
+                        actor=CHANGELOG_ACTOR_SUBMITTER,
+                    )
 
-        # Snapshot AFTER saving and compute the diff.
-        after_scalar = snapshot(updated)
-        # Re-fetch M2M from DB — form.save_m2m() has committed the new values.
-        after_m2m = snapshot_m2m(updated)
+                # Snapshot AFTER saving and compute the diff.
+                after_scalar = snapshot(updated)
+                # Re-fetch M2M from the database: save_m2m() has stored the new values.
+                after_m2m = snapshot_m2m(updated)
 
-        changes = build_diff(
-            {**before_scalar, **before_m2m}, {**after_scalar, **after_m2m}
-        )
-        # Strip false positives caused by form sanitization (bleach, NFC
-        # normalisation, whitespace stripping) running on fields the user
-        # never actually changed.  form.changed_data is Django's authoritative
-        # signal for what the submitter explicitly modified.
-        changes = filter_sanitization_artifacts(
-            changes,
-            form_changed_data=form.changed_data,
-            form_field_names=set(form.fields.keys()),
-        )
+                changes = build_diff(
+                    {**before_scalar, **before_m2m}, {**after_scalar, **after_m2m}
+                )
+                # Strip false positives caused by form sanitization (bleach, NFC
+                # normalisation, whitespace stripping) running on fields the user
+                # never actually changed.  form.changed_data is Django's
+                # authoritative signal for what the submitter explicitly modified.
+                changes = filter_sanitization_artifacts(
+                    changes,
+                    form_changed_data=form.changed_data,
+                    form_field_names=set(form.fields.keys()),
+                )
 
-        # Persist the diff on the submission so it's always visible in the admin.
-        if changes:
-            changed_at = now()
-            updated.last_change_summary = {
-                "changed_by": CHANGELOG_ACTOR_SUBMITTER,
-                "changed_at": changed_at.isoformat(),
-                "changes": changes,
-            }
-            updated.save(update_fields=["last_change_summary"])
-            SubmissionChangeLog.objects.create(
-                submission=updated,
-                changed_by=CHANGELOG_ACTOR_SUBMITTER,
-                changed_at=changed_at,
-                changes=changes,
+                # Persist the diff on the submission so it's always visible in
+                # the admin.
+                if changes:
+                    changed_at = now()
+                    updated.last_change_summary = {
+                        "changed_by": CHANGELOG_ACTOR_SUBMITTER,
+                        "changed_at": changed_at.isoformat(),
+                        "changes": changes,
+                    }
+                    updated.save(update_fields=["last_change_summary"])
+                    SubmissionChangeLog.objects.create(
+                        submission=updated,
+                        changed_by=CHANGELOG_ACTOR_SUBMITTER,
+                        changed_at=changed_at,
+                        changes=changes,
+                    )
+        except StatusChangedError:
+            # Reviewed by someone else since the page was loaded: nothing of
+            # this edit was stored.
+            form.add_error(None, StatusChangedError.message)
+            return render(
+                request,
+                self.template_name,
+                self._context(form, submission),
+                status=409,
             )
 
         logger.info(

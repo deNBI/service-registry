@@ -16,6 +16,7 @@ from django.test import Client
 from django.urls import reverse
 
 from apps.edam.models import EdamTerm
+from apps.submissions.lifecycle import set_status
 from apps.submissions.models import CHANGELOG_ACTOR_ADMIN_PREFIX, SubmissionChangeLog
 from tests.factories import (
     BioToolsFunctionFactory,
@@ -1075,9 +1076,10 @@ class TestAssignMaturityTagsAction:
         sub1 = ServiceSubmissionFactory(status="approved")
         sub2 = ServiceSubmissionFactory(status="approved")
         # Simulate status change between modal open and submit
-        sub2.status = "rejected"
         sub2.primary_maturity_tag = None
-        sub2.save(update_fields=["status", "primary_maturity_tag"])
+        set_status(
+            sub2, "rejected", actor="admin:test", extra_fields=["primary_maturity_tag"]
+        )
         resp = _ajax_post(
             admin_client,
             {

@@ -19,13 +19,14 @@ from django.contrib import admin, messages
 from django.forms.widgets import CheckboxSelectMultiple
 from django.contrib.admin.models import CHANGE, LogEntry
 from django.db import transaction
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.template import loader
 from django.utils import timezone
 from django.utils.html import escape, format_html, format_html_join, mark_safe
 
 from .csv_utils import csv_safe
 from .diff_utils import build_diff, snapshot, snapshot_m2m
+from .lifecycle import set_status
 from .markdown_render import markdown_enabled, render_submission_description
 from .models import (
     CHANGELOG_ACTOR_ADMIN_PREFIX,
@@ -34,10 +35,12 @@ from .models import (
     PRIMARY_MATURITY_TAG_CHOICES,
     SECONDARY_MATURITY_TAG_CHOICES,
     ServiceSubmission,
+    StatusChangedError,
     SubmissionAPIKey,
     SubmissionChangeLog,
     SubmissionDeletionAudit,
     SubmissionStatus,
+    SubmissionStatusEvent,
 )
 from .tasks import send_submission_notification
 from .widgets import MarkdownTextareaWidget
@@ -137,6 +140,28 @@ class ServiceSubmissionAdminForm(forms.ModelForm):
                 "if no standard license applies."
             )
         return cleaned
+
+
+class SubmissionStatusEventInline(admin.TabularInline):
+    model = SubmissionStatusEvent
+    extra = 0
+    can_delete = False
+    ordering = ("-changed_at", "-id")
+    fields = readonly_fields = (
+        "changed_at",
+        "from_status",
+        "to_status",
+        "changed_by",
+        "source",
+        "is_synthetic",
+    )
+    verbose_name_plural = "Status history"
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(ServiceSubmission)
@@ -308,7 +333,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             "admin/js/submissions_filter_sidebar.js",
         )
 
-    inlines = [SubmissionAPIKeyInline]
+    inlines = [SubmissionAPIKeyInline, SubmissionStatusEventInline]
 
     readonly_fields = (
         "id",
@@ -539,6 +564,15 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         return mark_safe(
             f'<div style="font-size:.85rem">{"".join(parts)}{footer}</div>'
         )
+
+    def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        try:
+            return super().changeform_view(request, object_id, form_url, extra_context)
+        except StatusChangedError:
+            # The status changed after this form loaded the service; the
+            # whole save was rolled back.
+            self.message_user(request, StatusChangedError.message, messages.ERROR)
+            return HttpResponseRedirect(request.get_full_path())
 
     # ── Diff capture — save_model / save_related / response_change ─────────────
 
@@ -1297,86 +1331,100 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
     def _change_status(self, request, queryset, new_status, label):
         updated = 0
         tags_cleared = 0
-        for sub in queryset:
-            if sub.status == new_status:
-                continue
-            old = sub.status
-            # Capture display values before mutation so the diff shows human labels.
-            old_status_display = sub.get_status_display() or old
-            old_primary_tag = sub.primary_maturity_tag
-            old_secondary_tags = list(sub.secondary_maturity_tags or [])
+        username = getattr(request.user, "username", "admin")
+        changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
+        for loaded in queryset:
+            # Each service is changed in one transaction. The row is read again
+            # under its lock: the changelist may have loaded it before another
+            # request changed it, and everything recorded below must describe
+            # the status and tags the service really had.
+            with transaction.atomic():
+                sub = (
+                    ServiceSubmission.objects.select_for_update()
+                    .filter(pk=loaded.pk)
+                    .first()
+                )
+                if sub is None:
+                    continue
+                old = sub.status
+                if old == new_status:
+                    continue
+                # Capture display values before mutation so the diff shows human labels.
+                old_status_display = sub.get_status_display() or old
+                old_primary_tag = sub.primary_maturity_tag
+                old_secondary_tags = list(sub.secondary_maturity_tags or [])
 
-            sub.status = new_status
-            update_fields = ["status"]
-            log_parts = [f"Status changed {old} → {new_status}"]
-            # Auto-clear maturity tags when moving away from approved — tags are
-            # only valid on approved services and should not persist after de-approval.
-            if new_status != SubmissionStatus.APPROVED and (
-                sub.primary_maturity_tag or sub.secondary_maturity_tags
-            ):
-                sub.primary_maturity_tag = None
-                sub.secondary_maturity_tags = []
-                update_fields += ["primary_maturity_tag", "secondary_maturity_tags"]
-                log_parts.append("maturity tags cleared")
-                tags_cleared += 1
+                log_parts = [f"Status changed {old} → {new_status}"]
+                # set_status clears maturity tags when moving away from approved;
+                # tags are only valid on approved services.
+                cleared_tags = new_status != SubmissionStatus.APPROVED and bool(
+                    old_primary_tag or old_secondary_tags
+                )
+                if cleared_tags:
+                    log_parts.append("maturity tags cleared")
 
-            # Build field-level diff for the audit log (mirrors build_diff format).
-            # Done before save() so last_change_summary is written atomically with
-            # the status mutation in a single round-trip.
-            new_status_display = sub.get_status_display() or new_status
-            changes = [
-                {
-                    "field": "status",
-                    "label": "Status",
-                    "old": old_status_display,
-                    "new": new_status_display,
-                }
-            ]
-            if old_primary_tag:
-                old_primary_display = str(
-                    dict(PRIMARY_MATURITY_TAG_CHOICES).get(
-                        old_primary_tag, old_primary_tag
+                # Build field-level diff for the audit log (mirrors build_diff format).
+                new_status_display = str(
+                    dict(SubmissionStatus.choices).get(new_status) or new_status
+                )
+                changes = [
+                    {
+                        "field": "status",
+                        "label": "Status",
+                        "old": old_status_display,
+                        "new": new_status_display,
+                    }
+                ]
+                if cleared_tags and old_primary_tag:
+                    old_primary_display = str(
+                        dict(PRIMARY_MATURITY_TAG_CHOICES).get(
+                            old_primary_tag, old_primary_tag
+                        )
                     )
+                    changes.append(
+                        {
+                            "field": "primary_maturity_tag",
+                            "label": "Primary Maturity Tag",
+                            "old": old_primary_display,
+                            "new": "—",
+                        }
+                    )
+                if cleared_tags and old_secondary_tags:
+                    old_secondary_display = ", ".join(
+                        str(dict(SECONDARY_MATURITY_TAG_CHOICES).get(t, t))
+                        for t in old_secondary_tags
+                    )
+                    changes.append(
+                        {
+                            "field": "secondary_maturity_tags",
+                            "label": "Secondary Maturity Tags",
+                            "old": old_secondary_display,
+                            "new": "—",
+                        }
+                    )
+
+                now = timezone.now()
+                sub.last_change_summary = {
+                    "changed_by": changed_by,
+                    "changed_at": now.isoformat(),
+                    "changes": changes,
+                }
+                # Status, cleared tags, summary, status event and change-log
+                # entry are stored together.
+                set_status(
+                    sub,
+                    new_status,
+                    actor=changed_by,
+                    extra_fields=["last_change_summary"],
                 )
-                changes.append(
-                    {
-                        "field": "primary_maturity_tag",
-                        "label": "Primary Maturity Tag",
-                        "old": old_primary_display,
-                        "new": "—",
-                    }
-                )
-            if old_secondary_tags:
-                old_secondary_display = ", ".join(
-                    str(dict(SECONDARY_MATURITY_TAG_CHOICES).get(t, t))
-                    for t in old_secondary_tags
-                )
-                changes.append(
-                    {
-                        "field": "secondary_maturity_tags",
-                        "label": "Secondary Maturity Tags",
-                        "old": old_secondary_display,
-                        "new": "—",
-                    }
+                SubmissionChangeLog.objects.create(
+                    submission=sub,
+                    changed_by=changed_by,
+                    changed_at=now,
+                    changes=changes,
                 )
 
-            username = getattr(request.user, "username", "admin")
-            changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
-            now = timezone.now()
-            sub.last_change_summary = {
-                "changed_by": changed_by,
-                "changed_at": now.isoformat(),
-                "changes": changes,
-            }
-            update_fields.append("last_change_summary")
-            sub.save(update_fields=update_fields)
-            SubmissionChangeLog.objects.create(
-                submission=sub,
-                changed_by=changed_by,
-                changed_at=now,
-                changes=changes,
-            )
-
+            tags_cleared += cleared_tags
             send_submission_notification.delay(str(sub.id), event="status_changed")
             self._log(request, sub, "; ".join(log_parts))
             updated += 1

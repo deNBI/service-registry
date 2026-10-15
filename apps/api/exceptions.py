@@ -1,9 +1,25 @@
 """Custom DRF exception handler — adds request_id to error responses."""
 
 import logging
+
+from rest_framework import status
+from rest_framework.exceptions import APIException
 from rest_framework.views import exception_handler
 
 logger = logging.getLogger(__name__)
+
+
+class StatusConflict(APIException):
+    """The submission's status or maturity tags changed while the request was
+    being handled (see StatusChangedError)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "The status of this submission changed while the request was being "
+        "handled (for example, it was reviewed). Nothing was stored. Fetch the "
+        "submission again and repeat the change."
+    )
+    default_code = "status_changed"
 
 
 def custom_exception_handler(exc, context):

@@ -7,6 +7,8 @@ class SubmissionsConfig(AppConfig):
     verbose_name = "Service Submissions"
 
     def ready(self) -> None:
+        from apps.submissions import signals  # noqa: F401  (connect receivers)
+
         # Validate SUBMISSION_NO_RESET_FIELDS at startup so any typos or
         # unrecognised field names are surfaced immediately in the server log
         # rather than silently at request time.

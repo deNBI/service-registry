@@ -88,3 +88,55 @@ def get_no_reset_fields() -> frozenset:
             )
 
     return frozenset(validated)
+
+
+def set_status(submission, new_status, *, actor: str, extra_fields=()) -> bool:
+    """
+    Change a submission's status and record the change. The only status writer.
+
+    Locks the row, reads the current status from the database (not from the
+    possibly stale instance), saves ``status`` plus ``extra_fields`` and writes
+    one SubmissionStatusEvent, all in one transaction. Maturity tags are only
+    valid on approved services, so any other status clears them. ``updated_at``
+    is only written when it is listed in ``extra_fields``.
+
+    When ``new_status`` is the stored status, nothing is changed and the result
+    is False; otherwise the result is True.
+    """
+    from django.db import transaction
+    from django.utils import timezone
+
+    from apps.submissions.models import (
+        ServiceSubmission,
+        SubmissionStatus,
+        SubmissionStatusEvent,
+    )
+
+    new_status = str(new_status)
+    if new_status not in SubmissionStatus.values:
+        raise ValueError(f"Unknown submission status: {new_status!r}")
+    with transaction.atomic():
+        current = (
+            ServiceSubmission.objects.select_for_update()
+            .values_list("status", flat=True)
+            .get(pk=submission.pk)
+        )
+        now = timezone.now()
+        if current == new_status:
+            submission.status = current
+            return False
+        submission.status = new_status
+        fields = ["status", *extra_fields]
+        if new_status != SubmissionStatus.APPROVED:
+            submission.primary_maturity_tag = None
+            submission.secondary_maturity_tags = []
+            fields += ["primary_maturity_tag", "secondary_maturity_tags"]
+        submission.save(update_fields=list(dict.fromkeys(fields)))
+        SubmissionStatusEvent.objects.create(
+            submission=submission,
+            from_status=current,
+            to_status=new_status,
+            changed_at=now,
+            changed_by=actor,
+        )
+    return True

@@ -23,7 +23,7 @@ import uuid
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator, validate_email
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -199,6 +199,31 @@ SECONDARY_MATURITY_TAG_CHOICES = [
 class KpiMonitoring(models.TextChoices):
     YES = "yes", _("Yes")
     PLANNED = "planned", _("Planned")
+
+
+class StatusChangedError(Exception):
+    """The submission's status or maturity tags changed, or the submission was
+    deleted, after this copy of it was loaded."""
+
+    message = (
+        "The status of this service changed after this page was loaded "
+        "(for example, it was reviewed). Nothing was saved. Reload the page to "
+        "see the current version, then make your changes again."
+    )
+
+
+# Written only by set_status, the maturity tag action, the admin change form
+# and the web edit (its full save clears the tags when it sends the service
+# back to review). A full save from an edit loaded earlier
+# must not write older values of these back.
+REVIEW_FIELDS = ("status", "primary_maturity_tag", "secondary_maturity_tags")
+
+
+def _review_value(name, value):
+    """Comparable form of a review field value."""
+    if name == "secondary_maturity_tags":
+        return list(value or [])
+    return value or None
 
 
 class ServiceSubmission(models.Model):
@@ -650,7 +675,74 @@ class ServiceSubmission(models.Model):
             value = getattr(self, field, "")
             if value:
                 setattr(self, field, _sanitise_text(value))
-        super().save(**kwargs)
+        update_fields = kwargs.get("update_fields")
+        if self._state.adding:
+            # The creation event (apps/submissions/signals.py) is written in
+            # the same transaction as the new row.
+            with transaction.atomic():
+                super().save(**kwargs)
+            self._remember_review_fields()
+            return
+        if update_fields is not None:
+            super().save(**kwargs)
+            self._remember_review_fields(update_fields)
+            return
+        with transaction.atomic():
+            self._check_review_fields_unchanged()
+            super().save(**kwargs)
+        self._remember_review_fields()
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        instance = super().from_db(db, field_names, values)
+        instance._remember_review_fields()
+        return instance
+
+    def refresh_from_db(self, using=None, fields=None, from_queryset=None):
+        super().refresh_from_db(using=using, fields=fields, from_queryset=from_queryset)
+        self._remember_review_fields(fields)
+
+    def _remember_review_fields(self, fields=None) -> None:
+        """Record the review field values this copy holds as stored (after a
+        load, a reload or a save of them). Deferred fields are recorded when
+        they are first read."""
+        deferred = self.get_deferred_fields()
+        remembered = dict(getattr(self, "_stored_review_values", {}))
+        for name in REVIEW_FIELDS:
+            if name in deferred or (fields is not None and name not in fields):
+                continue
+            remembered[name] = _review_value(name, getattr(self, name))
+        self._stored_review_values = remembered
+
+    def _check_review_fields_unchanged(self) -> None:
+        """Before a full save of an existing row, make sure status and maturity
+        tags in the database are still the values this copy was loaded with
+        (row locked until the transaction ends).
+
+        These fields are only written by the code paths named at
+        REVIEW_FIELDS. A full save comes from an edit that loaded the service
+        earlier; if a review changed them in the meantime, saving would put
+        the old values back, so the edit is refused.
+        """
+        stored = (
+            type(self)
+            .objects.select_for_update()
+            .filter(pk=self.pk)
+            .values(*REVIEW_FIELDS)
+            .first()
+        )
+        # A deleted row (stored is None) is refused too: saving would insert
+        # it again.
+        if stored is None:
+            raise StatusChangedError(self.pk)
+        # A full save never writes a new status: that is set_status's job.
+        if stored["status"] != self.status:
+            raise StatusChangedError(self.pk)
+        remembered = getattr(self, "_stored_review_values", {})
+        for name in REVIEW_FIELDS:
+            expected = remembered.get(name, _review_value(name, getattr(self, name)))
+            if _review_value(name, stored[name]) != expected:
+                raise StatusChangedError(self.pk)
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +795,60 @@ class SubmissionChangeLog(models.Model):
 
     def __str__(self) -> str:
         return f"{self.changed_by} @ {self.changed_at:%Y-%m-%d %H:%M} ({len(self.changes)} fields)"
+
+
+class SubmissionStatusEvent(models.Model):
+    """
+    Append-only history of status transitions, one row per change.
+
+    Written by the creation receiver (apps/submissions/signals.py) and by
+    apps.submissions.lifecycle.set_status; nothing else may write status.
+    Backfilled rows have source="backfill"; rows invented by the backfill to
+    close gaps in the history have is_synthetic=True and their dates are never
+    published.
+    """
+
+    SOURCE_LIVE = "live"
+    SOURCE_BACKFILL = "backfill"
+    SOURCE_CHOICES = [(SOURCE_LIVE, "Live"), (SOURCE_BACKFILL, "Backfill")]
+
+    submission = models.ForeignKey(
+        ServiceSubmission,
+        on_delete=models.CASCADE,
+        related_name="status_events",
+    )
+    from_status = models.CharField(
+        max_length=20,
+        choices=SubmissionStatus.choices,
+        null=True,
+        blank=True,
+        help_text="Status before the change (empty for the creation event).",
+    )
+    to_status = models.CharField(max_length=20, choices=SubmissionStatus.choices)
+    changed_at = models.DateTimeField(db_index=True)
+    changed_by = models.CharField(
+        max_length=200,
+        help_text='"submitter", "admin:<username>", "api:<key_label>" or "system".',
+    )
+    source = models.CharField(
+        max_length=10, choices=SOURCE_CHOICES, default=SOURCE_LIVE
+    )
+    is_synthetic = models.BooleanField(
+        default=False,
+        help_text="True only for rows invented to close gaps in the history.",
+    )
+
+    class Meta:
+        ordering = ["changed_at", "id"]
+        indexes = [models.Index(fields=["submission", "to_status"])]
+        verbose_name = "Status event"
+        verbose_name_plural = "Status history"
+
+    def __str__(self) -> str:
+        return (
+            f"{self.from_status or '-'} -> {self.to_status} "
+            f"@ {self.changed_at:%Y-%m-%d %H:%M}"
+        )
 
 
 # ---------------------------------------------------------------------------

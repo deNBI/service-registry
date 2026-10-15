@@ -1292,6 +1292,15 @@ class TestOpenAPIEndpoints:
         assert b"internal_contact_email" in content
         assert b"internal_contact_name" in content
 
+    def test_schema_documents_the_patch_conflict(self, api_client):
+        import json
+
+        resp = api_client.get("/api/schema/?format=json")
+        schema = json.loads(resp.content)
+        patch = schema["paths"]["/api/v1/submissions/{id}/"]["patch"]
+        assert set(patch["responses"]) >= {"200", "409"}
+        assert "Nothing was stored" in patch["responses"]["409"]["description"]
+
     def test_schema_documents_patch_warnings(self, api_client):
         """The PATCH response schema must document the optional `warnings` field
         (e.g. a rejected service_name change), not only the prose docs."""
@@ -2026,6 +2035,7 @@ class TestSubmissionMaturityTagsAPI:
         sub.refresh_from_db()
         assert sub.secondary_maturity_tags == []
 
+    @pytest.mark.allow_status_drift  # writes legacy data straight to the table
     def test_api_get_after_status_change_clears_tags(self):
         """GET a submission whose secondary_maturity_tags were cleared to None in the DB
         (simulating legacy data or a pre-fix _change_status write) must return 200,
