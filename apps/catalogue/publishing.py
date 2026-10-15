@@ -269,6 +269,24 @@ def on_status_change(submission, to_status, *, actor: str) -> None:
         set_publication_state(submission.pk, pending_update=False)
 
 
+def apply_caught_up_status(submission_id) -> None:
+    """Apply status changes that were recorded late to the published copy.
+
+    Status changes written without an event (for example by an earlier
+    release) are recorded as events when the next change finds them. The copy
+    follows the latest approval or deprecation decision in the history the way
+    it would have on time: approved makes it active, deprecated makes it
+    deprecated. Only the state moves. Content is never published here: the
+    working copy may already hold an edit that nobody reviewed. Nothing
+    happens without a decision in the history or without a published copy.
+    """
+    decision = latest_public_decisions([submission_id]).get(submission_id)
+    if decision == SubmissionStatus.APPROVED:
+        set_publication_state(submission_id, state=PublishedService.ACTIVE)
+    elif decision == SubmissionStatus.DEPRECATED:
+        set_publication_state(submission_id, state=PublishedService.DEPRECATED)
+
+
 def rebuild_from_revision(submission_id) -> PublishedService:
     """Recreate the read model from the latest revision (never the working copy)."""
     with transaction.atomic():

@@ -307,13 +307,44 @@ def test_second_run_after_new_submissions_only_adds_missing_history():
     assert len(_rows(second)) == 1
 
 
-def test_reverse_removes_backfill_rows_only():
+def test_reverse_removes_every_status_event():
+    """The forward step rebuilds the history from the change log, so the
+    reverse leaves nothing that would start mid-way."""
+    from apps.submissions.lifecycle import set_status
+
     sub = _legacy("approved")
     live = ServiceSubmissionFactory(biotools_url="")
+    set_status(live, "approved", actor="admin:jane")
     _run()
+    set_status(ServiceSubmission.objects.get(pk=sub.pk), "rejected", actor="admin:jane")
     MIGRATION.unbackfill(django_apps, None)
-    assert SubmissionStatusEvent.objects.filter(submission=sub).count() == 0
-    assert SubmissionStatusEvent.objects.filter(submission=live).count() == 1
+    assert SubmissionStatusEvent.objects.count() == 0
+
+
+def test_reverse_then_forward_rebuilds_one_chain_for_every_service():
+    from apps.submissions.lifecycle import set_status
+    from apps.submissions.selectors import status_history_broken, status_history_drift
+
+    old = _legacy("approved")
+    _log(old, "Submitted", "Approved", 5)
+    live = ServiceSubmissionFactory(biotools_url="")
+    set_status(live, "approved", actor="admin:jane")
+    _run()
+    set_status(ServiceSubmission.objects.get(pk=old.pk), "rejected", actor="admin:jane")
+    set_status(
+        ServiceSubmission.objects.get(pk=live.pk), "deprecated", actor="admin:jane"
+    )
+
+    MIGRATION.unbackfill(django_apps, None)
+    _run()
+
+    assert status_history_broken() == []
+    assert status_history_drift() == []
+    assert _rows(old)[:2] == [
+        (None, "submitted", "system", False),
+        ("submitted", "approved", "admin:jane", False),
+    ]
+    assert [r[1] for r in _rows(live)][-1] == "deprecated"
 
 
 def test_invariant_failure_raises_and_writes_nothing(monkeypatch):
@@ -384,13 +415,13 @@ def test_migration_runs_forwards_and_backwards_on_real_state():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_rolling_back_past_the_backfill_leaves_a_history_that_verify_reports():
-    """Going back past the backfill removes the reconstructed rows but keeps
-    the rows written since; applying it again skips services that have rows, so
-    their history no longer starts at the creation."""
+def test_rolling_back_past_the_backfill_and_applying_it_again_rebuilds_one_chain():
+    """Going back past the backfill removes every status event, the rows
+    written since included; applying it again rebuilds each history from the
+    change log, so the result is one chain that passes verify_published."""
     from io import StringIO
 
-    from django.core.management import CommandError, call_command
+    from django.core.management import call_command
 
     from apps.submissions.lifecycle import set_status
     from apps.submissions.selectors import status_history_broken
@@ -414,17 +445,21 @@ def test_rolling_back_past_the_backfill_leaves_a_history_that_verify_reports():
         assert status_history_broken() == []
 
         MigrationExecutor(connection).migrate(before)
+        assert SubmissionStatusEvent.objects.count() == 0
         MigrationExecutor(connection).migrate(leaf())
 
         assert [
-            (e.from_status, e.to_status)
+            (e.from_status, e.to_status, e.is_synthetic)
             for e in SubmissionStatusEvent.objects.filter(submission=sub)
-        ] == [("approved", "rejected")]
-        assert status_history_broken() == [str(sub.pk)]
+        ] == [
+            (None, "submitted", False),
+            ("submitted", "approved", False),
+            ("approved", "rejected", True),
+        ]
+        assert status_history_broken() == []
         out = StringIO()
-        with pytest.raises(CommandError, match="status_history_broken=1"):
-            call_command("verify_published", stdout=out)
-        assert str(sub.pk) in out.getvalue()
+        call_command("verify_published", stdout=out)
+        assert "0 problems" in out.getvalue()
     finally:
         MigrationExecutor(connection).migrate(leaf())
 

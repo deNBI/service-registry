@@ -1427,6 +1427,18 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     continue
                 old = sub.status
                 if old == new_status:
+                    # Nothing changes, but the status history may not show
+                    # this status (an earlier release set it): set_status then
+                    # records it and applies it to the published copy, which
+                    # counts as marked. Otherwise the row is skipped.
+                    if set_status(sub, new_status, actor=changed_by):
+                        self._log(
+                            request,
+                            sub,
+                            f"Status {new_status} confirmed; "
+                            "earlier status changes recorded",
+                        )
+                        updated += 1
                     continue
                 # Capture display values before mutation so the diff shows human labels.
                 old_status_display = sub.get_status_display() or old

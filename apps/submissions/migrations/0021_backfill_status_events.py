@@ -123,8 +123,15 @@ def backfill(apps, schema_editor):
 
 
 def unbackfill(apps, schema_editor):
+    """Remove every status event, not only the backfilled ones.
+
+    Events written since the forward step continue the backfilled rows; kept
+    alone they would start mid-way and leave a history that is not one chain.
+    The forward step rebuilds the history of every service from the change
+    log, so reversing and applying again gives a consistent history.
+    """
     Event = apps.get_model("submissions", "SubmissionStatusEvent")
-    Event.objects.filter(source="backfill").delete()
+    Event.objects.all().delete()
 
 
 class Migration(migrations.Migration):

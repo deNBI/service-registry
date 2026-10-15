@@ -26,6 +26,14 @@ def _run(name, *args):
     return out.getvalue()
 
 
+def _run_failing(name, *args):
+    """Output of a command that exits with a problem report."""
+    out = StringIO()
+    with pytest.raises(CommandError):
+        call_command(name, *args, stdout=out)
+    return out.getvalue()
+
+
 def _legacy_approved(**kw):
     """Approved before the publishing layer existed: no public copy yet."""
     return ServiceSubmissionFactory(status="approved", biotools_url="", **kw)
@@ -166,6 +174,30 @@ class TestPublishBackfill:
         _legacy_approved()
         _run("publish_backfill")
         assert "0 problems" in _run("verify_published")
+
+    def test_an_approval_written_without_an_event_is_recorded_first(self):
+        """An earlier release approved the service and recorded nothing."""
+        sub = ServiceSubmissionFactory(biotools_url="")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status="approved")
+        _run("publish_backfill")
+        assert PublishedService.objects.filter(pk=sub.pk).exists()
+        last = sub.status_events.order_by("-id").first()
+        assert (last.from_status, last.to_status) == ("submitted", "approved")
+        assert last.is_synthetic is True
+        assert "0 problems" in _run("verify_published")
+
+    def test_a_recorded_approval_gets_no_extra_event(self):
+        sub = _legacy_approved()
+        _run("publish_backfill")
+        assert not sub.status_events.filter(is_synthetic=True).exists()
+
+    def test_a_dry_run_records_nothing(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status="approved")
+        _run("publish_backfill", "--dry-run")
+        assert sub.status_events.count() == 1
+        # Leave the database consistent for the end-of-test history check.
+        _run("publish_backfill")
 
     @pytest.mark.parametrize("synthetic", [False, True])
     def test_deprecated_with_an_approval_is_published_as_deprecated(self, synthetic):
@@ -406,6 +438,423 @@ class TestPublishBackfill:
         _run("publish_backfill")
         assert PublishedService.objects.get(pk=real.pk).first_published_at is not None
         assert PublishedService.objects.get(pk=synthetic.pk).first_published_at is None
+
+
+class TestPublishBackfillRepairsPublishedServices:
+    """A service that already has a public copy but whose status history does
+    not end in its stored status (an earlier release changed it): the history
+    is recorded and the copy's state and pending flag follow it. Content is
+    never published here."""
+
+    @staticmethod
+    def _changed_by_the_earlier_release(status, service_name=None):
+        sub = _published()
+        changes = {"status": status}
+        if service_name:
+            changes["service_name"] = service_name
+        ServiceSubmission.objects.filter(pk=sub.pk).update(**changes)
+        return sub
+
+    def test_a_service_moved_back_to_review_is_marked_as_waiting(self):
+        sub = self._changed_by_the_earlier_release("submitted")
+        out = _run("publish_backfill")
+        copy = PublishedService.objects.get(pk=sub.pk)
+        assert (copy.state, copy.pending_update) == ("active", True)
+        assert [e.to_status for e in sub.status_events.order_by("id")] == [
+            "submitted",
+            "approved",
+            "submitted",
+        ]
+        assert "history repaired on published services: 1" in out
+        assert "0 problems" in _run("verify_published")
+
+    def test_a_service_deprecated_meanwhile_is_deprecated(self):
+        sub = self._changed_by_the_earlier_release("deprecated")
+        _run("publish_backfill")
+        copy = PublishedService.objects.get(pk=sub.pk)
+        assert (copy.state, copy.pending_update) == ("deprecated", False)
+        assert "0 problems" in _run("verify_published")
+
+    def test_a_deprecated_service_approved_again_is_active(self):
+        sub = _published()
+        set_status(sub, "deprecated", actor="admin:jane")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status="approved")
+        _run("publish_backfill")
+        copy = PublishedService.objects.get(pk=sub.pk)
+        assert (copy.state, copy.pending_update) == ("active", False)
+        assert "0 problems" in _run("verify_published")
+
+    def test_a_logged_change_is_recorded_as_a_real_event(self):
+        sub = _published()
+        at = sub.status_events.latest("id").changed_at + timedelta(days=1)
+        SubmissionChangeLog.objects.create(
+            submission=sub,
+            changed_by="admin:old-release",
+            changed_at=at,
+            changes=[
+                {
+                    "field": "status",
+                    "label": "Status",
+                    "old": "Approved",
+                    "new": "Deprecated",
+                }
+            ],
+        )
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status="deprecated")
+        _run("publish_backfill")
+        event = sub.status_events.latest("id")
+        assert (event.to_status, event.changed_by, event.is_synthetic) == (
+            "deprecated",
+            "admin:old-release",
+            False,
+        )
+
+    def test_content_changed_meanwhile_is_not_published(self):
+        sub = self._changed_by_the_earlier_release(
+            "submitted", service_name="Example Unreviewed Name"
+        )
+        revisions = PublishedRevision.objects.filter(submission=sub).count()
+        public_name = PublishedService.objects.get(pk=sub.pk).service_name
+        _run("publish_backfill")
+        assert PublishedRevision.objects.filter(submission=sub).count() == revisions
+        assert PublishedService.objects.get(pk=sub.pk).service_name == public_name
+
+    def test_the_ids_are_listed_and_nothing_else(self):
+        sub = self._changed_by_the_earlier_release(
+            "submitted", service_name="Example Distinctive Name"
+        )
+        out = _run("publish_backfill")
+        assert f"  {sub.pk}" in out
+        assert "Example Distinctive Name" not in out
+
+    def test_a_dry_run_counts_and_writes_nothing(self):
+        sub = self._changed_by_the_earlier_release("submitted")
+        out = _run("publish_backfill", "--dry-run")
+        assert "[dry run] history repaired on published services: 1" in out
+        assert sub.status_events.count() == 2
+        assert PublishedService.objects.get(pk=sub.pk).pending_update is False
+        _run("publish_backfill")  # leave the history consistent
+
+    def test_a_second_run_repairs_nothing(self):
+        self._changed_by_the_earlier_release("submitted")
+        _run("publish_backfill")
+        assert "history repaired on published services: 0" in _run("publish_backfill")
+
+    def test_published_services_with_a_complete_history_are_left_alone(self):
+        sub = _published()
+        events = sub.status_events.count()
+        out = _run("publish_backfill")
+        assert "history repaired on published services: 0" in out
+        assert sub.status_events.count() == events
+
+    def test_services_without_a_public_copy_are_not_counted_as_repaired(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status="approved")
+        out = _run("publish_backfill")
+        assert "published: 1" in out
+        assert "history repaired on published services: 0" in out
+
+    def test_a_service_changed_after_it_was_chosen_is_looked_at_again(
+        self, monkeypatch
+    ):
+        """The repair reads the service again under its lock: a change made
+        by another request after the candidates were chosen is not undone."""
+        from apps.catalogue.management.commands import publish_backfill as cmd
+
+        sub = self._changed_by_the_earlier_release("submitted")
+        real = cmd.Command._repair_one
+
+        def after_another_request(self, pk):
+            set_status(
+                ServiceSubmission.objects.get(pk=pk), "deprecated", actor="admin:jane"
+            )
+            return real(self, pk)
+
+        monkeypatch.setattr(cmd.Command, "_repair_one", after_another_request)
+        out = _run("publish_backfill")
+        assert "history repaired on published services: 0" in out
+        copy = PublishedService.objects.get(pk=sub.pk)
+        assert (copy.state, copy.pending_update) == ("deprecated", False)
+        assert "0 problems" in _run("verify_published")
+
+    def test_a_copy_withdrawn_after_the_service_was_chosen_is_not_counted(
+        self, monkeypatch
+    ):
+        from apps.catalogue.management.commands import publish_backfill as cmd
+
+        sub = self._changed_by_the_earlier_release("submitted")
+        real = cmd.Command._repair_one
+
+        def after_the_copy_is_gone(self, pk):
+            PublishedService.objects.filter(pk=pk).delete()
+            return real(self, pk)
+
+        monkeypatch.setattr(cmd.Command, "_repair_one", after_the_copy_is_gone)
+        out = _run("publish_backfill")
+        assert "history repaired on published services: 0" in out
+        assert sub.status_events.count() == 2
+        monkeypatch.undo()
+        # Leave the database consistent for the end-of-test history check.
+        set_status(ServiceSubmission.objects.get(pk=sub.pk), "submitted", actor="x")
+
+    def test_each_repaired_service_is_locked_before_it_is_changed(
+        self, locked_models, monkeypatch
+    ):
+        """The repair holds the lock itself, not only the state change it ends with."""
+        self._changed_by_the_earlier_release("submitted")
+        del locked_models[:]
+        monkeypatch.setattr(publishing, "set_publication_state", lambda *a, **kw: None)
+        _run("publish_backfill")
+        assert locked_models == ["ServiceSubmission"]
+
+
+class TestPublishBackfillRepublishesApprovedContent:
+    """An approved service whose public copy is behind its working copy: an
+    earlier release sent it to review after an edit and approved it again, and
+    this release saw neither change. An approved working copy is reviewed
+    content, so the backfill publishes it."""
+
+    @staticmethod
+    def _log_status(sub, old, new, hours):
+        SubmissionChangeLog.objects.create(
+            submission=sub,
+            changed_by="admin:old-release",
+            changed_at=sub.status_events.latest("id").changed_at
+            + timedelta(hours=hours),
+            changes=[{"field": "status", "label": "Status", "old": old, "new": new}],
+        )
+
+    def _round_trip_by_the_earlier_release(self):
+        """Approved and published, then edited, reviewed and approved again by
+        a release that wrote no status events. The status never changed in
+        the database, so the history still ends where the status is."""
+        sub = _published(host_institute="Example Original Institute")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            host_institute="Example Reviewed Institute"
+        )
+        self._log_status(sub, "Approved", "Submitted", 1)
+        self._log_status(sub, "Submitted", "Approved", 2)
+        return sub
+
+    def _approved_by_the_earlier_release_after_a_review_started_here(self):
+        sub = _published(host_institute="Example Original Institute")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            host_institute="Example Reviewed Institute"
+        )
+        set_status(ServiceSubmission.objects.get(pk=sub.pk), "submitted", actor="x")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status="approved")
+        return sub
+
+    @staticmethod
+    def _public_host(sub):
+        return PublishedService.objects.get(pk=sub.pk).host_institute
+
+    def test_the_approved_working_copy_is_published(self):
+        sub = self._round_trip_by_the_earlier_release()
+        assert "stale: 1" in _run_failing("verify_published")
+        out = _run("publish_backfill")
+        assert self._public_host(sub) == "Example Reviewed Institute"
+        revision = PublishedRevision.objects.filter(submission=sub).latest("number")
+        assert (revision.number, revision.reason, revision.actor) == (
+            2,
+            "backfill",
+            "system",
+        )
+        assert "approved content republished on published services: 1" in out
+        assert f"  {sub.pk}" in out
+        assert "0 problems" in _run("verify_published")
+
+    def test_the_copy_is_as_old_as_the_last_change_of_the_service(self):
+        sub = self._round_trip_by_the_earlier_release()
+        earlier = sub.updated_at - timedelta(days=30)
+        ServiceSubmission.objects.filter(pk=sub.pk).update(updated_at=earlier)
+        _run("publish_backfill")
+        assert PublishedService.objects.get(pk=sub.pk).public_modified_at == earlier
+
+    def test_the_copy_stays_active_and_is_not_pending(self):
+        sub = self._round_trip_by_the_earlier_release()
+        _run("publish_backfill")
+        copy = PublishedService.objects.get(pk=sub.pk)
+        assert (copy.state, copy.pending_update) == ("active", False)
+
+    def test_a_dry_run_counts_and_writes_nothing(self):
+        sub = self._round_trip_by_the_earlier_release()
+        out = _run("publish_backfill", "--dry-run")
+        assert "[dry run] approved content republished on published services: 1" in out
+        assert f"  {sub.pk}" in out
+        assert PublishedRevision.objects.filter(submission=sub).count() == 1
+        assert self._public_host(sub) == "Example Original Institute"
+
+    def test_a_second_run_republishes_nothing(self):
+        self._round_trip_by_the_earlier_release()
+        _run("publish_backfill")
+        out = _run("publish_backfill")
+        assert "approved content republished on published services: 0" in out
+
+    def test_a_copy_that_is_up_to_date_is_left_alone(self):
+        sub = _published()
+        out = _run("publish_backfill")
+        assert "approved content republished on published services: 0" in out
+        assert PublishedRevision.objects.filter(submission=sub).count() == 1
+
+    @pytest.mark.parametrize("args", [[], ["--dry-run"]])
+    def test_a_service_waiting_for_review_is_not_published(self, args):
+        sub = _published(host_institute="Example Original Institute")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            host_institute="Example Unreviewed Institute"
+        )
+        set_status(ServiceSubmission.objects.get(pk=sub.pk), "submitted", actor="x")
+        out = _run("publish_backfill", *args)
+        assert "approved content republished on published services: 0" in out
+        assert self._public_host(sub) == "Example Original Institute"
+
+    @pytest.mark.parametrize("args", [[], ["--dry-run"]])
+    def test_a_copy_with_several_revisions_is_compared_with_the_latest(self, args):
+        sub = _published(host_institute="Example Original Institute")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            host_institute="Example Second Institute"
+        )
+        publishing.publish(
+            ServiceSubmission.objects.get(pk=sub.pk),
+            reason="live_edit",
+            actor="submitter",
+        )
+        out = _run("publish_backfill", *args)
+        assert "approved content republished on published services: 0" in out
+        assert PublishedRevision.objects.filter(submission=sub).count() == 2
+
+    @pytest.mark.parametrize(
+        "flags",
+        [{"pending_update": True}, {"state": "deprecated"}],
+        ids=["pending", "deprecated"],
+    )
+    def test_the_republished_copy_gets_the_flags_of_an_approved_service(self, flags):
+        sub = self._round_trip_by_the_earlier_release()
+        PublishedService.objects.filter(pk=sub.pk).update(**flags)
+        _run("publish_backfill")
+        copy = PublishedService.objects.get(pk=sub.pk)
+        assert (copy.state, copy.pending_update) == ("active", False)
+        assert "0 problems" in _run("verify_published")
+
+    def test_a_service_without_a_public_copy_is_published_not_republished(self):
+        sub = _legacy_approved()
+        out = _run("publish_backfill")
+        assert "published: 1" in out
+        assert "approved content republished on published services: 0" in out
+        assert PublishedRevision.objects.filter(submission=sub).count() == 1
+
+    @pytest.mark.parametrize("approve_first", [True, False])
+    def test_the_order_of_an_approval_and_the_backfill_does_not_matter(
+        self, approve_first
+    ):
+        """An approval the history lacks gives the same published content
+        whether the admin approves again first or the backfill runs first."""
+        sub = self._approved_by_the_earlier_release_after_a_review_started_here()
+
+        def approve():
+            set_status(
+                ServiceSubmission.objects.get(pk=sub.pk), "approved", actor="admin:jane"
+            )
+
+        if approve_first:
+            approve()
+            _run("publish_backfill")
+        else:
+            _run("publish_backfill")
+            approve()
+        copy = PublishedService.objects.get(pk=sub.pk)
+        assert copy.host_institute == "Example Reviewed Institute"
+        assert (copy.state, copy.pending_update) == ("active", False)
+        assert "0 problems" in _run("verify_published")
+
+    @pytest.mark.parametrize("approve_first", [True, False])
+    def test_the_order_of_an_approval_and_the_backfill_after_a_round_trip(
+        self, approve_first
+    ):
+        """Approving a service whose history is complete changes nothing; the
+        backfill brings the copy up to date in either order."""
+        sub = self._round_trip_by_the_earlier_release()
+
+        def approve():
+            return set_status(
+                ServiceSubmission.objects.get(pk=sub.pk), "approved", actor="admin:jane"
+            )
+
+        if approve_first:
+            assert approve() is False
+            _run("publish_backfill")
+        else:
+            _run("publish_backfill")
+            assert approve() is False
+        assert self._public_host(sub) == "Example Reviewed Institute"
+        assert "0 problems" in _run("verify_published")
+
+    @staticmethod
+    def _run_with_change(monkeypatch, change):
+        """Run the command; ``change(pk)`` happens after the candidates were
+        chosen and before a service is looked at again for republishing."""
+        from apps.catalogue.management.commands import publish_backfill as cmd
+
+        real = cmd.Command._republish_one
+
+        def changed_meanwhile(self, pk):
+            change(pk)
+            return real(self, pk)
+
+        monkeypatch.setattr(cmd.Command, "_republish_one", changed_meanwhile)
+        return _run("publish_backfill")
+
+    def test_a_reset_during_the_run_is_not_published(self, monkeypatch):
+        """Another request edits the service and sends it to review after the
+        candidates were chosen: the new text is not reviewed."""
+        sub = self._round_trip_by_the_earlier_release()
+
+        def edit_and_reset(pk):
+            ServiceSubmission.objects.filter(pk=pk).update(
+                host_institute="Example Unreviewed Institute"
+            )
+            set_status(
+                ServiceSubmission.objects.get(pk=pk), "submitted", actor="submitter"
+            )
+
+        out = self._run_with_change(monkeypatch, edit_and_reset)
+        assert "approved content republished on published services: 0" in out
+        assert self._public_host(sub) == "Example Original Institute"
+
+    def test_a_service_published_meanwhile_is_not_counted(self, monkeypatch):
+        sub = self._round_trip_by_the_earlier_release()
+        out = self._run_with_change(
+            monkeypatch,
+            lambda pk: publishing.publish(
+                ServiceSubmission.objects.get(pk=pk), reason="live_edit", actor="x"
+            ),
+        )
+        assert "approved content republished on published services: 0" in out
+        assert PublishedRevision.objects.filter(submission=sub).count() == 2
+
+    def test_a_service_deleted_during_the_run_is_skipped(self, monkeypatch):
+        self._round_trip_by_the_earlier_release()
+        out = self._run_with_change(
+            monkeypatch, lambda pk: ServiceSubmission.objects.filter(pk=pk).delete()
+        )
+        assert "approved content republished on published services: 0" in out
+
+    def test_a_copy_withdrawn_during_the_run_is_not_republished(self, monkeypatch):
+        sub = self._round_trip_by_the_earlier_release()
+        out = self._run_with_change(
+            monkeypatch, lambda pk: PublishedService.objects.filter(pk=pk).delete()
+        )
+        assert "approved content republished on published services: 0" in out
+        assert PublishedRevision.objects.filter(submission=sub).count() == 1
+
+    def test_each_service_is_locked_before_it_is_checked(
+        self, locked_models, monkeypatch
+    ):
+        self._round_trip_by_the_earlier_release()
+        monkeypatch.setattr(publishing, "publish", lambda *a, **kw: None)
+        del locked_models[:]
+        _run("publish_backfill")
+        assert locked_models == ["ServiceSubmission"]
 
 
 class TestVerifyPublished:

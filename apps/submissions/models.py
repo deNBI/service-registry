@@ -841,10 +841,11 @@ class SubmissionStatusEvent(models.Model):
     Append-only history of status transitions, one row per change.
 
     Written by the creation receiver (apps/submissions/signals.py) and by
-    apps.submissions.lifecycle.set_status; nothing else may write status.
-    Backfilled rows have source="backfill"; rows invented by the backfill to
-    close gaps in the history have is_synthetic=True and their dates are never
-    published.
+    apps.submissions.lifecycle (set_status and record_unrecorded_status);
+    nothing else may write status. Backfilled rows have source="backfill";
+    rows invented to close gaps in the history (by the backfill, or later
+    for a status written without an event) have is_synthetic=True and their
+    dates are never published.
     """
 
     SOURCE_LIVE = "live"

@@ -2,20 +2,37 @@
 
 Catalogue migration 0002 publishes existing services at deploy with the same
 rules; this command repeats them on demand and prints the ids it leaves out.
+It also repairs published services whose status history does not end in their
+stored status (an earlier release changed it): the history is recorded and the
+copy's state and pending flag follow it. Content is never published by that
+repair.
+
+Finally it publishes the approved working copy of a published service whose
+public copy is behind it (an earlier release edited, reviewed and approved the
+service again without recording anything). An approved working copy is always
+reviewed content, because any other edit sends the service back to review, so
+publishing it follows the product rules.
 """
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.db.models import OuterRef, Subquery
+from django.utils import timezone
 
 from apps.catalogue import publishing
-from apps.catalogue.models import PublishedService
+from apps.catalogue.models import PublishedRevision, PublishedService
+from apps.submissions.lifecycle import record_unrecorded_status
 from apps.submissions.models import (
     ServiceSubmission,
     SubmissionChangeLog,
     SubmissionStatus,
     SubmissionStatusEvent,
 )
-from apps.submissions.selectors import was_ever_approved
+from apps.submissions.selectors import (
+    latest_public_decisions,
+    status_history_drift,
+    was_ever_approved,
+)
 
 # Change-log fields written together with a status change (tags are cleared
 # when a service leaves the approved state). They are not content edits.
@@ -74,7 +91,11 @@ class Command(BaseCommand):
         "services are published as deprecated only if they went straight from "
         "approved to deprecated without later content edits; the rest are "
         "listed by id for an admin decision. Services approved before but now "
-        "waiting for review are only counted. Safe to run again."
+        "waiting for review are only counted. Published services whose status "
+        "history lags behind their status get the history recorded and their "
+        "state and pending flag updated, without publishing content. Approved "
+        "services whose public copy is behind their working copy are published "
+        "again. Safe to run again."
     )
 
     def add_arguments(self, parser):
@@ -98,6 +119,9 @@ class Command(BaseCommand):
                 or _backfill_decision(sub) != "publish"
             ):
                 return False
+            # A status an earlier release wrote without an event is recorded
+            # first, so the published service has its approval in the history.
+            record_unrecorded_status(sub.pk, sub.status, timezone.now())
             # The copy is as old as the last change of the service.
             publishing.publish(
                 sub,
@@ -112,6 +136,91 @@ class Command(BaseCommand):
                     public_modified_at=sub.updated_at,
                 )
             return True
+
+    def _repair_one(self, pk) -> bool:
+        """Record the unrecorded history of one published service and set the
+        copy's state and pending flag; False when there is nothing to repair.
+
+        The row is locked and read again first, like in ``_publish_one``.
+        """
+        with transaction.atomic():
+            sub = ServiceSubmission.objects.select_for_update().filter(pk=pk).first()
+            if sub is None or not PublishedService.objects.filter(pk=pk).exists():
+                return False
+            if not record_unrecorded_status(pk, sub.status, timezone.now()):
+                return False
+            state, pending = publishing.expected_flags(
+                sub.status, latest_public_decisions([pk]).get(pk)
+            )
+            publishing.set_publication_state(pk, state=state, pending_update=pending)
+            return True
+
+    def _repair_published(self, dry_run) -> list[str]:
+        """Ids of the published services whose history was (or in a dry run,
+        would be) repaired."""
+        lagging = [pk for pk, _, _ in status_history_drift()]
+        candidates = (
+            PublishedService.objects.filter(pk__in=lagging)
+            .order_by("submission__submitted_at", "pk")
+            .values_list("pk", flat=True)
+        )
+        return [str(pk) for pk in candidates if dry_run or self._repair_one(pk)]
+
+    def _republish_one(self, pk) -> bool:
+        """Publish the working copy of one approved, published service; False
+        when it no longer qualifies.
+
+        The row is locked and read again first, like in ``_publish_one``: an
+        edit that sent the service back to review since the candidates were
+        chosen is not reviewed and stays private. ``publish`` compares the
+        working copy with the latest revision once more and writes nothing
+        when they match.
+        """
+        with transaction.atomic():
+            sub = ServiceSubmission.objects.select_for_update().filter(pk=pk).first()
+            if (
+                sub is None
+                or sub.status != SubmissionStatus.APPROVED
+                or not PublishedService.objects.filter(pk=pk).exists()
+            ):
+                return False
+            published = publishing.publish(
+                sub,
+                reason="backfill",
+                actor="system",
+                public_modified_at=sub.updated_at,
+            )
+            if published is None:
+                return False
+            publishing.set_publication_state(
+                pk,
+                state=PublishedService.ACTIVE,
+                pending_update=False,
+                public_modified_at=sub.updated_at,
+            )
+            return True
+
+    def _republish_approved(self, dry_run) -> list[str]:
+        """Ids of the approved published services whose copy was (or in a dry
+        run, would be) brought up to date."""
+        latest_hash = (
+            PublishedRevision.objects.filter(submission=OuterRef("pk"))
+            .order_by("-number")
+            .values("content_hash")[:1]
+        )
+        approved = (
+            ServiceSubmission.objects.filter(
+                status=SubmissionStatus.APPROVED, published__isnull=False
+            )
+            .annotate(latest_hash=Subquery(latest_hash))
+            .order_by("submitted_at", "pk")
+        )
+        behind = [
+            sub.pk
+            for sub in approved.iterator()
+            if sub.latest_hash != publishing.content_hash(publishing.build_content(sub))
+        ]
+        return [str(pk) for pk in behind if dry_run or self._republish_one(pk)]
 
     def handle(self, *args, dry_run=False, **options):
         published, listed, unconfirmed = 0, [], []
@@ -152,3 +261,16 @@ class Command(BaseCommand):
             f"{prefix}approved before, now waiting for review (not published): "
             f"{waiting}"
         )
+        repaired = self._repair_published(dry_run)
+        self.stdout.write(
+            f"{prefix}history repaired on published services: {len(repaired)}"
+        )
+        for pk in repaired:
+            self.stdout.write(f"  {pk}")
+        republished = self._republish_approved(dry_run)
+        self.stdout.write(
+            f"{prefix}approved content republished on published services: "
+            f"{len(republished)}"
+        )
+        for pk in republished:
+            self.stdout.write(f"  {pk}")
