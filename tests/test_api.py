@@ -2026,6 +2026,7 @@ class TestSubmissionMaturityTagsAPI:
         sub.refresh_from_db()
         assert sub.secondary_maturity_tags == []
 
+    @pytest.mark.allow_status_drift  # writes legacy data straight to the table
     def test_api_get_after_status_change_clears_tags(self):
         """GET a submission whose secondary_maturity_tags were cleared to None in the DB
         (simulating legacy data or a pre-fix _change_status write) must return 200,

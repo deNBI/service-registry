@@ -10,6 +10,7 @@ icon: material/database
 ServiceSubmission (UUID PK)
 ├── SubmissionAPIKey (FK → submission, CASCADE)         — one-to-many
 ├── SubmissionChangeLog (FK → submission, CASCADE)      — one-to-many
+├── SubmissionStatusEvent (FK → submission, CASCADE)    : one-to-many
 ├── BioToolsRecord (OneToOne → submission, CASCADE)     — one-to-one
 │   └── BioToolsFunction (FK → record, CASCADE)        — one-to-many
 ├── service_categories → ServiceCategory               — many-to-many
@@ -31,7 +32,7 @@ EdamTerm
 
 | Model(s) | File |
 |---|---|
-| `ServiceSubmission`, `SubmissionChangeLog`, `SubmissionAPIKey`, `SubmissionDeletionAudit` | `apps/submissions/models.py` |
+| `ServiceSubmission`, `SubmissionChangeLog`, `SubmissionStatusEvent`, `SubmissionAPIKey`, `SubmissionDeletionAudit` | `apps/submissions/models.py` |
 | `ServiceCategory`, `ServiceCenter`, `PrincipalInvestigator` | `apps/registry/models.py` |
 | `EdamTerm` | `apps/edam/models.py` |
 | `BioToolsRecord`, `BioToolsFunction` | `apps/biotools/models.py` |
@@ -188,6 +189,27 @@ Append-only audit trail of field-level changes. One row per edit event regardles
 - Captures edits from: submitter web form (`"submitter"`), admin backend (`"admin:<username>"`), and API PATCH (`"api:<key_label>"`).
 
 For a full discussion of the audit logging system, see [Admin Guide → Audit Logging](admin-guide.md#audit-logging).
+
+---
+
+## `submissions_submissionstatusevent`
+
+**Source:** `apps/submissions/models.py` → `SubmissionStatusEvent`
+
+Append-only history of status changes, one row per change. The creation of a service records a first row without a from-status; every later row is written by `set_status` in `apps/submissions/lifecycle.py`, the only code that changes a status.
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | bigint | PK (auto-increment) | |
+| `submission_id` | UUID | FK → `ServiceSubmission`, CASCADE | Index on (`submission_id`, `to_status`) |
+| `from_status` | varchar(20) | NULL | Status before the change; empty for the creation row |
+| `to_status` | varchar(20) | | Status after the change |
+| `changed_at` | timestamptz | indexed | |
+| `changed_by` | varchar(200) | | `"submitter"`, `"admin:<username>"`, `"api:<key_label>"` or `"system"` |
+| `source` | varchar(10) | default `live` | `backfill` for rows rebuilt from the change log by a data migration |
+| `is_synthetic` | boolean | default false | True only for rows invented to close gaps in a rebuilt history |
+
+Ordered by `changed_at`, then `id`. Shown read-only under "Status history" in the admin change view.
 
 ---
 

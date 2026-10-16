@@ -41,7 +41,9 @@ from .models import (
     SubmissionChangeLog,
     SubmissionDeletionAudit,
     SubmissionStatus,
+    SubmissionStatusEvent,
 )
+from .lifecycle import set_status
 from .tasks import send_submission_notification
 from .widgets import MarkdownTextareaWidget
 
@@ -105,6 +107,30 @@ class SubmissionAPIKeyInline(admin.TabularInline):
         return request.user.has_perm(
             "submissions.view_submissionapikey"
         ) or request.user.has_perm("submissions.manage_apikeys")
+
+
+class SubmissionStatusEventInline(admin.TabularInline):
+    """Read-only status history; events are written by set_status only."""
+
+    model = SubmissionStatusEvent
+    extra = 0
+    can_delete = False
+    ordering = ("-changed_at", "-id")
+    fields = readonly_fields = (
+        "changed_at",
+        "from_status",
+        "to_status",
+        "changed_by",
+        "source",
+        "is_synthetic",
+    )
+    verbose_name_plural = "Status history"
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -318,7 +344,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             "admin/js/submissions_filter_sidebar.js",
         )
 
-    inlines = [SubmissionAPIKeyInline]
+    inlines = [SubmissionAPIKeyInline, SubmissionStatusEventInline]
 
     readonly_fields = (
         "id",
@@ -1352,24 +1378,23 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 old_primary_tag = sub.primary_maturity_tag
                 old_secondary_tags = list(sub.secondary_maturity_tags or [])
 
-                sub.status = new_status
-                update_fields = ["status"]
                 log_parts = [f"Status changed {old} → {new_status}"]
-                # Auto-clear maturity tags when moving away from approved — tags are
-                # only valid on approved services and should not persist after de-approval.
-                if new_status != SubmissionStatus.APPROVED and (
-                    sub.primary_maturity_tag or sub.secondary_maturity_tags
-                ):
-                    sub.primary_maturity_tag = None
-                    sub.secondary_maturity_tags = []
-                    update_fields += ["primary_maturity_tag", "secondary_maturity_tags"]
+                # set_status clears maturity tags when moving away from approved;
+                # tags are only valid on approved services and should not persist
+                # after de-approval.
+                cleared_tags = new_status != SubmissionStatus.APPROVED and bool(
+                    old_primary_tag or old_secondary_tags
+                )
+                if cleared_tags:
                     log_parts.append("maturity tags cleared")
                     tags_cleared += 1
 
                 # Build field-level diff for the audit log (mirrors build_diff format).
-                # Done before save() so last_change_summary is written atomically with
-                # the status mutation in a single round-trip.
-                new_status_display = sub.get_status_display() or new_status
+                # Done before the write so last_change_summary is stored with the
+                # status change in a single save.
+                new_status_display = str(
+                    dict(SubmissionStatus.choices).get(new_status) or new_status
+                )
                 changes = [
                     {
                         "field": "status",
@@ -1378,7 +1403,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                         "new": new_status_display,
                     }
                 ]
-                if old_primary_tag:
+                if cleared_tags and old_primary_tag:
                     old_primary_display = str(
                         dict(PRIMARY_MATURITY_TAG_CHOICES).get(
                             old_primary_tag, old_primary_tag
@@ -1392,7 +1417,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                             "new": "—",
                         }
                     )
-                if old_secondary_tags:
+                if cleared_tags and old_secondary_tags:
                     old_secondary_display = ", ".join(
                         str(dict(SECONDARY_MATURITY_TAG_CHOICES).get(t, t))
                         for t in old_secondary_tags
@@ -1414,8 +1439,12 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     "changed_at": now.isoformat(),
                     "changes": changes,
                 }
-                update_fields.append("last_change_summary")
-                sub.save(update_fields=update_fields)
+                set_status(
+                    sub,
+                    new_status,
+                    actor=changed_by,
+                    extra_fields=["last_change_summary"],
+                )
                 SubmissionChangeLog.objects.create(
                     submission=sub,
                     changed_by=changed_by,
