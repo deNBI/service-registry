@@ -154,6 +154,18 @@ class ServiceSubmissionFactory(DjangoModelFactory):
         else:
             self.responsible_pis.add(PIFactory())
 
+    # Declared last so the related rows exist before the public copy is built.
+    @factory.post_generation
+    def published(self, create, extracted, **kwargs):
+        """published=True creates the public copy (the status must be approved)."""
+        if not create or not extracted:
+            return
+        if self.status != "approved":
+            raise ValueError("published=True needs status='approved'")
+        from apps.catalogue.publishing import publish
+
+        publish(self, reason="approval", actor="system")
+
 
 # ---------------------------------------------------------------------------
 # BioToolsRecord factory
