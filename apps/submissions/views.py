@@ -586,7 +586,9 @@ class EditView(View):
         # An approved service goes back to review for a real change, unless
         # SUBMISSION_NO_RESET_FIELDS is configured (see site.toml [submission])
         # and every changed field is in that exempt set: then the approved
-        # status is preserved and no re-review cycle is triggered.
+        # status is preserved and no re-review cycle is triggered. A rejected
+        # service goes back to submitted for any real change, exempt fields
+        # included: the owner has answered the rejection.
         #
         # We determine "changed" using two complementary signals:
         #
@@ -604,7 +606,7 @@ class EditView(View):
         #   is reliable here.  The M2M rows are not committed until save_m2m()
         #   so a prospective snapshot cannot be used.
         status_reset = False
-        if updated.status == SubmissionStatus.APPROVED:
+        if updated.status in (SubmissionStatus.APPROVED, SubmissionStatus.REJECTED):
             from apps.submissions.lifecycle import get_no_reset_fields
             from apps.submissions.diff_utils import DIFFABLE_M2M
 
@@ -624,7 +626,9 @@ class EditView(View):
             actually_changed = scalar_changed | m2m_changed
             non_exempt_changed = actually_changed - exempt
 
-            if non_exempt_changed or (not exempt and actually_changed):
+            if updated.status == SubmissionStatus.REJECTED:
+                status_reset = bool(actually_changed)
+            elif non_exempt_changed or (not exempt and actually_changed):
                 status_reset = True
 
         # Content, related rows, the status change and the audit entry are

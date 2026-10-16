@@ -469,6 +469,7 @@ class SubmissionViewSet(
             serializer = self.get_serializer(instance, data=request.data, partial=True)
             serializer.is_valid(raise_exception=True)
             was_approved = instance.status == SubmissionStatus.APPROVED
+            was_rejected = instance.status == SubmissionStatus.REJECTED
             before = {**before_scalar, **before_m2m}
 
             serializer.save()
@@ -481,14 +482,15 @@ class SubmissionViewSet(
 
             # Same rule as the web form (EditView): an approved submission goes
             # back to review only when a non-exempt field really changed, or
-            # when no no_reset_fields are configured and anything changed.
+            # when no no_reset_fields are configured and anything changed. A
+            # rejected submission goes back to submitted for any real change.
             status_reset = False
-            if changes and was_approved:
+            if changes and (was_approved or was_rejected):
                 from apps.submissions.lifecycle import get_no_reset_fields
 
                 exempt = get_no_reset_fields()
                 changed = {c["field"] for c in changes}
-                if (changed - exempt) or not exempt:
+                if was_rejected or (changed - exempt) or not exempt:
                     set_status(
                         instance,
                         SubmissionStatus.SUBMITTED,
