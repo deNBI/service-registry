@@ -429,6 +429,7 @@ The list view hides the description toggle when nothing renders (for example an 
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `snapshot(instance)`        | Returns a `dict` of current scalar field values; **must be called before** `form.is_valid()` or admin `save_model()` |
 | `snapshot_m2m(instance)`    | Returns a `dict` of current M2M field values as sorted lists of strings                                              |
+| `snapshot_links(instance)`  | Returns the M2M links and the service centre by primary key (keys end in `#id`), so `build_diff()` can tell apart rows that share a name |
 | `build_diff(before, after)` | Compares two snapshots; returns `[{field, label, old, new}]` for changed fields only                                 |
 | `filter_sanitization_artifacts(changes, form_changed_data, form_field_names)` | Removes false-positive diff entries where form sanitization (bleach, NFC normalisation, whitespace stripping) produced a raw difference that resolved to the same stored value. Always applied after `build_diff()` in the web-form edit path. |
 
@@ -458,11 +459,11 @@ DRF serializers do **not** modify `self.instance` during `is_valid()`, so the sn
 
 ### Sanitization artifacts
 
-Form `clean_*` methods (bleach, `unicodedata.normalize`, `.strip()`) may produce a cleaned value identical to the stored value even when the raw POST string differed slightly (trailing spaces, NFC variants). `build_diff()` compares snapshots of the **stored model value** before and after save, so such non-changes do not appear in the diff.
+Form `clean_*` methods (bleach, `unicodedata.normalize`, `.strip()`) may produce a cleaned value identical to the stored value even when the raw POST string differed slightly (trailing spaces, NFC variants). `build_diff()` compares snapshots of the **stored model value** before and after save, with text normalized as `save()` does (line endings, NFC, surrounding whitespace), so such non-changes do not appear in the diff.
 
 `filter_sanitization_artifacts()` provides a second layer: it removes any diff entry where the field is managed by the form **and** is absent from `form.changed_data`. The web form passes it to `apply_edit()` as `refine_changes`, so it shapes what is logged before `last_change_summary` is persisted.
 
-**Status reset and sanitization:** `apply_edit()` decides the reset from the diff of the saved values, not from the filtered log entries. A value that only differs from the stored one because `save()` cleans it (whitespace, NFC) is therefore not a change, and the web form's `refine_changes` filter never hides a real change from the reset decision.
+**Status reset and sanitization:** `apply_edit()` decides the reset from the diff of the saved values, not from the filtered log entries. A value that only differs from the stored one in line endings, Unicode form or surrounding whitespace is therefore not a change, and the web form's `refine_changes` filter never hides a real change from the reset decision.
 
 ---
 
@@ -635,7 +636,7 @@ When a submitter edits an **approved** service via the web form or REST API, the
 
 ### One edit function
 
-`apply_edit()` in `apps/submissions/edits.py` is the only code that stores an edit. The owner web form (`EditView.post`), the API PATCH (`partial_update`) and the admin change form (`save_model` / `save_related`) validate their input, take `capture(instance)` before it is applied, and call it with:
+`apply_edit()` in `apps/submissions/edits.py` is the only code that stores a form, API or change-form edit. (The maturity-tag bulk action and the restore-published action also write the service; they are not edits of its content by an owner or an admin form.) The owner web form (`EditView.post`), the API PATCH (`partial_update`) and the admin change form (`save_model` / `save_related`) validate their input, take `capture(instance)` before it is applied, and call it with:
 
 - `store`: a callable that saves the content and the links (the web view saves the instance and calls `form.save_m2m()`, the API passes `serializer.save`, the admin saves the instance and runs the standard `save_related`). The caller has put the version its form was loaded with on the instance, so a stale save raises `EditConflict` and undoes the edit.
 - `actor`, `by_owner` (an admin save never resets the status) and, for the web form, `refine_changes`.
@@ -646,7 +647,9 @@ The admin status buttons, bulk actions and the owner's Deprecate button are stat
 
 ### How "changed" is determined
 
-The diff of the values before the edit (`capture`) and after `store` ran, scalar fields and M2M links alike. Values are compared as saved, so sanitization artifacts (whitespace, NFC normalization, line endings) do not produce false positives.
+The diff of the values before the edit (`capture`) and after `store` ran, scalar fields and M2M links alike. Text is compared the way `save()` stores it (LF line endings, NFC, surrounding whitespace removed), so text that only differs in those respects, including legacy values written without `save()`, is not a change.
+
+Linked rows (the M2M fields and the service centre) are compared by primary key, not by name. Swapping a row for another one with the same name, for example two PIs called "Doe, John" at different institutes, is a change: it counts for the status reset and is logged with the institute (or a short id) added to the name so the two entries can be told apart.
 
 ### `no_reset_fields` exemption
 
