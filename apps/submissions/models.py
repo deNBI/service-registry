@@ -230,6 +230,8 @@ class ServiceSubmissionQuerySet(models.QuerySet):
             )
             return super().delete()
 
+    delete.queryset_only = True
+
 
 class ServiceSubmission(models.Model):
     """

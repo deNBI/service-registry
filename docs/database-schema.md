@@ -237,6 +237,11 @@ The published copy of an approved service. Nothing public reads it yet.
 | `first_published_at` | timestamptz | First real approval; NULL when only invented approvals exist |
 | public fields | as in the working copy | `service_center` is PROTECT; the many-to-many fields link the same reference rows |
 
+Rules:
+
+- An approval publishes the working copy. A change that leaves a published service approved (owner edit that needs no review, API edit, admin change form, maturity tag action) publishes again when a public field changed.
+- Other status changes only set `state` and `pending_update`; a service that goes back to review, or is rejected, keeps its last approved version public. Deprecation sets `state`; the maturity tags of the working copy are cleared, and the published copy keeps the tags of the last approved version until the service is approved again.
+
 ---
 
 ## `submissions_submissiondeletionaudit`
