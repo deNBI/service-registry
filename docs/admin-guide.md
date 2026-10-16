@@ -42,6 +42,7 @@ with access to that admin section.
 | ----------------------------- | ----------- |
 | Service Submissions           | View        |
 | Submission Change Logs        | View        |
+| Submission status history     | View        |
 | Submission API Keys           | View        |
 | Service Categories            | View        |
 | Service Centres               | View        |
@@ -174,7 +175,7 @@ Specifically: the **Status Actions** panel is shown to any user who has **either
 `change_servicesubmission` **or** `approve_servicesubmission`. A user with only
 `change_servicesubmission` will see the buttons, but the Approve and Reject
 buttons are still blocked by the inner `_require_perm` guard if that permission
-is absent — only Under Review, Deprecate, and Back to Submitted will succeed.
+is absent: only Under Review, Deprecate, and Back to Submitted will succeed.
 The **Key Management** panel is shown only to users with `manage_apikeys`.
 
 ---
@@ -264,7 +265,7 @@ Fix flagged rows by editing the description in this change form. **Admin edits d
 - **Admin notification** — full internal report with a direct link to the admin change view sent to the registry coordination address.
 - **Submitter confirmation** — a brief receipt confirmation ("We have received your service registration") sent to `internal_contact_email`. Contains no admin URL or internal details.
 
-**Individual status change (change view):** Open a submission. The **Status & Metadata** fieldset contains a row of action buttons — the current status is highlighted and its button is disabled. Only buttons for [allowed status changes](#allowed-status-changes) are shown. Click one to trigger the transition:
+**Individual status change (change view):** Open a submission. The **Status & Metadata** fieldset contains a row of action buttons. The current status is highlighted and its button is disabled. Only buttons for [allowed status changes](#allowed-status-changes) are shown. Click one to trigger the transition:
 
 | Button                      | Required permission         | Result                                 |
 | --------------------------- | --------------------------- | -------------------------------------- |
@@ -313,15 +314,15 @@ An approved service is withdrawn by deprecating it; it cannot be rejected. Nothi
     The change view lists every status change of a submission under **Status history**: when it happened, the old and new status, and who made it (the submitter, an admin user, an API key or the system). The list is read-only. Entries for services registered before the history existed were rebuilt from the change log. Rows marked as synthetic close gaps, for those services or for status changes made without a history entry, and their dates are not real change dates. A status bulk action on services already in the target status records such missing history and changes nothing else.
 
 !!! note "Maturity tags are cleared only on deprecation"
-    Both individual buttons and bulk actions call the same underlying `_change_status` function, which clears maturity tags when a service is deprecated and keeps them for every other status. See [Assigning Maturity Tags](#assigning-maturity-tags) for details.
+    `set_status` writes every status change, so deprecation clears maturity tags whether it comes from a button, a bulk action or the owner's Deprecate button. Every other status change keeps them. See [Assigning Maturity Tags](#assigning-maturity-tags) for details.
 
 !!! note "Deprecation is owner-reversible only by admins"
-Service owners can mark their own service as deprecated via the edit form. Only admins can reverse a deprecation. An admin can move a deprecated service back to `Submitted` for re-review (**Back to Submitted**), or straight to `Approved` (**Approve**), from the change view or with a bulk action.
+    Service owners can mark their own service as deprecated via the edit form. Only admins can reverse a deprecation. An admin can move a deprecated service back to `Submitted` for re-review (**Back to Submitted**), or straight to `Approved` (**Approve**), from the change view or with a bulk action.
 
 !!! note "Draft status"
-`draft` is defined in the data model but is not set by the submission form
-or any automated workflow, and no status change leads into it. A legacy row
-in `draft` can move to any other status.
+    `draft` is defined in the data model but is not set by the submission form
+    or any automated workflow, and no status change leads into it. A legacy row
+    in `draft` can move to any other status.
 
 #### Submitter edits on approved services
 

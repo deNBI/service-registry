@@ -4,7 +4,7 @@ Submissions Admin
 Features:
   - Rich list view with colour-coded status badges and key metrics
   - Custom change view with API-key management panel
-  - Bulk actions: approve, reject, mark-under-review, deprecate, undeprecate, CSV/JSON export
+  - Bulk actions: approve, reject, mark-under-review, deprecate, back to submitted, CSV/JSON export
   - Status transitions fire email notifications via Celery
   - All admin key operations logged to Django LogEntry
 """

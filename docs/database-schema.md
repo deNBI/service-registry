@@ -458,13 +458,13 @@ These are automatically managed by Django. They have no extra columns.
 
 ## Status Lifecycle
 
-**Source:** `apps/submissions/models.py` → `SubmissionStatus` (line 130) · status reset on approved-submission edit enforced in `apps/submissions/views.py`
+**Source:** `apps/submissions/models.py` → `SubmissionStatus` (line 130) · owner-edit resets applied in `apps/submissions/views.py` (web form) and `apps/api/views.py` (API)
 
 The status values are `draft`, `submitted`, `under_review`, `approved`, `rejected` and `deprecated`. A new registration starts as `submitted`. `draft` is a legacy value that nothing sets and no change leads into.
 
 Which status can change to which is fixed by one table, listed under [Allowed status changes](admin-guide.md#allowed-status-changes) in the Admin Guide. Every change is recorded in the status history.
 
-If a submitter edits an **approved** submission, the status resets to `submitted` for re-review.
+If a submitter edits an **approved** submission (web form or API) with a non-exempt change, the status resets to `submitted` for re-review. A **rejected** submission resets on any real change. See [Submitter edits on rejected services](admin-guide.md#submitter-edits-on-rejected-services).
 
 ---
 
