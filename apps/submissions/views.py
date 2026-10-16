@@ -473,9 +473,8 @@ class EditView(View):
                     old_primary_tag = submission.primary_maturity_tag
                     old_secondary_tags = list(submission.secondary_maturity_tags or [])
 
-                    # Maturity tags are only valid on approved services; set_status
-                    # clears them so the service doesn't get stuck in an invalid
-                    # state.
+                    # A deprecated service has no maturity tags; set_status
+                    # clears them.
                     set_status(
                         submission,
                         SubmissionStatus.DEPRECATED,
@@ -584,9 +583,10 @@ class EditView(View):
 
         # Determine whether this edit should reset status back to "submitted".
         #
-        # If SUBMISSION_NO_RESET_FIELDS is configured (see site.toml [submission])
-        # and every changed field is in that exempt set, the approved status is
-        # preserved — no re-review cycle is triggered.
+        # An approved service goes back to review for a real change, unless
+        # SUBMISSION_NO_RESET_FIELDS is configured (see site.toml [submission])
+        # and every changed field is in that exempt set: then the approved
+        # status is preserved and no re-review cycle is triggered.
         #
         # We determine "changed" using two complementary signals:
         #
@@ -604,7 +604,7 @@ class EditView(View):
         #   is reliable here.  The M2M rows are not committed until save_m2m()
         #   so a prospective snapshot cannot be used.
         status_reset = False
-        if updated.status == "approved":
+        if updated.status == SubmissionStatus.APPROVED:
             from apps.submissions.lifecycle import get_no_reset_fields
             from apps.submissions.diff_utils import DIFFABLE_M2M
 
@@ -630,8 +630,7 @@ class EditView(View):
         # Content, related rows, the status change and the audit entry are
         # stored together, and only if the service is still at the version the
         # form was loaded with (save() checks). A failed audit write undoes the
-        # whole edit. set_status clears the maturity tags (they are only valid
-        # on approved services); an exempt-only edit leaves them alone.
+        # whole edit. The maturity tags are kept.
         use_loaded_version(updated, request.POST)
         try:
             with transaction.atomic():

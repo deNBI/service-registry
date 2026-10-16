@@ -147,12 +147,12 @@ def test_real_description_change_resets_and_is_logged(exempt, notify, no_reset):
     new = "A genuinely different description that is long enough to be valid."
     _patch(sub, {"service_description": new})
     assert sub.status == "submitted"
-    assert sub.primary_maturity_tag is None
-    assert sub.secondary_maturity_tags == []
+    assert sub.primary_maturity_tag == "mature"
+    assert sub.secondary_maturity_tags == ["unstable"]
     assert sub.service_description == new
     logged = _logged_fields(sub)
-    # Same entries as before the change: the content field plus the reset.
-    assert {"service_description", "status", "primary_maturity_tag"} <= set(logged)
+    # The content field plus the reset; the tags are kept, so not logged.
+    assert set(logged) == {"service_description", "status"}
     assert {c["field"] for c in sub.last_change_summary["changes"]} == set(logged)
     assert notify.call_args.kwargs["status_reset"] is True
 

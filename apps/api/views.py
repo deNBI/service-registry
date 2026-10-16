@@ -468,7 +468,7 @@ class SubmissionViewSet(
 
             serializer = self.get_serializer(instance, data=request.data, partial=True)
             serializer.is_valid(raise_exception=True)
-            was_approved = instance.status == "approved"
+            was_approved = instance.status == SubmissionStatus.APPROVED
             before = {**before_scalar, **before_m2m}
 
             serializer.save()
@@ -483,14 +483,12 @@ class SubmissionViewSet(
             # back to review only when a non-exempt field really changed, or
             # when no no_reset_fields are configured and anything changed.
             status_reset = False
-            if was_approved and changes:
+            if changes and was_approved:
                 from apps.submissions.lifecycle import get_no_reset_fields
 
                 exempt = get_no_reset_fields()
                 changed = {c["field"] for c in changes}
                 if (changed - exempt) or not exempt:
-                    # set_status clears the maturity tags too: they are only
-                    # valid on approved services (model invariant).
                     set_status(
                         instance,
                         SubmissionStatus.SUBMITTED,
@@ -499,7 +497,7 @@ class SubmissionViewSet(
                         owner_edit=True,
                     )
                     status_reset = True
-                    # Include the reset (status, tags) in the recorded diff.
+                    # Include the reset (status) in the recorded diff.
                     changes = build_diff(
                         before, {**snapshot(instance), **snapshot_m2m(instance)}
                     )

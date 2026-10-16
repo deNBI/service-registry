@@ -139,11 +139,11 @@ class TestSetStatus:
             "Saved with the status"
         )
 
-    @pytest.mark.parametrize("target", ["under_review", "deprecated"])
-    def test_tags_are_cleared_whatever_the_instance_holds(self, target):
+    @pytest.mark.parametrize("start", ["approved", "under_review", "rejected"])
+    def test_tags_are_cleared_on_deprecation_whatever_the_instance_holds(self, start):
         """The caller's copy may have been loaded before the tags were set."""
         sub = ServiceSubmissionFactory(
-            status="approved",
+            status=start,
             primary_maturity_tag="mature",
             secondary_maturity_tags=["unstable"],
             biotools_url="",
@@ -151,11 +151,54 @@ class TestSetStatus:
         stale = ServiceSubmission.objects.get(pk=sub.pk)
         stale.primary_maturity_tag = None
         stale.secondary_maturity_tags = []
-        set_status(stale, target, actor="admin:jane")
+        set_status(stale, "deprecated", actor="admin:jane")
         stored = ServiceSubmission.objects.get(pk=sub.pk)
-        assert stored.status == target
+        assert stored.status == "deprecated"
         assert stored.primary_maturity_tag is None
         assert stored.secondary_maturity_tags == []
+
+    @pytest.mark.parametrize("target", ["under_review", "rejected"])
+    def test_tags_are_kept_when_an_approved_service_leaves_approval(self, target):
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=["unstable"],
+            biotools_url="",
+        )
+        set_status(sub, "under_review", actor="admin:jane")
+        if target == "rejected":
+            set_status(sub, "rejected", actor="admin:jane")
+        stored = ServiceSubmission.objects.get(pk=sub.pk)
+        assert stored.status == target
+        assert stored.primary_maturity_tag == "mature"
+        assert stored.secondary_maturity_tags == ["unstable"]
+
+    def test_tags_are_kept_by_the_owner_edit_reset(self):
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=["unstable"],
+            biotools_url="",
+        )
+        set_status(sub, "submitted", actor="submitter", owner_edit=True)
+        stored = ServiceSubmission.objects.get(pk=sub.pk)
+        assert stored.status == "submitted"
+        assert stored.primary_maturity_tag == "mature"
+        assert stored.secondary_maturity_tags == ["unstable"]
+
+    def test_tags_are_present_again_when_a_reviewed_service_is_approved(self):
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="legacy",
+            secondary_maturity_tags=["unstable"],
+            biotools_url="",
+        )
+        set_status(sub, "under_review", actor="admin:jane")
+        set_status(sub, "approved", actor="admin:jane")
+        stored = ServiceSubmission.objects.get(pk=sub.pk)
+        assert stored.status == "approved"
+        assert stored.primary_maturity_tag == "legacy"
+        assert stored.secondary_maturity_tags == ["unstable"]
 
     def test_approval_does_not_write_the_tags(self):
         sub = ServiceSubmissionFactory(status="under_review", biotools_url="")
@@ -392,7 +435,7 @@ class TestWebPaths:
         sub.refresh_from_db()
         assert sub.status == "submitted"
         assert sub.service_description == new_text
-        assert sub.primary_maturity_tag is None
+        assert sub.primary_maturity_tag == "mature"
         event = sub.status_events.order_by("id").last()
         assert (event.from_status, event.to_status, event.changed_by) == (
             "approved",
@@ -482,7 +525,7 @@ class TestApiPaths:
         assert resp.status_code == 200, resp.content
         sub.refresh_from_db()
         assert sub.status == "submitted"
-        assert sub.primary_maturity_tag is None
+        assert sub.primary_maturity_tag == "mature"
         event = sub.status_events.order_by("id").last()
         assert (event.from_status, event.to_status) == ("approved", "submitted")
         assert event.changed_by == f"api:{key_obj.label}"

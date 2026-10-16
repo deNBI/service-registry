@@ -21,7 +21,7 @@ import unicodedata
 import uuid
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.core.validators import URLValidator, validate_email
 from django.db import models, transaction
 from django.utils import timezone
@@ -587,16 +587,15 @@ class ServiceSubmission(models.Model):
         """Cross-field validation called by forms and serialisers."""
         errors = {}
 
-        # Tags can only be assigned to approved services
-        if self.status != SubmissionStatus.APPROVED:
-            if self.primary_maturity_tag:
-                errors["primary_maturity_tag"] = _(
-                    "⚠ Maturity tags can only be assigned to approved services."
-                )
-            if self.secondary_maturity_tags:
-                errors["secondary_maturity_tags"] = _(
-                    "⚠ Maturity tags can only be assigned to approved services."
-                )
+        # A deprecated service has no maturity tags. Raised as a non-field
+        # error: the owner's web form and the API have no tag fields, and the
+        # admin shows it above the form.
+        if self.status == SubmissionStatus.DEPRECATED and (
+            self.primary_maturity_tag or self.secondary_maturity_tags
+        ):
+            errors[NON_FIELD_ERRORS] = _(
+                "⚠ A deprecated service cannot have maturity tags."
+            )
 
         # Validate tag choices if present
         if self.primary_maturity_tag:
