@@ -295,7 +295,7 @@ Two emails are sent automatically on every status transition:
 All bulk transitions fire the admin + submitter email notifications via Celery and are logged to Django's LogEntry.
 
 !!! note "Status history"
-    The change view lists every status change of a submission under **Status history**: when it happened, the old and new status, and who made it (the submitter, an admin user, an API key or the system). The list is read-only. Entries for services registered before the history existed were rebuilt from the change log; rows marked as synthetic were added to close gaps, and their dates are not real change dates.
+    The change view lists every status change of a submission under **Status history**: when it happened, the old and new status, and who made it (the submitter, an admin user, an API key or the system). The list is read-only. Entries for services registered before the history existed were rebuilt from the change log. Rows marked as synthetic close gaps, for those services or for status changes made without a history entry, and their dates are not real change dates. A status bulk action on services already in the target status records such missing history and changes nothing else.
 
 !!! note "Maturity tags are auto-cleared on any non-approved transition"
 Both individual buttons and bulk actions call the same underlying `_change_status` function, which clears maturity tags whenever moving away from `Approved`. See [Assigning Maturity Tags](#assigning-maturity-tags) for details.

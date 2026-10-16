@@ -1048,3 +1048,556 @@ class TestVersionAfterStatusChange:
         stored = ServiceSubmission.objects.get(pk=sub.pk)
         assert (stored.status, stored.comments) == ("approved", "Reviewed")
         assert _transitions(sub)[-1] == ("submitted", "approved")
+
+
+class TestCatchUpAfterUnrecordedChange:
+    """A status written without an event (for example by an earlier release
+    running on this database) is recorded before the next change, so the
+    history stays one chain that ends in the stored status."""
+
+    def _written_without_event(self, sub, status):
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status=status)
+
+    def test_the_unrecorded_change_is_recorded_first(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        self._written_without_event(sub, "approved")
+        set_status(sub, "deprecated", actor="admin:jane")
+        assert _transitions(sub) == [
+            (None, "submitted"),
+            ("submitted", "approved"),
+            ("approved", "deprecated"),
+        ]
+        assert status_history_drift() == [] and status_history_broken() == []
+
+    def test_the_catch_up_event_is_marked_as_invented(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        self._written_without_event(sub, "approved")
+        set_status(sub, "deprecated", actor="admin:jane")
+        catch_up = sub.status_events.get(to_status="approved")
+        assert catch_up.is_synthetic is True
+        assert catch_up.changed_by == "system"
+        assert catch_up.source == SubmissionStatusEvent.SOURCE_LIVE
+        real = sub.status_events.get(to_status="deprecated")
+        assert real.is_synthetic is False and real.changed_by == "admin:jane"
+
+    def test_the_events_also_sort_in_order_by_time(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        self._written_without_event(sub, "approved")
+        set_status(sub, "deprecated", actor="admin:jane")
+        assert [e.to_status for e in sub.status_events.all()] == [
+            "submitted",
+            "approved",
+            "deprecated",
+        ]
+
+    def test_a_submission_without_any_event_gets_a_starting_event(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        sub.status_events.all().delete()
+        set_status(sub, "approved", actor="admin:jane")
+        assert _transitions(sub) == [(None, "submitted"), ("submitted", "approved")]
+        assert sub.status_events.order_by("id").first().is_synthetic is True
+
+    def test_a_recorded_history_gets_no_extra_event(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        set_status(sub, "approved", actor="admin:jane")
+        assert _transitions(sub) == [(None, "submitted"), ("submitted", "approved")]
+        assert not sub.status_events.filter(is_synthetic=True).exists()
+
+    def test_the_last_written_event_counts_not_the_latest_time(self):
+        """Wall-clock times can step backwards; row ids cannot."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        set_status(sub, "approved", actor="admin:jane")
+        set_status(sub, "submitted", actor="submitter")
+        sub.status_events.filter(to_status="approved").update(
+            changed_at=timezone.now() + timedelta(days=1)
+        )
+        set_status(sub, "under_review", actor="admin:jane")
+        assert not sub.status_events.filter(is_synthetic=True).exists()
+
+    def test_an_unchanged_status_with_a_complete_history_writes_nothing(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        set_status(sub, "approved", actor="admin:jane")
+        assert set_status(sub, "approved", actor="admin:jane") is False
+        assert _transitions(sub) == [(None, "submitted"), ("submitted", "approved")]
+
+    def test_an_unchanged_status_the_history_does_not_end_in_is_recorded(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        self._written_without_event(sub, "approved")
+        assert set_status(sub, "approved", actor="admin:jane") is True
+        assert _transitions(sub) == [(None, "submitted"), ("submitted", "approved")]
+        assert status_history_drift() == [] and status_history_broken() == []
+
+    def test_an_unchanged_status_keeps_the_stored_status_on_the_instance(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        self._written_without_event(sub, "approved")
+        set_status(sub, "approved", actor="admin:jane")
+        assert sub.status == "approved"
+
+    def test_a_failed_change_also_undoes_the_catch_up(self, monkeypatch):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        self._written_without_event(sub, "under_review")
+        real = SubmissionStatusEvent.objects.create
+
+        def fail_for_the_change(*args, **kwargs):
+            if kwargs.get("changed_by") == "admin:jane":
+                raise RuntimeError("event write failed")
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(
+            SubmissionStatusEvent.objects, "create", fail_for_the_change
+        )
+        with pytest.raises(RuntimeError):
+            set_status(sub, "approved", actor="admin:jane")
+        assert _transitions(sub) == [(None, "submitted")]
+        # Leave the database consistent for the end-of-test history check.
+        monkeypatch.undo()
+        set_status(sub, "approved", actor="admin:jane")
+
+
+def _status_log(sub, old, new, at, by="admin:old-release"):
+    """The change-log entry an earlier release writes for a status change."""
+    from apps.submissions.models import SubmissionChangeLog
+
+    return SubmissionChangeLog.objects.create(
+        submission=sub,
+        changed_by=by,
+        changed_at=at,
+        changes=[{"field": "status", "label": "Status", "old": old, "new": new}],
+    )
+
+
+def _events(sub):
+    return [
+        (e.from_status, e.to_status, e.changed_by, e.is_synthetic)
+        for e in sub.status_events.order_by("id")
+    ]
+
+
+class TestCatchUpFromTheChangeLog:
+    """An earlier release changes statuses without recording events but still
+    writes change-log entries. The catch-up replays the entries written after
+    the latest event as real events; only what the log cannot explain is
+    closed with an invented event."""
+
+    def _start(self):
+        from datetime import timedelta
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        start = sub.status_events.get().changed_at
+        return sub, lambda minutes: start + timedelta(minutes=minutes)
+
+    def _earlier_release_sets(self, sub, status):
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status=status)
+
+    def test_a_logged_change_is_recorded_as_a_real_event(self):
+        sub, at = self._start()
+        entry = _status_log(sub, "Submitted", "Approved", at(5))
+        self._earlier_release_sets(sub, "approved")
+        set_status(sub, "deprecated", actor="admin:jane")
+        assert _events(sub) == [
+            (None, "submitted", "system", False),
+            ("submitted", "approved", "admin:old-release", False),
+            ("approved", "deprecated", "admin:jane", False),
+        ]
+        replayed = sub.status_events.get(to_status="approved")
+        assert replayed.changed_at == entry.changed_at
+        assert replayed.source == SubmissionStatusEvent.SOURCE_LIVE
+
+    def test_a_round_trip_is_recorded_step_by_step(self):
+        sub, at = self._start()
+        _status_log(sub, "Submitted", "Approved", at(5))
+        _status_log(sub, "Approved", "Submitted", at(9), by="submitter")
+        _status_log(sub, "Submitted", "Under Review", at(12))
+        self._earlier_release_sets(sub, "under_review")
+        set_status(sub, "rejected", actor="admin:jane")
+        assert _events(sub) == [
+            (None, "submitted", "system", False),
+            ("submitted", "approved", "admin:old-release", False),
+            ("approved", "submitted", "submitter", False),
+            ("submitted", "under_review", "admin:old-release", False),
+            ("under_review", "rejected", "admin:jane", False),
+        ]
+
+    def test_entries_are_taken_by_time_then_by_row(self):
+        sub, at = self._start()
+        _status_log(sub, "Approved", "Deprecated", at(9))
+        _status_log(sub, "Submitted", "Approved", at(5))
+        self._earlier_release_sets(sub, "deprecated")
+        set_status(sub, "submitted", actor="admin:jane")
+        assert _transitions(sub)[1:3] == [
+            ("submitted", "approved"),
+            ("approved", "deprecated"),
+        ]
+        assert not sub.status_events.filter(is_synthetic=True).exists()
+
+    def test_entries_at_the_same_time_are_taken_in_the_order_written(self):
+        sub, at = self._start()
+        _status_log(sub, "Submitted", "Approved", at(5))
+        _status_log(sub, "Approved", "Rejected", at(5))
+        self._earlier_release_sets(sub, "rejected")
+        set_status(sub, "submitted", actor="admin:jane")
+        assert _transitions(sub)[1:3] == [
+            ("submitted", "approved"),
+            ("approved", "rejected"),
+        ]
+
+    def test_a_change_that_does_not_continue_the_history_is_left_out(self):
+        """The log says the service left Approved, but the history never saw
+        it there: the entry cannot be placed, so the stored status is closed
+        with an invented event instead."""
+        sub, at = self._start()
+        _status_log(sub, "Approved", "Deprecated", at(5))
+        self._earlier_release_sets(sub, "deprecated")
+        set_status(sub, "submitted", actor="admin:jane")
+        assert _events(sub) == [
+            (None, "submitted", "system", False),
+            ("submitted", "deprecated", "system", True),
+            ("deprecated", "submitted", "admin:jane", False),
+        ]
+
+    def test_a_missing_step_in_the_log_is_closed_with_an_invented_event(self):
+        sub, at = self._start()
+        _status_log(sub, "Submitted", "Approved", at(5))
+        _status_log(sub, "Rejected", "Submitted", at(9))  # earlier step not logged
+        self._earlier_release_sets(sub, "under_review")
+        set_status(sub, "rejected", actor="admin:jane")
+        assert _events(sub)[:3] == [
+            (None, "submitted", "system", False),
+            ("submitted", "approved", "admin:old-release", False),
+            ("approved", "under_review", "system", True),
+        ]
+
+    def test_entries_older_than_the_latest_event_are_ignored(self):
+        from datetime import timedelta
+
+        sub, at = self._start()
+        set_status(sub, "approved", actor="admin:jane")
+        latest = sub.status_events.order_by("id").last()
+        _status_log(
+            sub, "Approved", "Under Review", latest.changed_at - timedelta(hours=1)
+        )
+        self._earlier_release_sets(sub, "under_review")
+        set_status(sub, "rejected", actor="admin:jane")
+        assert _events(sub)[2:] == [
+            ("approved", "under_review", "system", True),
+            ("under_review", "rejected", "admin:jane", False),
+        ]
+
+    def test_an_entry_stamped_exactly_at_the_latest_event_is_ignored(self):
+        sub, at = self._start()
+        set_status(sub, "approved", actor="admin:jane")
+        latest = sub.status_events.order_by("id").last()
+        _status_log(sub, "Approved", "Under Review", latest.changed_at)
+        self._earlier_release_sets(sub, "under_review")
+        set_status(sub, "rejected", actor="admin:jane")
+        assert _events(sub)[2] == ("approved", "under_review", "system", True)
+
+    def test_the_entry_of_a_recorded_change_is_not_replayed_as_a_new_one(self):
+        """This release writes the entry just after the event it records."""
+        from datetime import timedelta
+
+        sub, at = self._start()
+        set_status(sub, "approved", actor="admin:jane")
+        recorded = sub.status_events.order_by("id").last()
+        _status_log(
+            sub,
+            "Submitted",
+            "Approved",
+            recorded.changed_at + timedelta(milliseconds=5),
+            by="admin:jane",
+        )
+        _status_log(sub, "Approved", "Deprecated", at(60))
+        self._earlier_release_sets(sub, "deprecated")
+        set_status(sub, "submitted", actor="admin:jane")
+        assert _events(sub) == [
+            (None, "submitted", "system", False),
+            ("submitted", "approved", "admin:jane", False),
+            ("approved", "deprecated", "admin:old-release", False),
+            ("deprecated", "submitted", "admin:jane", False),
+        ]
+
+    def test_a_replay_that_ends_elsewhere_is_closed_at_the_stored_status(self):
+        sub, at = self._start()
+        _status_log(sub, "Submitted", "Approved", at(5))
+        self._earlier_release_sets(sub, "rejected")  # last step never logged
+        set_status(sub, "submitted", actor="admin:jane")
+        assert _events(sub) == [
+            (None, "submitted", "system", False),
+            ("submitted", "approved", "admin:old-release", False),
+            ("approved", "rejected", "system", True),
+            ("rejected", "submitted", "admin:jane", False),
+        ]
+
+    def test_an_entry_that_changes_nothing_writes_no_event(self):
+        sub, at = self._start()
+        _status_log(sub, "Submitted", "Submitted", at(4))
+        _status_log(sub, "Submitted", "Approved", at(5))
+        self._earlier_release_sets(sub, "approved")
+        set_status(sub, "deprecated", actor="admin:jane")
+        assert _transitions(sub) == [
+            (None, "submitted"),
+            ("submitted", "approved"),
+            ("approved", "deprecated"),
+        ]
+
+    def _future_entry_replayed(self, sub):
+        """A change-log entry stamped two days ahead (clock skew between
+        releases) is replayed by the first change."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        future = timezone.now() + timedelta(days=2)
+        _status_log(sub, "Submitted", "Approved", future)
+        self._earlier_release_sets(sub, "rejected")
+        set_status(sub, "submitted", actor="admin:jane")
+        return future
+
+    def test_an_entry_dated_after_the_catch_up_does_not_sort_after_the_closing_event(
+        self,
+    ):
+        """Clocks differ between releases and hosts: neither the invented
+        closing event nor the real change is dated before the entry it
+        follows."""
+        sub, at = self._start()
+        future = self._future_entry_replayed(sub)
+        events = list(sub.status_events.order_by("id"))
+        assert events[1].changed_at == future
+        assert events[2].is_synthetic is True
+        assert events[2].changed_at >= events[1].changed_at
+        assert events[3].is_synthetic is False
+        assert events[3].changed_at >= events[2].changed_at
+
+    def test_events_sort_the_same_by_time_and_by_row_under_clock_skew(self):
+        sub, at = self._start()
+        self._future_entry_replayed(sub)
+        by_row = [e.pk for e in sub.status_events.order_by("id")]
+        by_time = [e.pk for e in sub.status_events.order_by("changed_at", "id")]
+        assert by_time == by_row
+
+    def test_a_replayed_future_entry_is_not_replayed_again(self):
+        sub, at = self._start()
+        self._future_entry_replayed(sub)
+        self._earlier_release_sets(sub, "rejected")
+        set_status(sub, "under_review", actor="admin:jane")
+        events = _events(sub)
+        assert events.count(("submitted", "approved", "admin:old-release", False)) == 1
+        assert [e[1] for e in events] == [
+            "submitted",
+            "approved",
+            "rejected",
+            "submitted",
+            "rejected",
+            "under_review",
+        ]
+        by_row = [e.pk for e in sub.status_events.order_by("id")]
+        assert [e.pk for e in sub.status_events.order_by("changed_at", "id")] == by_row
+
+    def test_a_later_change_without_catch_up_is_not_dated_before_the_history(self):
+        sub, at = self._start()
+        self._future_entry_replayed(sub)
+        set_status(sub, "under_review", actor="admin:jane")
+        by_row = [e.pk for e in sub.status_events.order_by("id")]
+        assert [e.pk for e in sub.status_events.order_by("changed_at", "id")] == by_row
+        assert sub.status_events.order_by("id").last().to_status == "under_review"
+
+    def test_the_admin_history_lists_the_newest_change_first_under_clock_skew(self):
+        from apps.submissions.admin import SubmissionStatusEventInline
+
+        sub, at = self._start()
+        self._future_entry_replayed(sub)
+        self._earlier_release_sets(sub, "rejected")
+        set_status(sub, "under_review", actor="admin:jane")
+        newest = sub.status_events.order_by(*SubmissionStatusEventInline.ordering)[0]
+        assert newest.to_status == "under_review"
+        assert newest.pk == sub.status_events.order_by("id").last().pk
+
+    def test_other_fields_unreadable_rows_and_other_services_are_ignored(self):
+        from apps.submissions.models import SubmissionChangeLog
+
+        sub, at = self._start()
+        other = ServiceSubmissionFactory(biotools_url="")
+        _status_log(other, "Submitted", "Approved", at(5))
+        SubmissionChangeLog.objects.create(
+            submission=sub,
+            changed_by="admin:old-release",
+            changed_at=at(6),
+            changes=[{"field": "service_name", "old": "A", "new": "B"}],
+        )
+        SubmissionChangeLog.objects.create(
+            submission=sub, changed_by="script", changed_at=at(7), changes="Approved"
+        )
+        self._earlier_release_sets(sub, "approved")
+        set_status(sub, "deprecated", actor="admin:jane")
+        assert _events(sub)[1] == ("submitted", "approved", "system", True)
+        assert _transitions(other) == [(None, "submitted")]
+
+    def test_a_complete_history_gets_no_replayed_events(self):
+        sub, at = self._start()
+        _status_log(sub, "Submitted", "Approved", at(5))  # a later step is unlogged
+        set_status(sub, "approved", actor="admin:jane")
+        assert _transitions(sub) == [(None, "submitted"), ("submitted", "approved")]
+        assert not sub.status_events.filter(is_synthetic=True).exists()
+
+
+class TestSettingTheStatusItAlreadyHas:
+    """Setting the status a service already has records a history that does
+    not end in it. A service with a complete history stays untouched."""
+
+    def _approved_by_the_earlier_release(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status="approved")
+        return sub
+
+    def test_it_records_the_history_and_reports_a_change(self):
+        sub = self._approved_by_the_earlier_release()
+        assert set_status(sub, "approved", actor="admin:jane") is True
+        assert _transitions(sub) == [(None, "submitted"), ("submitted", "approved")]
+
+    def test_a_complete_history_changes_nothing(self):
+        sub = ServiceSubmissionFactory(status="approved", biotools_url="")
+        events = sub.status_events.count()
+        assert set_status(sub, "approved", actor="admin:jane") is False
+        assert sub.status_events.count() == events
+
+    def test_a_logged_approval_is_recorded_with_its_real_time(self):
+        from datetime import timedelta
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        at = sub.status_events.get().changed_at + timedelta(days=3)
+        _status_log(sub, "Submitted", "Approved", at)
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status="approved")
+        set_status(sub, "approved", actor="admin:jane")
+        assert sub.status_events.get(to_status="approved").changed_at == at
+
+
+class TestBulkActionOnAStatusTheHistoryDoesNotShow:
+    """The status actions skip nothing on the stored status: set_status says
+    whether it wrote something, so approving again heals a service an earlier
+    release approved."""
+
+    @pytest.fixture(autouse=True)
+    def _run_commit_callbacks(self, django_capture_on_commit_callbacks):
+        self.capture_on_commit = django_capture_on_commit_callbacks
+
+    def _action(self, client, action, *subs):
+        from unittest import mock
+
+        with mock.patch(
+            "apps.submissions.admin.send_submission_notification.delay"
+        ) as notify:
+            with self.capture_on_commit(execute=True):
+                resp = client.post(
+                    reverse(CHANGELIST),
+                    {"action": action, "_selected_action": [str(s.pk) for s in subs]},
+                    follow=True,
+                )
+        return [str(m) for m in resp.context["messages"]], notify
+
+    def _approved_by_the_earlier_release(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status="approved")
+        return sub
+
+    def test_approving_again_heals_and_counts_the_service(self, superuser_client):
+        sub = self._approved_by_the_earlier_release()
+        messages, _ = self._action(superuser_client, "action_approve", sub)
+        assert messages == ["1 submission(s) marked as Approved."]
+        assert _transitions(sub) == [(None, "submitted"), ("submitted", "approved")]
+
+    def test_healing_sends_no_notification_and_writes_no_change_log_entry(
+        self, superuser_client
+    ):
+        from apps.submissions.models import SubmissionChangeLog
+
+        sub = self._approved_by_the_earlier_release()
+        _, notify = self._action(superuser_client, "action_approve", sub)
+        notify.assert_not_called()
+        assert not SubmissionChangeLog.objects.filter(submission=sub).exists()
+
+    def test_a_service_with_a_complete_history_is_still_skipped(self, superuser_client):
+        from apps.submissions.models import SubmissionChangeLog
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        set_status(sub, "approved", actor="admin:jane")
+        messages, notify = self._action(superuser_client, "action_approve", sub)
+        assert messages == ["0 submission(s) marked as Approved."]
+        notify.assert_not_called()
+        assert not SubmissionChangeLog.objects.filter(submission=sub).exists()
+        assert _transitions(sub) == [(None, "submitted"), ("submitted", "approved")]
+
+    def test_only_what_changed_is_counted(self, superuser_client):
+        healed = self._approved_by_the_earlier_release()
+        changed = ServiceSubmissionFactory(biotools_url="")
+        untouched = ServiceSubmissionFactory(biotools_url="")
+        set_status(untouched, "approved", actor="admin:jane")
+        messages, notify = self._action(
+            superuser_client, "action_approve", healed, changed, untouched
+        )
+        assert messages == ["2 submission(s) marked as Approved."]
+        assert notify.call_count == 1  # only the real change
+
+    def test_marking_a_waiting_service_under_review_again_heals_its_history(
+        self, superuser_client
+    ):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status="under_review")
+        messages, _ = self._action(superuser_client, "action_mark_under_review", sub)
+        assert messages == ["1 submission(s) marked as Under Review."]
+        assert _transitions(sub) == [(None, "submitted"), ("submitted", "under_review")]
+
+
+class TestReleaseRolledBackAndForwardAgain:
+    """An earlier release runs on the upgraded database and changes the status
+    of several services; it writes change-log entries but no status events.
+    After the upgrade is applied again, one admin action per service leaves
+    every history complete."""
+
+    def test_every_kind_of_change_ends_with_a_complete_history(self, superuser_client):
+        from datetime import timedelta
+
+        from apps.submissions.models import SubmissionStatus
+
+        labels = {value: str(label) for value, label in SubmissionStatus.choices}
+        day = timedelta(days=1)
+
+        def earlier_release(sub, *steps):
+            """Write the statuses and log each step, one day apart."""
+            previous = ServiceSubmission.objects.get(pk=sub.pk).status
+            at = sub.status_events.latest("id").changed_at
+            for step in steps:
+                at += day
+                _status_log(sub, labels[previous], labels[step], at)
+                previous = step
+            ServiceSubmission.objects.filter(pk=sub.pk).update(status=previous)
+
+        def action(name, sub):
+            superuser_client.post(
+                reverse(CHANGELIST),
+                {"action": name, "_selected_action": [str(sub.pk)]},
+            )
+
+        approved = ServiceSubmissionFactory(biotools_url="")
+        earlier_release(approved, "approved")
+        reset = ServiceSubmissionFactory(status="approved", biotools_url="")
+        earlier_release(reset, "submitted")
+        round_trip = ServiceSubmissionFactory(status="approved", biotools_url="")
+        earlier_release(round_trip, "deprecated", "approved", "submitted")
+
+        action("action_approve", approved)
+        action("action_mark_under_review", reset)
+        action("action_approve", round_trip)
+
+        assert status_history_drift() == [] and status_history_broken() == []
+        assert [t[1] for t in _transitions(round_trip)] == [
+            "approved",
+            "deprecated",
+            "approved",
+            "submitted",
+            "approved",
+        ]
+        assert not approved.status_events.filter(is_synthetic=True).exists()
