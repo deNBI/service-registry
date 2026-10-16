@@ -248,6 +248,20 @@ class TestAtomicity:
         assert fresh.status == "approved"
 
 
+class TestLegacyText:
+    def test_text_stored_in_decomposed_form_is_not_a_change(self, no_exempt):
+        sub = _service("approved")
+        # A row written outside save(): "é" as "e" plus a combining accent.
+        ServiceSubmission.objects.filter(pk=sub.pk).update(comments="Cafe\u0301")
+        sub.refresh_from_db()
+        result = _edit(sub, comments="Caf\u00e9")
+        sub.refresh_from_db()
+        assert result.changes == []
+        assert result.status_reset is False
+        assert sub.status == "approved"
+        assert not SubmissionChangeLog.objects.filter(submission=sub).exists()
+
+
 class TestRecordChange:
     """The change-log entry every edit leaves, written by one helper."""
 

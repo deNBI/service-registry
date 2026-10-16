@@ -34,7 +34,7 @@ from django.utils.timezone import now
 
 from apps.catalogue.publishing import republish
 
-from .diff_utils import build_diff, snapshot, snapshot_m2m
+from .diff_utils import build_diff, snapshot, snapshot_links, snapshot_m2m
 from .lifecycle import get_no_reset_fields, set_status
 from .models import SubmissionChangeLog, SubmissionStatus
 
@@ -54,7 +54,7 @@ def capture(instance) -> dict:
     Take it before the edit touches the instance (a form's validation already
     writes its values to it) and hand it to ``apply_edit`` as ``before``.
     """
-    return {**snapshot(instance), **snapshot_m2m(instance)}
+    return {**snapshot(instance), **snapshot_m2m(instance), **snapshot_links(instance)}
 
 
 def _resets_status(status: str, changes: list[dict]) -> bool:

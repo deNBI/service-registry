@@ -616,3 +616,57 @@ class TestFilterSanitizationArtifacts:
             changes, form_changed_data=[], form_field_names=frozenset()
         )
         assert len(result) == 1
+
+
+class TestSameNameLinks:
+    @staticmethod
+    def _links(*rows):
+        return {"responsible_pis#id": sorted(rows)}
+
+    def test_other_row_behind_an_equal_name_is_a_change(self):
+        before = {"responsible_pis": ["Doe, John"]} | self._links(
+            ("1", "Doe, John", "Inst A")
+        )
+        after = {"responsible_pis": ["Doe, John"]} | self._links(
+            ("2", "Doe, John", "Inst B")
+        )
+        (change,) = build_diff(before, after)
+        assert change["field"] == "responsible_pis"
+        assert change["old"] == "Doe, John (Inst A)"
+        assert change["new"] == "Doe, John (Inst B)"
+
+    def test_equal_details_fall_back_to_the_id(self):
+        before = {"responsible_pis": ["Doe, John"]} | self._links(
+            ("11111111-x", "Doe, John", "Inst A")
+        )
+        after = {"responsible_pis": ["Doe, John"]} | self._links(
+            ("22222222-x", "Doe, John", "Inst A")
+        )
+        (change,) = build_diff(before, after)
+        assert change["old"] == "Doe, John (id 11111111)"
+        assert change["new"] == "Doe, John (id 22222222)"
+
+    def test_same_rows_are_no_change(self):
+        snap = {"responsible_pis": ["Doe, John"]} | self._links(
+            ("1", "Doe, John", "Inst A")
+        )
+        assert build_diff(snap, dict(snap)) == []
+
+    def test_identity_keys_never_show_up_as_fields(self):
+        before = {"responsible_pis": ["A"]} | self._links(("1", "A", "x"))
+        after = {"responsible_pis": ["B"]} | self._links(("2", "B", "y"))
+        assert [c["field"] for c in build_diff(before, after)] == ["responsible_pis"]
+
+    def test_snapshots_without_identities_compare_by_name_only(self):
+        assert build_diff({"responsible_pis": ["A"]}, {"responsible_pis": ["A"]}) == []
+
+
+@pytest.mark.django_db
+def test_snapshot_compares_text_in_nfc():
+    from apps.submissions.models import ServiceSubmission
+    from tests.factories import ServiceSubmissionFactory
+
+    sub = ServiceSubmissionFactory()
+    ServiceSubmission.objects.filter(pk=sub.pk).update(comments="Cafe\u0301")
+    sub.refresh_from_db()
+    assert snapshot(sub)["comments"] == "Caf\u00e9"
