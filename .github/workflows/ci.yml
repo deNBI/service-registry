@@ -8,6 +8,8 @@
 #
 # Jobs:
 #   test    pytest (SQLite) + ruff + pip-audit  — runs natively, no Docker
+#   test-postgres  the whole suite incl. row-lock and concurrency tests
+#                  (make test-postgres) on a PostgreSQL service container
 #   build   docker buildx → validates image builds; push to registry (main only)
 # =============================================================================
 
@@ -74,6 +76,54 @@ jobs:
 
       - name: pip-audit
         run: pip-audit -r requirements/production.txt
+
+  #  The whole suite on the production database engine. SQLite ignores row
+  #  locks, so the tests marked `postgres` only run here.
+  test-postgres:
+    name: Test on PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: denbi
+          POSTGRES_PASSWORD: ci-only-not-a-real-password
+          POSTGRES_DB: denbi_registry
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U denbi -d denbi_registry"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements/development.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements/development.txt
+
+      - name: Run pytest on PostgreSQL
+        env:
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_PORT: "5432"
+          TEST_DB_PASSWORD: ci-only-not-a-real-password
+          SECRET_KEY: ci-only-not-a-real-key
+          DB_PASSWORD: unused-in-test
+          REDIS_PASSWORD: unused-in-test
+        run: make test-postgres
 
   # #  Build — validates the production Docker image builds cleanly
   # build:

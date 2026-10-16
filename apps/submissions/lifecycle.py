@@ -88,3 +88,144 @@ def get_no_reset_fields() -> frozenset:
             )
 
     return frozenset(validated)
+
+
+def record_unrecorded_status(submission_id, status: str, now) -> bool:
+    """
+    Record ``status`` when the status history does not end in it.
+
+    A status can be written without an event, for example by an earlier
+    release running on this database. That release still writes change-log
+    entries, so the status changes it logged after the latest event are
+    replayed as real events (time and actor from the entry), one chain from
+    the latest recorded status. Rules, the same as migration 0021 except for
+    the first:
+
+    - an entry whose old status does not continue the chain is skipped (0021
+      closes the gap with an invented event). The entry this release writes
+      for each of its own events starts at that event's from-status, and is
+      stamped just after the event (the admin bulk status action stamps it
+      just before, so the time rule below already ignores it); read as a gap
+      it would invent two wrong events.
+    - entries are taken by ``changed_at``, then row id; entries not newer than
+      the latest event are ignored; unreadable entries and unknown labels are
+      skipped (see ``status_log.status_transitions``).
+    - when the chain still does not end in ``status``, one event invented to
+      close it (is_synthetic=True, changed_by "system") does.
+
+    Nothing is replayed while the history already ends in ``status``, even if
+    an earlier release moved the service away and back: the entries this
+    release writes around its own events would be replayed as new ones.
+    (``publish_backfill`` brings the published copy of such a service up to
+    date.)
+
+    A service without any event gets one invented event (from none to
+    ``status``) and no replay. The caller holds the submission's row lock.
+    Returns True when an event was written.
+    """
+    from apps.submissions.models import SubmissionChangeLog, SubmissionStatusEvent
+    from apps.submissions.status_log import status_transitions
+
+    latest = (
+        SubmissionStatusEvent.objects.filter(submission_id=submission_id)
+        .order_by("-id")
+        .values_list("to_status", "changed_at")
+        .first()
+    )
+    last_status, last_at = latest or (None, None)
+    if last_status == status:
+        return False
+
+    def record(to_status, at, by, synthetic):
+        nonlocal last_status, last_at
+        SubmissionStatusEvent.objects.create(
+            submission_id=submission_id,
+            from_status=last_status,
+            to_status=to_status,
+            changed_at=at,
+            changed_by=by,
+            is_synthetic=synthetic,
+        )
+        last_status, last_at = to_status, at
+
+    if latest is not None:
+        entries = SubmissionChangeLog.objects.filter(
+            submission_id=submission_id, changed_at__gt=last_at
+        ).order_by("changed_at", "id")
+        for entry in entries:
+            for old, new in status_transitions(entry.changes):
+                if old == last_status and new != old:
+                    record(new, entry.changed_at, entry.changed_by, False)
+    if last_status != status:
+        record(status, max(now, last_at) if last_at else now, "system", True)
+    return True
+
+
+def set_status(submission, new_status, *, actor: str, extra_fields=()) -> bool:
+    """
+    Change a submission's status and record the change. The only status writer.
+
+    Locks the row, reads the current status from the database (not from the
+    possibly stale instance), saves ``status`` plus ``extra_fields`` and writes
+    one SubmissionStatusEvent, all in one transaction, then lets the publishing
+    layer react (apps.catalogue.publishing.on_status_change). Maturity tags are
+    only valid on approved services, so any other status clears them. ``updated_at``
+    is only written when it is listed in ``extra_fields``. A stored status the
+    history does not end in is recorded first (see ``record_unrecorded_status``);
+    a recorded approval or deprecation also moves the published copy's state
+    (see ``apply_caught_up_status``).
+
+    When ``new_status`` is the stored status, nothing is changed. If the
+    history did not end in it, the history is recorded and the status applied
+    to the published copy (an approval publishes, as an approval does) and the
+    result is True; with a complete history nothing is written and the result
+    is False. So the result is True exactly when something was written.
+    """
+    from django.db import transaction
+    from django.utils import timezone
+
+    from apps.catalogue.publishing import apply_caught_up_status, on_status_change
+    from apps.submissions.models import (
+        ServiceSubmission,
+        SubmissionStatus,
+        SubmissionStatusEvent,
+    )
+
+    new_status = str(new_status)
+    if new_status not in SubmissionStatus.values:
+        raise ValueError(f"Unknown submission status: {new_status!r}")
+    with transaction.atomic():
+        current = (
+            ServiceSubmission.objects.select_for_update()
+            .values_list("status", flat=True)
+            .get(pk=submission.pk)
+        )
+        now = timezone.now()
+        recorded = record_unrecorded_status(submission.pk, current, now)
+        if recorded:
+            apply_caught_up_status(submission.pk)
+        if current == new_status:
+            submission.status = current
+            if recorded:
+                # The caller asks for the status the service already has and
+                # the history did not show it: apply it to the published copy
+                # as the change would have been.
+                on_status_change(submission, new_status, actor=actor)
+            return recorded
+        submission.status = new_status
+        fields = ["status", *extra_fields]
+        if new_status != SubmissionStatus.APPROVED:
+            submission.primary_maturity_tag = None
+            submission.secondary_maturity_tags = []
+            fields += ["primary_maturity_tag", "secondary_maturity_tags"]
+        submission.save(update_fields=list(dict.fromkeys(fields)))
+        SubmissionStatusEvent.objects.create(
+            submission=submission,
+            from_status=current,
+            to_status=new_status,
+            changed_at=now,
+            changed_by=actor,
+        )
+        # Inside the same transaction: a failing publish undoes the status change.
+        on_status_change(submission, new_status, actor=actor)
+    return True
