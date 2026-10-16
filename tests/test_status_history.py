@@ -10,7 +10,11 @@ from apps.submissions.models import (
     ServiceSubmission,
     SubmissionStatusEvent,
 )
-from apps.submissions.selectors import status_history_broken, status_history_drift
+from apps.submissions.selectors import (
+    latest_public_decisions,
+    status_history_broken,
+    status_history_drift,
+)
 from tests.factories import ServiceCenterFactory, ServiceSubmissionFactory
 
 pytestmark = pytest.mark.django_db
@@ -283,6 +287,29 @@ def _grant(client, sub):
     session = client.session
     session["edit_grants"] = {str(sub.pk): str(key_obj.pk)}
     session.save()
+
+
+class TestPublicDecisions:
+    def test_the_latest_approval_or_deprecation_decides(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        other = ServiceSubmissionFactory(biotools_url="")
+        for status in ("approved", "deprecated", "submitted", "rejected"):
+            set_status(sub, status, actor="admin:jane")
+        set_status(other, "approved", actor="admin:jane")
+        decisions = latest_public_decisions([sub.pk, other.pk])
+        assert decisions == {sub.pk: "deprecated", other.pk: "approved"}
+
+    def test_a_submission_without_either_is_absent(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        set_status(sub, "under_review", actor="admin:jane")
+        assert latest_public_decisions([sub.pk]) == {}
+
+    def test_only_the_asked_submissions_are_returned(self):
+        a = ServiceSubmissionFactory(status="approved", biotools_url="")
+        b = ServiceSubmissionFactory(status="approved", biotools_url="")
+        assert set(latest_public_decisions([a.pk])) == {a.pk}
+        queryset = ServiceSubmission.objects.filter(pk=b.pk).values("pk")
+        assert set(latest_public_decisions(queryset)) == {b.pk}
 
 
 class TestBrokenHistories:
