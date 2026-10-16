@@ -48,5 +48,7 @@ class Command(BaseCommand):
                 publishing.rebuild_from_revision(pk)
             except PublishedRevision.DoesNotExist as exc:
                 raise CommandError(f"no revision for {pk}") from exc
+            except ValueError as exc:  # revision written by a newer release
+                raise CommandError(f"cannot rebuild {pk}: {exc}") from exc
             count += 1
         self.stdout.write(f"rebuilt: {count}")

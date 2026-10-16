@@ -42,6 +42,7 @@ class Command(BaseCommand):
             "stale": [],  # approved, nothing pending, working copy differs
             "unpublished_approved": [],  # approved but never published
             "drift": [],  # public copy differs from its latest revision
+            "revision_without_copy": [],  # revisions exist, the public copy does not
             "no_approval_event": [],  # published without any approval event
             "missing_reference": [],  # revision names a deleted reference row
             "state_mismatch": [],  # state / pending flag do not fit the status
@@ -79,6 +80,9 @@ class Command(BaseCommand):
                 ):
                     problems["stale"].append(str(sub.pk))
 
+        problems["revision_without_copy"] = sorted(
+            str(pk) for pk in latest if pk not in published
+        )
         for pk, ps in published.items():
             rev = latest.get(pk)
             if rev is None or ps.revision_id != rev.pk:

@@ -171,6 +171,31 @@ def _deprecated_with_tag_entry_after_approval():
     return sub
 
 
+def _deprecated_after_a_review(synthetic, edit_at_minutes):
+    """Submitted and under review at one time, approved and deprecated an hour
+    later; a content edit is logged ``edit_at_minutes`` after the start. The
+    approval's date is a real one only when it is not synthetic."""
+    sub = ServiceSubmissionFactory(status="submitted", biotools_url="")
+    set_status(sub, "under_review", actor="admin:jane")
+    set_status(sub, "approved", actor="admin:jane")
+    set_status(sub, "deprecated", actor="admin:jane")
+    start = sub.status_events.earliest("id").changed_at
+    for event, hours in zip(sub.status_events.order_by("id"), (0, 0, 1, 1)):
+        event.changed_at = start + timedelta(hours=hours)
+        event.is_synthetic = synthetic and event.to_status == "approved"
+        event.save()
+    _unpublish(sub)
+    SubmissionChangeLog.objects.create(
+        submission=sub,
+        changed_by="submitter",
+        changed_at=start + timedelta(minutes=edit_at_minutes),
+        changes=[
+            {"field": "service_description", "label": "d", "old": "a", "new": "b"}
+        ],
+    )
+    return sub
+
+
 # Change-log shapes that an older tool or a script could have written.
 UNREADABLE_CHANGES = {
     "json_null": None,
@@ -250,6 +275,15 @@ SCENARIOS = {
     "deprecated_edited_after_approval": _deprecated_edited_after_approval,
     "deprecated_tag_entry_after_approval": _deprecated_with_tag_entry_after_approval,
     "deprecated_after_review": _deprecated_after_review,
+    "deprecated_edit_before_real_approval": lambda: _deprecated_after_a_review(
+        False, 30
+    ),
+    "deprecated_edit_before_synthetic_approval": lambda: _deprecated_after_a_review(
+        True, 30
+    ),
+    "deprecated_edit_ahead_of_synthetic_approval": lambda: _deprecated_after_a_review(
+        True, -30
+    ),
     **{
         f"deprecated_unreadable_log_{name}": (
             lambda changes=changes: _deprecated_with_unreadable_log(changes)
@@ -333,10 +367,10 @@ class TestSameResultAsPublishBackfill:
         PublishedRevision.objects.all().delete()
         command_out = _run_command("publish_backfill")
         assert by_migration == _snapshot()
-        assert "published: 12" in command_out
+        assert "published: 14" in command_out
         assert (
-            "{'published': 12, 'deprecated_never_approved': 1, "
-            "'deprecated_unconfirmed': 7, 'waiting_for_review': 2}"
+            "{'published': 14, 'deprecated_never_approved': 1, "
+            "'deprecated_unconfirmed': 8, 'waiting_for_review': 2}"
         ) in out
 
 
@@ -440,6 +474,26 @@ class TestPublishExisting:
         out = migrate()
         assert not PublishedService.objects.filter(pk=sub.pk).exists()
         assert "'deprecated_unconfirmed': 1" in out
+
+    def test_an_edit_before_a_synthetic_approval_keeps_the_service_private(
+        self, migrate
+    ):
+        """The date of a synthetic approval is not a real date: the edit may
+        have been made after the real approval."""
+        sub = _deprecated_after_a_review(True, 30)
+        out = migrate()
+        assert not PublishedService.objects.filter(pk=sub.pk).exists()
+        assert "'deprecated_unconfirmed': 1" in out
+
+    def test_an_edit_before_a_real_approval_does_not_block(self, migrate):
+        sub = _deprecated_after_a_review(False, 30)
+        migrate()
+        assert PublishedService.objects.get(pk=sub.pk).state == "deprecated"
+
+    def test_an_edit_ahead_of_a_synthetic_approval_does_not_block(self, migrate):
+        sub = _deprecated_after_a_review(True, -30)
+        migrate()
+        assert PublishedService.objects.get(pk=sub.pk).state == "deprecated"
 
     def test_an_empty_log_entry_does_not_block(self, migrate):
         sub = _deprecated_with_unreadable_log([])

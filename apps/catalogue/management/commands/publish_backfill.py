@@ -2,6 +2,8 @@
 
 Catalogue migration 0002 publishes existing services at deploy with the same
 rules; this command repeats them on demand and prints the ids it leaves out.
+A service that already has revisions but lost its public copy gets the copy
+back from its own latest revision, never from the working copy.
 It also repairs published services whose status history does not end in their
 stored status (an earlier release changed it): the history is recorded and the
 copy's state and pending flag follow it. Content is never published by that
@@ -57,17 +59,22 @@ def _holds_approved_content(sub) -> bool:
     events = list(
         SubmissionStatusEvent.objects.filter(submission=sub)
         .order_by("id")
-        .values_list("to_status", "changed_at")
+        .values_list("to_status", "changed_at", "is_synthetic")
     )
     last_deprecation = max(
-        (i for i, (to_status, _) in enumerate(events) if to_status == "deprecated"),
+        (i for i, event in enumerate(events) if event[0] == "deprecated"),
         default=None,
     )
     if not last_deprecation:  # never deprecated, or created deprecated
         return False
-    to_status, approved_at = events[last_deprecation - 1]
+    to_status, approved_at, synthetic = events[last_deprecation - 1]
     if to_status != SubmissionStatus.APPROVED:
         return False
+    if synthetic and last_deprecation > 1:
+        # The date of a reconstructed approval is not a real one: the service
+        # may have been approved, and edited, before it. Edits since the event
+        # ahead of it count.
+        approved_at = events[last_deprecation - 2][1]
     later_entries = SubmissionChangeLog.objects.filter(
         submission=sub, changed_at__gt=approved_at
     ).values_list("changes", flat=True)
@@ -76,6 +83,8 @@ def _holds_approved_content(sub) -> bool:
 
 def _backfill_decision(sub) -> str:
     """What the backfill does with a service in its current status."""
+    if PublishedRevision.objects.filter(submission_id=sub.pk).exists():
+        return "rebuild"  # the copy is lost, the approved revision is not
     if sub.status == SubmissionStatus.APPROVED:
         return "publish"
     if sub.status != SubmissionStatus.DEPRECATED:
@@ -106,18 +115,23 @@ class Command(BaseCommand):
         )
 
     def _publish_one(self, pk) -> bool:
-        """Publish one service; False when it no longer qualifies.
+        """Publish one service, or rebuild the copy of one that was published
+        before; False when it no longer qualifies.
 
         The row is locked and read again first: the service may have been
         edited, reset, deprecated or published since the candidates were chosen.
         """
         with transaction.atomic():
             sub = ServiceSubmission.objects.select_for_update().filter(pk=pk).first()
-            if (
-                sub is None
-                or PublishedService.objects.filter(pk=pk).exists()
-                or _backfill_decision(sub) != "publish"
-            ):
+            if sub is None or PublishedService.objects.filter(pk=pk).exists():
+                return False
+            decision = _backfill_decision(sub)
+            if decision == "rebuild":
+                # The service was published before: its copy comes back from
+                # its own latest revision, not from the working copy.
+                publishing.rebuild_from_revision(pk)
+                return True
+            if decision != "publish":
                 return False
             # A status an earlier release wrote without an event is recorded
             # first, so the published service has its approval in the history.

@@ -7,7 +7,9 @@ checks that both still give the same result).
 
 - approved: published as active;
 - deprecated: published as deprecated only if it went straight from approved
-  to deprecated and no content edit was logged after that approval;
+  to deprecated and no content edit was logged after that approval (after
+  the event before it when the approval was reconstructed, because its date
+  is not a real one);
 - other deprecated services and services approved before but now waiting for
   review stay private and are only counted (publish_backfill lists the ids).
 
@@ -105,17 +107,22 @@ def _holds_approved_content(Event, ChangeLog, sub):
     events = list(
         Event.objects.filter(submission_id=sub.pk)
         .order_by("id")
-        .values_list("to_status", "changed_at")
+        .values_list("to_status", "changed_at", "is_synthetic")
     )
     last_deprecation = max(
-        (i for i, (to_status, _) in enumerate(events) if to_status == DEPRECATED),
+        (i for i, event in enumerate(events) if event[0] == DEPRECATED),
         default=None,
     )
     if not last_deprecation:  # never deprecated, or created deprecated
         return False
-    to_status, approved_at = events[last_deprecation - 1]
+    to_status, approved_at, synthetic = events[last_deprecation - 1]
     if to_status != APPROVED:
         return False
+    if synthetic and last_deprecation > 1:
+        # The date of a reconstructed approval is not a real one: the service
+        # may have been approved, and edited, before it. Edits since the event
+        # ahead of it count.
+        approved_at = events[last_deprecation - 2][1]
     later_entries = ChangeLog.objects.filter(
         submission_id=sub.pk, changed_at__gt=approved_at
     ).values_list("changes", flat=True)
