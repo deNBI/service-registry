@@ -3,7 +3,8 @@
 Catalogue migration 0002 publishes existing services at deploy with the same
 rules; this command repeats them on demand and prints the ids it leaves out.
 A service that already has revisions but lost its public copy gets the copy
-back from its own latest revision, never from the working copy.
+back from its own latest revision, never from the working copy; one whose
+latest revision names a deleted service centre is listed by id instead.
 It also repairs published services whose status history does not end in their
 stored status (an earlier release changed it): the history is recorded and the
 copy's state and pending flag follow it. Content is never published by that
@@ -83,8 +84,16 @@ def _holds_approved_content(sub) -> bool:
 
 def _backfill_decision(sub) -> str:
     """What the backfill does with a service in its current status."""
-    if PublishedRevision.objects.filter(submission_id=sub.pk).exists():
-        return "rebuild"  # the copy is lost, the approved revision is not
+    latest = (
+        PublishedRevision.objects.filter(submission_id=sub.pk)
+        .order_by("-number")
+        .first()
+    )
+    if latest is not None:
+        # The copy is lost, the approved revision is not.
+        if publishing.names_deleted_foreign_key(latest.content):
+            return "deleted_centre"
+        return "rebuild"
     if sub.status == SubmissionStatus.APPROVED:
         return "publish"
     if sub.status != SubmissionStatus.DEPRECATED:
@@ -237,7 +246,7 @@ class Command(BaseCommand):
         return [str(pk) for pk in behind if dry_run or self._republish_one(pk)]
 
     def handle(self, *args, dry_run=False, **options):
-        published, listed, unconfirmed = 0, [], []
+        published, listed, unconfirmed, deleted_centre = 0, [], [], []
         unpublished = ServiceSubmission.objects.filter(published__isnull=True)
         candidates = unpublished.filter(
             status__in=[SubmissionStatus.APPROVED, SubmissionStatus.DEPRECATED]
@@ -248,6 +257,8 @@ class Command(BaseCommand):
                 listed.append(str(sub.pk))
             elif decision == "unconfirmed":
                 unconfirmed.append(str(sub.pk))
+            elif decision == "deleted_centre":
+                deleted_centre.append(str(sub.pk))
             elif dry_run or self._publish_one(sub.pk):
                 published += 1
         waiting = (
@@ -270,6 +281,12 @@ class Command(BaseCommand):
             f"(not published): {len(unconfirmed)}"
         )
         for pk in unconfirmed:
+            self.stdout.write(f"  {pk}")
+        self.stdout.write(
+            f"{prefix}public copy lost and its service centre was deleted "
+            f"(not rebuilt): {len(deleted_centre)}"
+        )
+        for pk in deleted_centre:
             self.stdout.write(f"  {pk}")
         self.stdout.write(
             f"{prefix}approved before, now waiting for review (not published): "
