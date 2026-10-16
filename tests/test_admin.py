@@ -1865,3 +1865,21 @@ class TestAdminTabletLayout:
         )[sel]
         for prop in ("width", "flex"):
             assert ours[prop] == tablet[prop], prop
+
+
+@pytest.mark.django_db
+class TestAdminSaveOfDeletedService:
+    def test_save_model_refuses_when_the_service_was_deleted(self, admin_client):
+        from django.contrib.admin.sites import AdminSite
+        from django.test import RequestFactory
+
+        from apps.submissions.admin import ServiceSubmissionAdmin
+        from apps.submissions.models import EditConflict, ServiceSubmission
+
+        sub = ServiceSubmissionFactory()
+        ServiceSubmission.objects.filter(pk=sub.pk).delete()
+        request = RequestFactory().post("/")
+        admin_instance = ServiceSubmissionAdmin(ServiceSubmission, AdminSite())
+
+        with pytest.raises(EditConflict):
+            admin_instance.save_model(request, sub, form=None, change=True)

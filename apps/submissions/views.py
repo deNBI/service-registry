@@ -32,15 +32,9 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 from django_ratelimit.decorators import ratelimit
 
-from apps.catalogue.publishing import republish
-
 from .concurrency import VERSION_FIELD, use_loaded_version
-from .diff_utils import (
-    build_diff,
-    filter_sanitization_artifacts,
-    snapshot,
-    snapshot_m2m,
-)
+from .diff_utils import filter_sanitization_artifacts
+from .edits import apply_edit, capture
 from . import idempotency
 from .forms import SubmissionForm, UpdateKeyForm
 from .http_utils import get_client_ip, hash_user_agent
@@ -565,11 +559,9 @@ class EditView(View):
                 status=400,
             )
 
-        # Snapshot BEFORE the form is validated — Django's _post_clean() applies
-        # POST data to the instance during is_valid(), so we must capture the
-        # original values before any form processing touches the object.
-        before_scalar = snapshot(submission)
-        before_m2m = snapshot_m2m(submission)
+        # Snapshot BEFORE the form is validated: Django's _post_clean() applies
+        # POST data to the instance during is_valid().
+        before = capture(submission)
 
         form = SubmissionForm(request.POST, request.FILES, instance=submission)
 
@@ -583,112 +575,35 @@ class EditView(View):
 
         updated = form.save(commit=False)
 
-        # Determine whether this edit should reset status back to "submitted".
-        #
-        # An approved service goes back to review for a real change, unless
-        # SUBMISSION_NO_RESET_FIELDS is configured (see site.toml [submission])
-        # and every changed field is in that exempt set: then the approved
-        # status is preserved and no re-review cycle is triggered. A rejected
-        # service goes back to submitted for any real change, exempt fields
-        # included: the owner has answered the rejection.
-        #
-        # We determine "changed" using two complementary signals:
-        #
-        #   Scalar fields — prospective diff (before_scalar vs snapshot of the
-        #   in-memory instance after form.save(commit=False)).  Using the
-        #   in-memory snapshot rather than form.changed_data avoids false
-        #   positives from form sanitization (bleach, NFC normalization,
-        #   whitespace stripping): a field whose raw POST value differed slightly
-        #   from the stored value but resolves to the same string after clean()
-        #   would appear in form.changed_data but produces an identical
-        #   prospective snapshot — and should NOT trigger a status reset.
-        #
-        #   M2M fields — form.changed_data filtered to M2M field names.  M2M
-        #   comparison is PK-based (no sanitization involved), so form.changed_data
-        #   is reliable here.  The M2M rows are not committed until save_m2m()
-        #   so a prospective snapshot cannot be used.
-        status_reset = False
-        if updated.status in (SubmissionStatus.APPROVED, SubmissionStatus.REJECTED):
-            from apps.submissions.lifecycle import get_no_reset_fields
-            from apps.submissions.diff_utils import DIFFABLE_M2M
+        def store() -> None:
+            updated.save()
+            form.save_m2m()
 
-            exempt = get_no_reset_fields()
+        def without_sanitization_artifacts(changes: list[dict]) -> list[dict]:
+            # Drop false positives caused by form sanitization (bleach, NFC
+            # normalisation, whitespace stripping) running on fields the user
+            # never actually changed. form.changed_data is Django's
+            # authoritative signal for what the submitter explicitly modified.
+            return filter_sanitization_artifacts(
+                changes,
+                form_changed_data=form.changed_data,
+                form_field_names=set(form.fields.keys()),
+            )
 
-            # Prospective scalar diff — compares before snapshot with the
-            # in-memory instance (post-clean, pre-save).
-            prospective_scalar = snapshot(updated)
-            scalar_changed = {
-                c["field"] for c in build_diff(before_scalar, prospective_scalar)
-            }
-
-            # M2M: use form.changed_data restricted to tracked M2M field names.
-            m2m_field_names = frozenset(f for f, _ in DIFFABLE_M2M)
-            m2m_changed = set(form.changed_data) & m2m_field_names
-
-            actually_changed = scalar_changed | m2m_changed
-            non_exempt_changed = actually_changed - exempt
-
-            if updated.status == SubmissionStatus.REJECTED:
-                status_reset = bool(actually_changed)
-            elif non_exempt_changed or (not exempt and actually_changed):
-                status_reset = True
-
-        # Content, related rows, the status change and the audit entry are
-        # stored together, and only if the service is still at the version the
-        # form was loaded with (save() checks). A failed audit write undoes the
-        # whole edit. The maturity tags are kept.
+        # Content, related rows, the status reset (see edits.py) and the audit
+        # entry are stored together, and only if the service is still at the
+        # version the form was loaded with (save() checks). A failed audit
+        # write undoes the whole edit. The maturity tags are kept.
         use_loaded_version(updated, request.POST)
         try:
-            with transaction.atomic():
-                updated.save()
-                form.save_m2m()
-                if status_reset:
-                    set_status(
-                        updated,
-                        SubmissionStatus.SUBMITTED,
-                        actor=CHANGELOG_ACTOR_SUBMITTER,
-                        owner_edit=True,
-                    )
-                else:
-                    # An edit that keeps the service approved goes live at once.
-                    republish(
-                        updated, reason="live_edit", actor=CHANGELOG_ACTOR_SUBMITTER
-                    )
-
-                # Snapshot AFTER saving and compute the diff.
-                after_scalar = snapshot(updated)
-                # Re-fetch M2M from the DB: form.save_m2m() has stored the new values.
-                after_m2m = snapshot_m2m(updated)
-
-                changes = build_diff(
-                    {**before_scalar, **before_m2m}, {**after_scalar, **after_m2m}
-                )
-                # Strip false positives caused by form sanitization (bleach, NFC
-                # normalisation, whitespace stripping) running on fields the user
-                # never actually changed.  form.changed_data is Django's
-                # authoritative signal for what the submitter explicitly modified.
-                changes = filter_sanitization_artifacts(
-                    changes,
-                    form_changed_data=form.changed_data,
-                    form_field_names=set(form.fields.keys()),
-                )
-
-                # Persist the diff on the submission so it's always visible in
-                # the admin.
-                if changes:
-                    changed_at = now()
-                    updated.last_change_summary = {
-                        "changed_by": CHANGELOG_ACTOR_SUBMITTER,
-                        "changed_at": changed_at.isoformat(),
-                        "changes": changes,
-                    }
-                    updated.save(update_fields=["last_change_summary"])
-                    SubmissionChangeLog.objects.create(
-                        submission=updated,
-                        changed_by=CHANGELOG_ACTOR_SUBMITTER,
-                        changed_at=changed_at,
-                        changes=changes,
-                    )
+            result = apply_edit(
+                updated,
+                before=before,
+                store=store,
+                actor=CHANGELOG_ACTOR_SUBMITTER,
+                by_owner=True,
+                refine_changes=without_sanitization_artifacts,
+            )
         except EditConflict:
             form.add_error(None, EditConflict.message)
             return render(
@@ -700,14 +615,16 @@ class EditView(View):
 
         logger.info(
             "Submission updated (%d field(s) changed)",
-            len(changes),
+            len(result.changes),
             extra={"submission_id": str(submission.id)},
         )
 
         # Send async notification (passes diff and status_reset flag so both
         # admin and submitter emails show it).
         send_update_notification.delay(
-            str(submission.id), changes=changes, status_reset=status_reset
+            str(submission.id),
+            changes=result.changes,
+            status_reset=result.status_reset,
         )
 
         # The edit grant intentionally survives the save: entering the API key
