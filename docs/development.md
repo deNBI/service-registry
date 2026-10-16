@@ -668,8 +668,8 @@ The same module holds the status transition table (`TRANSITIONS`, plus `OWNER_ED
 
 On reset, both the web form and API:
 
-1. Set `status = "submitted"`
-2. Clear `primary_maturity_tag = None` and `secondary_maturity_tags = []`
+1. Set `status = "submitted"` through `set_status` (an approved service, after a non-exempt change, or a rejected service, after any real change)
+2. Keep the maturity tags as they are
 3. Pass `status_reset=True` to `send_update_notification` so the submitter email includes a lifecycle notice
 
 ---
