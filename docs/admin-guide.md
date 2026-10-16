@@ -1136,6 +1136,20 @@ What fixes each class `verify_published` reports:
 
 Run `verify_published` after a release that includes the migration; it should print `0 problems`.
 
+### Restoring the published version {#restore-published}
+
+The list action **Restore published version** (permission `change_servicesubmission`) puts the content of a service's latest published version back into its working copy, for example to discard an edit that was rejected. It restores the public fields and their links to centres, categories, PIs, EDAM terms and licences. Fields that are not public, such as `comments` and the contact data, are not touched. The status and the published copy itself do not change; approve the service again if it should go through review. The maturity tag comes back with the version, except on a deprecated service, which has none.
+
+The action overwrites the working copy, so it first shows a confirmation page. It lists each selected service with its status and the published version it would restore, and says whether anything would be discarded. Nothing changes until you press the confirm button.
+
+On confirm, each service is read again and restored on its own. A service is left unchanged and counted in one warning when:
+
+- it was saved, or its links were changed, after the confirmation page was shown;
+- it has no published version;
+- it was deleted, or is no longer part of the selection.
+
+The other selected services are still restored. A service whose working copy already equals its published version is not written and is counted as already matching. Each restore is recorded in the History tab, and in the **Change History** when a field changed.
+
 ---
 
 ## Admin API Keys

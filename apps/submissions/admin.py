@@ -12,20 +12,33 @@ Features:
 import csv
 import json
 import logging
+import uuid
 from datetime import datetime
 
 from django import forms
 from django.contrib import admin, messages
 from django.forms.widgets import CheckboxSelectMultiple
+from django.contrib.admin import helpers
 from django.contrib.admin.models import CHANGE, LogEntry
 from django.contrib.admin.utils import unquote
 from django.db import transaction
+from django.db.models import OuterRef, Subquery
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.template import loader
+from django.template.response import TemplateResponse
 from django.utils import timezone
 from django.utils.html import escape, format_html, format_html_join, mark_safe
 
-from apps.catalogue.publishing import republish
+from apps.catalogue.models import PublishedRevision
+from apps.catalogue.public_fields import PUBLIC_M2M_FIELDS
+from apps.catalogue.publishing import (
+    apply_content_to_working_copy,
+    build_content,
+    content_hash,
+    existing_references,
+    republish,
+    restorable_content,
+)
 
 from .choices import keep_linked
 from .concurrency import VERSION_FIELD, use_loaded_version
@@ -187,6 +200,47 @@ class ServiceSubmissionAdminForm(forms.ModelForm):
                 "if no standard license applies."
             )
         return cleaned
+
+
+RESTORE_VERSION_NAME = "restore_version"
+
+
+def _canonical_id(value):
+    """A posted service id in its canonical form, so that case or dashes do
+    not make the same service look like a different one."""
+    try:
+        return str(uuid.UUID(str(value)))
+    except ValueError:
+        return str(value)
+
+
+def _posted_versions(request):
+    """The versions posted by the restore confirmation: canonical service id
+    -> version number the page showed.
+
+    The page posts them in one field, as white-space separated
+    ``<id>:<version>`` entries, so a long list adds one request field instead
+    of one per service. An entry is split at its last colon (an id may be
+    written ``urn:uuid:<id>``). An entry without a usable number names no
+    version, so its service is never restored.
+    """
+    versions = {}
+    for value in request.POST.getlist(RESTORE_VERSION_NAME):
+        for entry in value.split():
+            key, _, number = entry.rpartition(":")
+            if number.isascii() and number.isdigit():
+                versions[_canonical_id(key)] = int(number)
+    return versions
+
+
+def restore_matches(sub, revision, existing=None):
+    """True when restoring ``revision`` would leave the working copy of
+    ``sub`` as it is, so there is nothing to discard. ``existing`` is
+    ``existing_references`` for the versions of many services, when the
+    caller has looked them up together."""
+    return revision is not None and content_hash(build_content(sub)) == content_hash(
+        restorable_content(sub, revision.content, existing)
+    )
 
 
 @admin.register(ServiceSubmission)
@@ -1285,6 +1339,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         "action_deprecate",
         "action_undeprecate",
         "action_assign_maturity_tags",
+        "action_restore_published",
         "action_export_csv",
         "action_export_json",
     ]
@@ -1674,6 +1729,169 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         ):
             return
         self._change_status(request, queryset, "submitted", "Submitted")
+
+    @admin.action(
+        description="↩ Restore published version",
+        permissions=["change"],
+    )
+    def action_restore_published(self, request, queryset):
+        """Copy the last published version back into the working copy.
+
+        Used to discard an edit (for example after rejecting it). The status
+        and the published copy are not changed; approve afterwards if the
+        service should be reviewed again. Pending edits are lost, so the
+        first request only shows a confirmation page; the restore runs when
+        that page is submitted. The page posts back the version number each
+        service had; a service saved since (its version differs), without a
+        published version, deleted, or no longer in the selection is left
+        alone and counted in one message.
+        """
+        if not self._require_perm(
+            request, "change_servicesubmission", "restore published versions"
+        ):
+            return
+        if request.POST.get("post") != "yes":
+            if not queryset.exists():
+                self.message_user(
+                    request, self._nothing_to_restore_message(request), messages.WARNING
+                )
+                return
+            return self._restore_confirmation(request, queryset)
+        username = getattr(request.user, "username", "admin")
+        changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
+        # What the confirmation page showed for each service.
+        shown = _posted_versions(request)
+        selected = {
+            _canonical_id(pk)
+            for pk in request.POST.getlist(helpers.ACTION_CHECKBOX_NAME)
+        }
+        if not selected and not queryset.exists():
+            self.message_user(
+                request, self._nothing_to_restore_message(request), messages.WARNING
+            )
+            return
+        restored = unchanged = 0
+        listed, handled = set(), set()
+        for loaded in queryset:
+            listed.add(str(loaded.pk))
+            with transaction.atomic():
+                # Read the service and its latest revision again under the
+                # row lock (publishing takes the same lock): it may have
+                # changed since the page was shown.
+                sub = (
+                    ServiceSubmission.objects.select_for_update()
+                    .filter(pk=loaded.pk)
+                    .first()
+                )
+                if sub is None:
+                    continue
+                revision = (
+                    PublishedRevision.objects.filter(submission=sub)
+                    .order_by("-number")
+                    .first()
+                )
+                if revision is None or shown.get(str(sub.pk)) != sub.version:
+                    continue
+                handled.add(str(sub.pk))
+                if restore_matches(sub, revision):
+                    unchanged += 1
+                    continue
+                before = {**snapshot(sub), **snapshot_m2m(sub)}
+                apply_content_to_working_copy(sub, revision.content)
+                # The diff compares display names, so it can be empty for a
+                # restore that did change data (two PIs with the same name).
+                changes = build_diff(before, {**snapshot(sub), **snapshot_m2m(sub)})
+                if changes:
+                    now = timezone.now()
+                    sub.last_change_summary = {
+                        "changed_by": changed_by,
+                        "changed_at": now.isoformat(),
+                        "changes": changes,
+                    }
+                    sub.save(update_fields=["last_change_summary"])
+                    SubmissionChangeLog.objects.create(
+                        submission=sub,
+                        changed_by=changed_by,
+                        changed_at=now,
+                        changes=changes,
+                    )
+            self._log(request, sub, f"Restored published revision {revision.number}")
+            restored += 1
+        if restored or unchanged:
+            self.message_user(
+                request,
+                f"Restored the published version of {restored} submission(s); "
+                f"{unchanged} already matched it.",
+                messages.SUCCESS,
+            )
+        # Services that changed, have no published version, were deleted or
+        # left the list since the page.
+        not_restored = len((selected | listed) - handled)
+        if not_restored:
+            self.message_user(
+                request,
+                f"{not_restored} submission(s) not restored and left unchanged: "
+                "they changed after the confirmation page was shown, have no "
+                "published version, or are no longer in the list.",
+                messages.WARNING,
+            )
+
+    @staticmethod
+    def _nothing_to_restore_message(request):
+        """Why the restore action has no services to work on. A selection
+        made by ticking rows that have all been deleted since says so; an
+        empty list or select-all is just an empty selection."""
+        select_across = request.POST.get("select_across", "").lower() not in (
+            "",
+            "0",
+            "false",
+        )
+        if request.POST.getlist(helpers.ACTION_CHECKBOX_NAME) and not select_across:
+            return "The selected submissions no longer exist."
+        return "No submissions selected."
+
+    def _restore_confirmation(self, request, queryset):
+        """Page listing what the restore action will replace."""
+        newest_number = (
+            PublishedRevision.objects.filter(submission=OuterRef("submission"))
+            .order_by("-number")
+            .values("number")[:1]
+        )
+        latest = {
+            revision.submission_id: revision
+            for revision in PublishedRevision.objects.filter(
+                submission__in=queryset, number=Subquery(newest_number)
+            ).only("submission_id", "number", "created_at", "content")
+        }
+        # Read every relation of all rows in one query each, and look up the
+        # reference rows the versions name together, so the page runs the same
+        # number of queries whatever the number of rows.
+        existing = existing_references(rev.content for rev in latest.values())
+        rows = []
+        for sub in queryset.prefetch_related(*PUBLIC_M2M_FIELDS):
+            revision = latest.get(sub.pk)
+            rows.append((sub, revision, restore_matches(sub, revision, existing)))
+        context = {
+            **self.admin_site.each_context(request),
+            "title": "Restore published version",
+            "opts": self.model._meta,
+            "rows": rows,
+            # False when every row already matches its version or has none.
+            "discards": any(revision and not matches for _, revision, matches in rows),
+            "action_checkbox_name": helpers.ACTION_CHECKBOX_NAME,
+            "restore_version_name": RESTORE_VERSION_NAME,
+            "restore_versions": " ".join(
+                f"{sub.pk}:{sub.version}" for sub, _, _ in rows
+            ),
+            "cancel_url": request.get_full_path(),
+            "media": self.media,
+        }
+        request.current_app = self.admin_site.name
+        return TemplateResponse(
+            request,
+            "admin/submissions/servicesubmission/restore_published_confirmation.html",
+            context,
+        )
 
     def _export_queryset(self, queryset):
         """Return a fully prefetched queryset suitable for both export actions."""
