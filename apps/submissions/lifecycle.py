@@ -224,8 +224,11 @@ def set_status(
 
     Locks the row, reads the stored status and version (not the possibly stale
     instance), saves ``status`` plus ``extra_fields`` and writes one
-    SubmissionStatusEvent, all in one transaction. Maturity tags are kept while
-    a service goes through review; only deprecation clears them.
+    SubmissionStatusEvent, all in one transaction. The publishing layer then
+    reacts in the same transaction (``on_status_change``: an approval publishes
+    the working copy, other changes set the state of the published copy), so a
+    failing publish undoes the status change. Maturity tags are kept while a
+    service goes through review; only deprecation clears them.
     ``updated_at`` is only written when it is listed in ``extra_fields``.
 
     The caller has already passed its own conflict check (or works on a row it
@@ -237,18 +240,22 @@ def set_status(
     ``updated_at`` or ``last_change_summary``), never content loaded earlier.
 
     A stored status the history does not end in is recorded first (see
-    ``record_unrecorded_status``).
+    ``record_unrecorded_status``); a recorded approval or deprecation also
+    moves the published copy's state (see ``apply_caught_up_status``).
 
     When ``new_status`` is the stored status, nothing is changed. If the
-    history did not end in it, the history is recorded and the result is True;
-    with a complete history nothing is written and the result is False. So the
-    result is True exactly when something was written.
+    history did not end in it, the history is recorded and the status applied
+    to the published copy (an approval publishes, as an approval does) and the
+    result is True; with a complete history nothing is written and the result
+    is False. So the result is True exactly when something was written.
 
     Any other change must be in ``TRANSITIONS`` (checked against the status
     read under the lock) or ``TransitionNotAllowed`` is raised and nothing is
     written, not even the history recorded first. ``owner_edit=True`` also
     allows the reset of an approved service after an owner edit.
     """
+    # Imported here: the catalogue app imports the submission models.
+    from apps.catalogue.publishing import apply_caught_up_status, on_status_change
     from apps.submissions.models import (
         ServiceSubmission,
         SubmissionStatus,
@@ -266,8 +273,15 @@ def set_status(
         )
         now = timezone.now()
         recorded = record_unrecorded_status(submission.pk, current, now)
+        if recorded:
+            apply_caught_up_status(submission.pk)
         if current == new_status:
             submission.status = current
+            if recorded:
+                # The caller asks for the status the service already has and
+                # the history did not show it: apply it to the published copy
+                # as the change would have been.
+                on_status_change(submission, new_status, actor=actor)
             return recorded
         if new_status not in allowed_transitions(current, owner_edit=owner_edit):
             labels = dict(SubmissionStatus.choices)
@@ -297,4 +311,6 @@ def set_status(
             changed_at=now,
             changed_by=actor,
         )
+        # Inside the same transaction: a failing publish undoes the status change.
+        on_status_change(submission, new_status, actor=actor)
     return True

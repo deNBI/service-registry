@@ -27,6 +27,8 @@ from django.utils.html import escape, format_html, format_html_join, mark_safe
 
 from .choices import keep_linked
 from .concurrency import VERSION_FIELD, use_loaded_version
+from apps.catalogue.publishing import republish
+
 from .csv_utils import csv_safe
 from .diff_utils import build_diff, snapshot, snapshot_m2m
 from .markdown_render import markdown_enabled, render_submission_description
@@ -707,6 +709,16 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             request._diff_changes = []
             return
 
+        # Admin edits of an approved service go live without review: publish
+        # once the related rows are stored (no-op when nothing public changed
+        # or the service is not approved).
+        username = getattr(request.user, "username", "admin")
+        republish(
+            form.instance,
+            reason="admin_edit",
+            actor=f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}",
+        )
+
         # After super() the new M2M values are in the DB — snapshot them now.
         after_scalar = snapshot(form.instance)
         after_m2m = snapshot_m2m(form.instance)
@@ -1152,9 +1164,14 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             with transaction.atomic():
                 # Re-filter inside the transaction so any race-condition status
                 # change between the outer filter and this update is excluded.
-                approved_subs = queryset.filter(
-                    status=SubmissionStatus.APPROVED
-                ).select_for_update()
+                # Rows are locked in primary-key order, like every other place
+                # that locks several services, so two such requests cannot
+                # deadlock whatever sort the changelist uses.
+                approved_subs = (
+                    queryset.filter(status=SubmissionStatus.APPROVED)
+                    .select_for_update()
+                    .order_by("pk")
+                )
                 primary_choices_dict = dict(PRIMARY_MATURITY_TAG_CHOICES)
                 secondary_choices_dict = dict(SECONDARY_MATURITY_TAG_CHOICES)
 
@@ -1204,6 +1221,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                             "secondary_maturity_tags",
                         ]
                     )
+                    republish(sub, reason="tag_change", actor=changed_by)
 
                     if changes:
                         sub.last_change_summary = {

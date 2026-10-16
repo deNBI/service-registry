@@ -672,6 +672,14 @@ On reset, both the web form and API:
 2. Keep the maturity tags as they are
 3. Pass `status_reset=True` to `send_update_notification` so the submitter email includes a lifecycle notice
 
+### Published copy (`apps/catalogue`)
+
+Approved services also have a published copy (`PublishedRevision`, `PublishedService`, `WithdrawnService`; see [Database Schema](database-schema.md#catalogue_publishedrevision-catalogue_publishedservice-catalogue_withdrawnservice)). Nothing public reads it yet. `apps/catalogue/publishing.py` is its only writer (`tests/test_publishing_guard.py` scans for other writers):
+
+- `set_status` calls `on_status_change` inside its transaction after it writes the event, so a publish that fails undoes the status change. A status recorded late (see `record_unrecorded_status`) is applied with `apply_caught_up_status`, which only moves the copy's state. The catalogue is imported inside `set_status`, because the catalogue app imports the submission models.
+- The edit paths of an approved service call `republish` inside their own transaction, after the related rows are stored: `EditView`, the API `partial_update`, the admin change form (`save_related`) and the maturity tag action. It does nothing unless the stored status is approved and a copy exists, and it writes a revision only when a public field changed.
+- Public fields are listed in `apps/catalogue/public_fields.py`. Every `ServiceSubmission` field must be public or private there; `tests/test_publishing.py` fails for a field in neither list.
+
 ---
 
 ## Frontend JavaScript widgets

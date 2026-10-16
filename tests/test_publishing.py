@@ -827,6 +827,15 @@ class TestRebuild:
         PublishedService.objects.filter(pk=sub.pk).delete()
         assert publishing.rebuild_from_revision(sub.pk).state == "deprecated"
 
+    def test_a_recreated_read_model_keeps_the_dates_of_the_service(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        set_status(sub, "approved", actor="admin:jane")
+        before = PublishedService.objects.get(pk=sub.pk)
+        PublishedService.objects.filter(pk=sub.pk).delete()
+        ps = publishing.rebuild_from_revision(sub.pk)
+        assert ps.first_published_at == before.first_published_at is not None
+        assert ps.public_modified_at == before.public_modified_at
+
     def test_a_recreated_read_model_keeps_the_date_given_to_the_copy(self):
         """A copy published for a change made long ago is not dated by the
         time of the rebuild nor by the time its revision was written."""

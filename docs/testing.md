@@ -84,6 +84,7 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_status_log.py` | Reading status changes out of change-log entries; the reader agrees with the frozen copy in migration `0022` |
 | `test_status_write_guard.py` | Static scan: only `apps/submissions/lifecycle.py` may write a submission status |
 | `test_publishing.py` | Published copy: public field list pinned, read model mirrors the working copy, revisions (immutable, numbered), publish, republish and state changes, rebuild from a revision, row locks, relation query counts, deletion and tombstones, factory `published=True` |
+| `test_publishing_triggers.py` | What publishes: an approval through every path, live edits of an approved service (web form, API, admin), tag changes, and the status changes and review edits that leave the last approved version public |
 | `test_publishing_guard.py` | Static scan: only `apps/catalogue/publishing.py` and `apps/catalogue/signals.py` write the published copy |
 | `test_rejected_edit.py` | An owner edit of a rejected service (web form and API) returns it to `submitted`; tags kept; no-change saves and other statuses keep their status |
 | `test_clear_tags_on_deprecated.py` | Deprecation clears maturity tags; migration `0023` (cleared tags, version, change-log entry); a deprecated service holding tags gives a form error, not a server error |
