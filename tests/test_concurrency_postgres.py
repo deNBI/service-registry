@@ -291,7 +291,8 @@ def _rename(sub, name):
 
 
 def _admin_edit(sub, name):
-    """A saved edit of an approved service: the new name is live at once."""
+    """An admin edit saved through apply_edit: it raises the version and
+    publishes only when the service is approved."""
     row = _row(sub)
     before = capture(row)
 
@@ -357,6 +358,7 @@ def test_a_save_of_a_service_deleted_meanwhile_is_refused():
         writer = _second_writer(loaded.save)
     assert isinstance(_finish(*writer).get("error"), EditConflict)
     assert _no_rows_left(sub)
+    assert _tombstones() == [sub.pk]
 
 
 def test_parallel_changes_after_an_unrecorded_status_record_it_once():
@@ -891,7 +893,9 @@ def _admin_form(client, sub, **changes):
 
 def test_an_admin_form_save_after_a_parallel_status_change_is_refused(superuser_client):
     sub = _published_service()
-    data = _admin_form(superuser_client, sub, github_url="https://github.com/ex/moved")
+    data = _admin_form(
+        superuser_client, sub, github_url="https://github.com/example/moved"
+    )
     with holding(lambda: set_status(_row(sub), "under_review", actor="admin:jane")):
         writer = _second_writer(
             lambda: superuser_client.post(reverse(CHANGE, args=[sub.pk]), data)
@@ -902,7 +906,7 @@ def test_an_admin_form_save_after_a_parallel_status_change_is_refused(superuser_
     assert EditConflict.message in [str(m) for m in page.context["messages"]]
     row = _row(sub)
     assert row.status == "under_review"
-    assert row.github_url != "https://github.com/ex/moved"
+    assert row.github_url != "https://github.com/example/moved"
     copy = PublishedService.objects.get(pk=sub.pk)
     assert (copy.github_url, copy.pending_update) == (row.github_url, True)
     assert "0 problems" in _verify()
@@ -912,7 +916,9 @@ def test_a_status_change_after_an_admin_form_save_keeps_the_saved_content(
     superuser_client,
 ):
     sub = _published_service()
-    data = _admin_form(superuser_client, sub, github_url="https://github.com/ex/moved")
+    data = _admin_form(
+        superuser_client, sub, github_url="https://github.com/example/moved"
+    )
     with holding(lambda: superuser_client.post(reverse(CHANGE, args=[sub.pk]), data)):
         writer = _second_writer(
             lambda: set_status(_row(sub), "under_review", actor="admin:jane")
@@ -921,7 +927,7 @@ def test_a_status_change_after_an_admin_form_save_keeps_the_saved_content(
     row = _row(sub)
     assert (row.status, row.github_url) == (
         "under_review",
-        "https://github.com/ex/moved",
+        "https://github.com/example/moved",
     )
     assert _transitions(sub)[-1] == ("approved", "under_review")
     copy = PublishedService.objects.get(pk=sub.pk)
@@ -966,6 +972,10 @@ def test_a_restore_after_a_parallel_edit_restores_nothing(superuser_client):
     assert not any(
         "Restored the published version of 1" in m for m in _messages(response)
     )
+    assert PublishedService.objects.get(pk=sub.pk).service_name == (
+        "Example First Version"
+    )
+    assert "0 problems" in _verify()
 
 
 def test_a_status_change_after_a_restore_keeps_the_restored_content(superuser_client):
