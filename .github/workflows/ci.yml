@@ -7,7 +7,8 @@
 #   manual → workflow_dispatch (for release builds with a custom tag)
 #
 # Jobs:
-#   test    pytest (SQLite) + ruff + pip-audit  — runs natively, no Docker
+#   test    pytest (SQLite, slow tests included) + ruff + pip-audit  — runs
+#           natively, no Docker
 #   test-postgres  the whole suite incl. row-lock and concurrency tests
 #                  (make test-postgres) on a PostgreSQL service container
 #   build   docker buildx → validates image builds; push to registry (main only)
@@ -60,6 +61,16 @@ jobs:
           DB_PASSWORD: unused-in-test
           REDIS_PASSWORD: unused-in-test
         run: pytest tests/ -v --tb=short --cov=apps --cov-report=xml
+
+      # The exhaustive lifecycle sequences are marked `slow` and left out of
+      # the run above.
+      - name: Run slow tests
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings_test
+          SECRET_KEY: ci-only-not-a-real-key
+          DB_PASSWORD: unused-in-test
+          REDIS_PASSWORD: unused-in-test
+        run: make test-slow
 
       # - name: Upload coverage report
       #   uses: codecov/codecov-action@v4
