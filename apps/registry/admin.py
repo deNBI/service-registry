@@ -87,6 +87,15 @@ class _SubmissionGuardMixin:
             return format_html('<a href="{}">{}</a>', url, label)
         return label
 
+    @staticmethod
+    def _linked_submission_count(obj) -> int:
+        """Submissions that use the record in their working copy or in their
+        published copy (the last approved version can still name a record the
+        working copy has moved away from)."""
+        ids = set(obj.submissions.values_list("pk", flat=True))
+        ids.update(obj.published_services.values_list("pk", flat=True))
+        return len(ids)
+
     # ------------------------------------------------------------------
     # Single-record delete — intercept before the confirmation page
     # ------------------------------------------------------------------
@@ -98,14 +107,14 @@ class _SubmissionGuardMixin:
         """
         obj = self.get_object(request, object_id)
         if obj is not None:
-            count = obj.submissions.count()
+            count = self._linked_submission_count(obj)
             if count > 0:
                 self.message_user(
                     request,
                     (
                         f"Cannot delete \u201c{obj}\u201d \u2014 it is referenced by "
                         f"{count}\xa0submission{'s' if count != 1 else ''} "
-                        f"(across all statuses). "
+                        f"(across all statuses, including published versions). "
                         f"Set \u201cis_active\u201d to \u201cFalse\u201d to hide it "
                         f"from the submission form without breaking existing data."
                     ),
@@ -120,7 +129,7 @@ class _SubmissionGuardMixin:
 
     def delete_model(self, request, obj):
         """Safety net: skip silently if the record is in use."""
-        if obj.submissions.count() > 0:
+        if self._linked_submission_count(obj) > 0:
             return
         super().delete_model(request, obj)
 
@@ -160,7 +169,7 @@ class _SubmissionGuardMixin:
         in_use: list[tuple[str, int]] = []
 
         for obj in queryset:
-            count = obj.submissions.count()
+            count = self._linked_submission_count(obj)
             if count > 0:
                 in_use.append((str(obj), count))
 
