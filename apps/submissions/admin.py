@@ -45,6 +45,7 @@ from .choices import keep_linked
 from .concurrency import VERSION_FIELD, use_loaded_version
 from .csv_utils import csv_safe
 from .diff_utils import build_diff, snapshot, snapshot_m2m
+from .edits import apply_edit, capture, record_change
 from .markdown_render import markdown_enabled, render_submission_description
 from .models import (
     CHANGELOG_ACTOR_ADMIN_PREFIX,
@@ -723,16 +724,16 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             )
         return super().render_change_form(request, context, add, change, form_url, obj)
 
-    # ── Diff capture — save_model / save_related / response_change ─────────────
+    # ── Saving the change form: save_model / save_related / response_change ──
 
     def save_model(self, request, obj, form, change):
         """
-        Snapshot the scalar fields BEFORE the model is written to the database.
+        Snapshot the service BEFORE the form values are written to it.
 
-        obj already has the new form values applied, so we re-fetch the original
-        from the database to get a true "before" snapshot.  The snapshot is
-        stored on the request object so save_related() can compare it after
-        M2M relations are committed.
+        obj already has the new form values applied, so the original is
+        re-fetched from the database to get a true "before" snapshot. A change
+        is stored by save_related(), through apply_edit(); this method only
+        records the snapshot and the version the form was loaded with.
 
         The save is refused (EditConflict) if the service changed after the
         form was loaded (the whole change-form POST runs in one transaction,
@@ -742,65 +743,41 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         if change and obj.pk:
             use_loaded_version(obj, request.POST)
             try:
-                original = obj.__class__.objects.get(pk=obj.pk)
-                request._diff_before_scalar = snapshot(original)
+                request._edit_before = capture(obj.__class__.objects.get(pk=obj.pk))
             except obj.__class__.DoesNotExist:
-                request._diff_before_scalar = {}
+                raise EditConflict from None
+            return
         super().save_model(request, obj, form, change)
 
     def save_related(self, request, form, formsets, change):
         """
-        Snapshot M2M BEFORE super().save_related() commits the new values, then
-        compute the full diff (scalar + M2M), persist it on the model, and stash
-        it on the request so response_change() can display the diff banner.
+        Store a change of the service and its related rows through
+        apply_edit() (which also publishes an approved service again and
+        writes the change log), and stash the changes on the request so
+        response_change() can display the diff banner.
+
+        An admin save never resets the status.
         """
-        if change:
-            # M2M snapshot BEFORE save_related commits new values.
-            before_m2m = snapshot_m2m(form.instance)
-
-        super().save_related(request, form, formsets, change)
-
         if not change:
+            super().save_related(request, form, formsets, change)
             request._diff_changes = []
             return
 
-        # Admin edits of an approved service go live without review: publish
-        # once the related rows are stored (no-op when nothing public changed
-        # or the service is not approved).
-        username = getattr(request.user, "username", "admin")
-        republish(
-            form.instance,
-            reason="admin_edit",
-            actor=f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}",
-        )
-
-        # After super() the new M2M values are in the DB — snapshot them now.
-        after_scalar = snapshot(form.instance)
-        after_m2m = snapshot_m2m(form.instance)
-
-        before_scalar = getattr(request, "_diff_before_scalar", {})
-        changes = build_diff(
-            {**before_scalar, **before_m2m},
-            {**after_scalar, **after_m2m},
-        )
-        request._diff_changes = changes
-
-        if changes:
-            username = getattr(request.user, "username", "admin")
-            changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
-            now = timezone.now()
-            form.instance.last_change_summary = {
-                "changed_by": changed_by,
-                "changed_at": now.isoformat(),
-                "changes": changes,
-            }
-            form.instance.save(update_fields=["last_change_summary"])
-            SubmissionChangeLog.objects.create(
-                submission=form.instance,
-                changed_by=changed_by,
-                changed_at=now,
-                changes=changes,
+        def store():
+            form.instance.save()
+            super(ServiceSubmissionAdmin, self).save_related(
+                request, form, formsets, change
             )
+
+        username = getattr(request.user, "username", "admin")
+        result = apply_edit(
+            form.instance,
+            before=getattr(request, "_edit_before", {}),
+            store=store,
+            actor=f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}",
+            by_owner=False,
+        )
+        request._diff_changes = result.changes
 
     def response_change(self, request, obj):
         # ── Privileged POST actions — permission checked before execution ──────
@@ -1805,19 +1782,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 # restore that did change data (two PIs with the same name).
                 changes = build_diff(before, {**snapshot(sub), **snapshot_m2m(sub)})
                 if changes:
-                    now = timezone.now()
-                    sub.last_change_summary = {
-                        "changed_by": changed_by,
-                        "changed_at": now.isoformat(),
-                        "changes": changes,
-                    }
-                    sub.save(update_fields=["last_change_summary"])
-                    SubmissionChangeLog.objects.create(
-                        submission=sub,
-                        changed_by=changed_by,
-                        changed_at=now,
-                        changes=changes,
-                    )
+                    record_change(sub, changed_by, changes)
                 # Inside the transaction: a failed log write undoes the row.
                 self._log(
                     request, sub, f"Restored published revision {revision.number}"
