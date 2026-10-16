@@ -44,7 +44,7 @@ from apps.catalogue.publishing import (
 from .choices import keep_linked
 from .concurrency import VERSION_FIELD, use_loaded_version
 from .csv_utils import csv_safe
-from .diff_utils import build_diff, snapshot, snapshot_m2m
+from .diff_utils import build_diff
 from .edits import apply_edit, capture
 from .markdown_render import markdown_enabled, render_submission_description
 from .models import (
@@ -1776,11 +1776,9 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 if restore_matches(sub, revision):
                     unchanged += 1
                     continue
-                before = {**snapshot(sub), **snapshot_m2m(sub)}
+                before = capture(sub)
                 apply_content_to_working_copy(sub, revision.content)
-                # The diff compares display names, so it can be empty for a
-                # restore that did change data (two PIs with the same name).
-                changes = build_diff(before, {**snapshot(sub), **snapshot_m2m(sub)})
+                changes = build_diff(before, capture(sub))
                 if changes:
                     now = timezone.now()
                     sub.last_change_summary = {

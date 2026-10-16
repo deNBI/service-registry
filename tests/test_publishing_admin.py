@@ -759,10 +759,14 @@ class TestRestoreOfNamesakes:
         assert LogEntry.objects.filter(
             object_id=str(sub.pk), change_message__startswith="Restored"
         ).exists()
-        # The field-level diff compares names and is empty here.
-        assert not SubmissionChangeLog.objects.filter(
+        # The two PIs share a name; the log tells them apart by institute.
+        (log,) = SubmissionChangeLog.objects.filter(
             submission=sub, changed_by="admin:testadmin"
-        ).exists()
+        )
+        (change,) = log.changes
+        assert change["field"] == "responsible_pis"
+        assert "Example Institute B" in change["old"]
+        assert "Example Institute A" in change["new"]
 
 
 class TestMessages:
