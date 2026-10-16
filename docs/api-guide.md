@@ -219,7 +219,8 @@ Descriptions saved before Markdown support was released may contain HTML entitie
 
 Updating an approved submission resets its status to `submitted` for re-review **when a field that is not listed in `no_reset_fields` actually changes** (configured in `site.toml [submission]`), the same rule as the web edit form. Sending a field with the value it already has is not a change, so a GET, modify, PATCH round-trip that echoes unchanged fields keeps the service approved; values are compared as stored, so differences only in surrounding whitespace or Unicode normalisation (NFC) do not count either. If no `no_reset_fields` are configured, any actual change resets the status. The default exempt set is the list of external links, EDAM annotations, keywords, publications, contact fields, KPI fields, and `comments` — see `no_reset_fields` in `site.toml` for the authoritative list. Changing only exempt fields on an approved submission preserves its status and maturity tags. The content change and the reset are saved in one transaction.
 
-When a reset does occur, `primary_maturity_tag` and `secondary_maturity_tags` are also cleared (they are only valid on approved services). The submitter update email includes a lifecycle notice.
+The maturity tags are kept when a reset occurs. The submitter update email includes a lifecycle notice.
+
 
 ```bash
 curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
@@ -343,8 +344,8 @@ Maturity tags are assigned exclusively by admins via the Django admin backend. A
 **Filter by maturity:**
 
 ```bash
-# List all approved Mature services
-curl https://service-registry.bi.denbi.de/api/v1/submissions/?primary_maturity_tag=mature \
+# List approved Mature services
+curl https://service-registry.bi.denbi.de/api/v1/submissions/?primary_maturity_tag=mature&status=approved \
   -H "Authorization: AdminKey <your-key>"
 
 # List all services tagged Unstable
@@ -352,8 +353,8 @@ curl https://service-registry.bi.denbi.de/api/v1/submissions/?secondary_maturity
   -H "Authorization: AdminKey <your-key>"
 ```
 
-!!! info "Tags are cleared on unapproval"
-When an admin changes a service's status away from Approved (via the admin backend), all maturity tags are automatically cleared. The API will return `null` / `[]` for the tag fields on such services. Tags can be reassigned after the service is re-approved.
+!!! info "Tags are cleared on deprecation"
+    Tags are kept while a service goes through review. When a service is deprecated, all maturity tags are automatically cleared and the API returns `null` / `[]` for the tag fields. Tags can be reassigned after the service is approved again.
 
 ---
 

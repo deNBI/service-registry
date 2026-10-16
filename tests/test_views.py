@@ -822,8 +822,8 @@ class TestEditView:
         )
         assert sub.status == "submitted"
 
-    def test_edit_approved_non_exempt_clears_maturity_tags(self, client, settings):
-        """When status is reset, maturity tags are cleared to maintain model invariant."""
+    def test_edit_approved_non_exempt_keeps_maturity_tags(self, client, settings):
+        """When status is reset, maturity tags stay (only deprecation clears them)."""
         settings.SUBMISSION_NO_RESET_FIELDS = ["github_url"]
         settings.ALTCHA_HMAC_KEY = ""
         settings.CELERY_TASK_ALWAYS_EAGER = True
@@ -836,7 +836,7 @@ class TestEditView:
             secondary_maturity_tags=["unstable"],
         )
         self._setup_edit_session(client, sub)
-        # Changing service_description (non-exempt) → status reset + tag clear
+        # Changing service_description (non-exempt) -> status reset, tags kept
         data = self._edit_form_data(
             sub,
             service_description="A changed description that is definitely long enough.",
@@ -844,8 +844,8 @@ class TestEditView:
         client.post(reverse("submissions:edit", args=[sub.pk]), data=data)
         sub.refresh_from_db()
         assert sub.status == "submitted"
-        assert not sub.primary_maturity_tag
-        assert sub.secondary_maturity_tags == []
+        assert sub.primary_maturity_tag == "mature"
+        assert sub.secondary_maturity_tags == ["unstable"]
 
     def test_edit_approved_exempt_preserves_status(self, client, settings):
         """Editing only exempt fields keeps an approved submission's status."""
@@ -1057,8 +1057,8 @@ class TestEditView:
         assert resp.status_code == 302
         sub.refresh_from_db()
         assert sub.status == "submitted"
-        assert not sub.primary_maturity_tag
-        assert sub.secondary_maturity_tags == []
+        assert sub.primary_maturity_tag == "mature"
+        assert sub.secondary_maturity_tags == ["unstable"]
 
     def test_edit_form_has_draft_ttl_days_attribute(self, client, settings):
         """Edit form must render data-draft-ttl-days from settings."""

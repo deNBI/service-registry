@@ -197,7 +197,7 @@ The detail view is organised into collapsible fieldsets. The fieldset layout is:
 
 | Fieldset                           | Collapsed by default | Contents                                                                                                                                                                                     |
 | ---------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status & Metadata**              | No                   | ID, Status (read-only display), submitted/updated timestamps, Submission IP (superusers only), **Status action buttons**, Primary maturity tag (radio), Secondary maturity tags (checkboxes) |
+| **Status & Metadata**              | No                   | ID, Status (read-only display), submitted/updated timestamps, Submission IP (superusers only), **Status action buttons**, Primary maturity tag (radio), Secondary maturity tags (checkboxes; read-only unless the service is approved) |
 | **Last Change Summary**            | Yes                  | Most recent field-level diff                                                                                                                                                                 |
 | **Change History**                 | Yes                  | Full diff log (most recent 50 entries, each collapsible); a footer line shows the total count when the log exceeds 50 entries                                                                |
 | **A — General**                    | No                   | Date of entry, submitter name/affiliation, ELIXIR-DE flag                                                                                                                                    |
@@ -312,8 +312,8 @@ An approved service is withdrawn by deprecating it; it cannot be rejected. Nothi
 !!! note "Status history"
     The change view lists every status change of a submission under **Status history**: when it happened, the old and new status, and who made it (the submitter, an admin user, an API key or the system). The list is read-only. Entries for services registered before the history existed were rebuilt from the change log. Rows marked as synthetic close gaps, for those services or for status changes made without a history entry, and their dates are not real change dates. A status bulk action on services already in the target status records such missing history and changes nothing else.
 
-!!! note "Maturity tags are auto-cleared on any non-approved transition"
-Both individual buttons and bulk actions call the same underlying `_change_status` function, which clears maturity tags whenever moving away from `Approved`. See [Assigning Maturity Tags](#assigning-maturity-tags) for details.
+!!! note "Maturity tags are cleared only on deprecation"
+    Both individual buttons and bulk actions call the same underlying `_change_status` function, which clears maturity tags when a service is deprecated and keeps them for every other status. See [Assigning Maturity Tags](#assigning-maturity-tags) for details.
 
 !!! note "Deprecation is owner-reversible only by admins"
 Service owners can mark their own service as deprecated via the edit form. Only admins can reverse a deprecation. An admin can move a deprecated service back to `Submitted` for re-review (**Back to Submitted**), or straight to `Approved` (**Approve**), from the change view or with a bulk action.
@@ -328,7 +328,7 @@ in `draft` can move to any other status.
 When a submitter edits an approved service (via the update form or REST API), the platform determines whether to reset the status to `submitted`:
 
 - **Exempt fields** (configured in `site.toml [submission] no_reset_fields`) do not trigger a reset. The shipped default set covers supplementary fields: the external links, EDAM annotations, keywords, publications, contact fields, KPI fields, and `comments`. See `no_reset_fields` in `config/site.toml` for the authoritative list.
-- **Any non-exempt field change** resets status to `submitted` and clears maturity tags. The submitter's update email includes a lifecycle notice: *"Because one or more core service fields were modified, your service registration has been reset to Submitted…"*
+- **Any non-exempt field change** resets status to `submitted`; maturity tags are kept. The submitter's update email includes a lifecycle notice: *"Because of the changes listed above, your service registration has been reset to Submitted…"*
 - **Exempt-only edits** (e.g. uploading a logo, updating EDAM annotations) preserve the `approved` status and maturity tags. The submitter receives the normal diff email with no lifecycle notice.
 
 Sanitization artifacts (trailing whitespace stripped by form cleaning, Unicode normalization) are excluded from the reset decision — only genuine value changes count.
@@ -476,7 +476,7 @@ The CSV export keeps these fields flat (`submitter_first_name`, `submitter_last_
 
 ## Assigning Maturity Tags
 
-Maturity tags categorize services by lifecycle state. Tags can **only be assigned to approved services**.
+Maturity tags categorize services by lifecycle state. Tags can **only be assigned or changed while a service is approved**.
 
 ### Tag types
 
@@ -485,13 +485,13 @@ Maturity tags categorize services by lifecycle state. Tags can **only be assigne
 | **Primary** (optional)   | Mature, Emerging, Legacy | Mutually exclusive; one per service |
 | **Secondary** (optional) | Unstable, etc.           | Zero or more per service            |
 
-### Tag lifecycle and auto-clear on unapproval
+### Tag lifecycle and clearing on deprecation
 
-Tags are bound to approved status. **Any status transition away from Approved automatically clears all maturity tags** — this covers single-service status buttons and bulk actions (Mark Under Review, Deprecate).
+Tags are kept while a service goes through review (Under Review, Rejected, or Submitted after an owner edit), so a service that is approved again still has its tags. **Deprecating a service clears all maturity tags**, whether by the status button or the bulk action.
 
-When a tagged service is about to be unapproved, the change form shows a yellow warning banner listing which tags will be cleared. An info message is also shown after the action confirms how many services had tags cleared.
+On a service that is not approved, the tag fields in the change form are shown but cannot be edited; the service keeps the tags it had. When a tagged service is about to be deprecated, the change form shows a yellow warning banner listing which tags will be cleared. An info message is also shown after the action confirms how many services had tags cleared.
 
-To re-tag a service after re-approval, use the change form or bulk action again.
+To re-tag a deprecated service after it is approved again, use the change form or bulk action.
 
 ### Single service: Edit in change form
 
@@ -502,7 +502,7 @@ To re-tag a service after re-approval, use the change form or bulk action again.
 5. Save
 
 !!! note
-Using a status button (Mark Under Review or Deprecate) in the same section will automatically clear any selected tags — the warning banner indicates this before you act.
+    Using the Deprecate status button in the same section clears the tags; the warning banner indicates this before you act.
 
 ### Bulk assignment: List action
 

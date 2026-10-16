@@ -389,24 +389,36 @@ class TestServiceMaturityTags:
         sub.clean()
         assert "unstable" in sub.secondary_maturity_tags
 
-    def test_non_approved_cannot_have_tags(self):
-        for status in ["draft", "submitted", "under_review", "deprecated"]:
-            sub = ServiceSubmissionFactory(status=status, primary_maturity_tag="mature")
-            with pytest.raises(ValidationError) as exc:
-                sub.clean()
-            assert "Maturity tags can only be assigned to approved services" in str(
-                exc.value
-            )
-
-    def test_rejected_cannot_have_tags(self):
+    @pytest.mark.parametrize(
+        "status", ["draft", "submitted", "under_review", "rejected"]
+    )
+    def test_tags_are_valid_on_services_that_are_not_deprecated(self, status):
         sub = ServiceSubmissionFactory(
-            status="rejected", primary_maturity_tag="emerging"
+            status=status,
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=["unstable"],
+        )
+        sub.clean()
+
+    def test_deprecated_cannot_have_primary_tag(self):
+        sub = ServiceSubmissionFactory(
+            status="deprecated", primary_maturity_tag="emerging"
         )
         with pytest.raises(ValidationError) as exc:
             sub.clean()
-        assert "Maturity tags can only be assigned to approved services" in str(
-            exc.value
+        assert "__all__" in exc.value.message_dict
+        assert "deprecated" in str(exc.value).lower()
+
+    def test_deprecated_cannot_have_secondary_tags(self):
+        sub = ServiceSubmissionFactory(
+            status="deprecated", secondary_maturity_tags=["unstable"]
         )
+        with pytest.raises(ValidationError) as exc:
+            sub.clean()
+        assert "__all__" in exc.value.message_dict
+
+    def test_deprecated_without_tags_is_valid(self):
+        ServiceSubmissionFactory(status="deprecated").clean()
 
     def test_invalid_primary_tag_raises_error(self):
         sub = ServiceSubmissionFactory(status="approved")

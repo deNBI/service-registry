@@ -184,7 +184,9 @@ TRANSITIONS: dict[str, frozenset[str]] = {
 }
 
 # Moves that exist only as the reset after an owner edit of an approved service
-# (web form or API); no button or action offers them.
+# (web form or API); no button or action offers them. A rejected service
+# needs no entry here: its owner edit uses the rejected -> submitted move that
+# TRANSITIONS already allows.
 OWNER_EDIT_TRANSITIONS: dict[str, frozenset[str]] = {
     "approved": frozenset({"submitted"}),
 }
@@ -222,9 +224,9 @@ def set_status(
 
     Locks the row, reads the stored status and version (not the possibly stale
     instance), saves ``status`` plus ``extra_fields`` and writes one
-    SubmissionStatusEvent, all in one transaction. Maturity tags are only valid
-    on approved services, so any other status clears them. ``updated_at`` is
-    only written when it is listed in ``extra_fields``.
+    SubmissionStatusEvent, all in one transaction. Maturity tags are kept while
+    a service goes through review; only deprecation clears them.
+    ``updated_at`` is only written when it is listed in ``extra_fields``.
 
     The caller has already passed its own conflict check (or works on a row it
     has just read under a lock), so the instance takes the stored version
@@ -283,7 +285,7 @@ def set_status(
         submission.version = version
         submission.status = new_status
         fields = ["status", *extra_fields]
-        if new_status != SubmissionStatus.APPROVED:
+        if new_status == SubmissionStatus.DEPRECATED:
             submission.primary_maturity_tag = None
             submission.secondary_maturity_tags = []
             fields += ["primary_maturity_tag", "secondary_maturity_tags"]

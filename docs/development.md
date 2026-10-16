@@ -647,12 +647,13 @@ When a submitter edits an **approved** service via the web form or REST API, the
 
 ### `no_reset_fields` exemption
 
-Fields listed in `settings.SUBMISSION_NO_RESET_FIELDS` (configured via `site.toml [submission] no_reset_fields`) are exempt. If all actually-changed fields are exempt, the `approved` status is preserved. If any non-exempt field changed, status is reset and maturity tags are cleared (they are only valid on approved services).
+Fields listed in `settings.SUBMISSION_NO_RESET_FIELDS` (configured via `site.toml [submission] no_reset_fields`) are exempt. If all actually-changed fields are exempt, the `approved` status is preserved. If any non-exempt field changed, the status is reset. Maturity tags are kept by the reset; only deprecation clears them (see [Assigning Maturity Tags](admin-guide.md#assigning-maturity-tags)).
 
 The exemption is enforced identically in:
 
 - `apps/submissions/views.py` `EditView.post()` — web form path
 - `apps/api/views.py` `partial_update()` — REST API path
+
 
 ### `lifecycle.py`
 

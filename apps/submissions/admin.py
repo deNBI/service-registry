@@ -317,6 +317,31 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             kwargs["widget"] = CheckboxSelectMultiple()
         return super().formfield_for_manytomanyfield(db_field, request, **kwargs)
 
+    def get_readonly_fields(self, request, obj=None):
+        # Tags are assigned while a service is approved. On any other status
+        # they are shown, not editable (a service keeps the tags it had).
+        # A deprecated row that still holds tags (data from before tags were
+        # cleared on deprecation) keeps the fields editable so they can be
+        # cleared; validation otherwise rejects the row with no way to fix it.
+        readonly = super().get_readonly_fields(request, obj)
+        if obj is None or obj.status != SubmissionStatus.APPROVED:
+            if not (
+                obj is not None
+                and obj.status == SubmissionStatus.DEPRECATED
+                and (obj.primary_maturity_tag or obj.secondary_maturity_tags)
+            ):
+                readonly = (
+                    *readonly,
+                    "primary_maturity_tag",
+                    "secondary_maturity_tags",
+                )
+        return readonly
+
+    @admin.display(description="Secondary maturity tags")
+    def secondary_maturity_tags_display(self, obj):
+        """Secondary tags as labels. A read-only model field would show raw JSON."""
+        return ", ".join(obj.get_secondary_maturity_tag_display_list()) or "—"
+
     def formfield_for_dbfield(self, db_field, request, **kwargs):
         if db_field.name == "primary_maturity_tag":
             # Get the default form field then swap in RadioSelect + relabel empty option.
@@ -371,6 +396,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         "data_protection_consent",
         "change_history_display",
         "description_rendered",
+        "secondary_maturity_tags_display",
     )
 
     @admin.display(description="Description (rendered)")
@@ -1030,6 +1056,12 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         ):
             fieldsets = self._with_description_rendered(fieldsets)
 
+        if obj is not None and (
+            "secondary_maturity_tags" in self.get_readonly_fields(request, obj)
+            or not self.has_change_permission(request, obj)
+        ):
+            fieldsets = self._with_readable_secondary_tags(fieldsets)
+
         if not excluded:
             return fieldsets
 
@@ -1042,6 +1074,26 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             # If filtered is empty the entire fieldset is dropped — this only
             # happens to "🔑 API Key Management" when manage_apikeys is absent.
         return result
+
+    @staticmethod
+    def _with_readable_secondary_tags(fieldsets):
+        """Return a copy of fieldsets that lists the label display in place of
+        the secondary tags field (used where that field is read-only)."""
+        result = []
+        for title, options in fieldsets:
+            fields = tuple(
+                tuple(
+                    "secondary_maturity_tags_display"
+                    if name == "secondary_maturity_tags"
+                    else name
+                    for name in row
+                )
+                if isinstance(row, (tuple, list))
+                else row
+                for row in options["fields"]
+            )
+            result.append((title, {**options, "fields": fields}))
+        return tuple(result)
 
     @staticmethod
     def _with_description_rendered(fieldsets):
@@ -1340,7 +1392,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 f"{check}{label}</button>"
             )
         tag_warning = ""
-        if current == "approved" and (
+        if current != SubmissionStatus.DEPRECATED and (
             obj.primary_maturity_tag or obj.secondary_maturity_tags
         ):
             primary_label = obj.get_primary_maturity_tag_display() or ""
@@ -1354,7 +1406,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 '<p style="margin:.6rem 0 0;font-size:.78rem;color:#92400e;'
                 "background:#fffbeb;border:1px solid #fde68a;border-radius:4px;"
                 'padding:.3rem .6rem;">'
-                "⚠ Unapproving will automatically clear maturity tags: "
+                "⚠ Deprecating will automatically clear maturity tags: "
                 "<strong>{}</strong></p>",
                 tag_summary,
             )
@@ -1444,10 +1496,9 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 old_secondary_tags = list(sub.secondary_maturity_tags or [])
 
                 log_parts = [f"Status changed {old} → {new_status}"]
-                # set_status clears maturity tags when moving away from approved;
-                # tags are only valid on approved services and should not persist
-                # after de-approval.
-                cleared_tags = new_status != SubmissionStatus.APPROVED and bool(
+                # set_status clears maturity tags when the service is deprecated;
+                # they are kept for every other status.
+                cleared_tags = new_status == SubmissionStatus.DEPRECATED and bool(
                     old_primary_tag or old_secondary_tags
                 )
                 if cleared_tags:
@@ -1544,7 +1595,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             self.message_user(
                 request,
                 f"⚠ Maturity tags automatically cleared on {tags_cleared} submission(s) "
-                "that were moved away from Approved status.",
+                "that were deprecated.",
                 messages.WARNING,
             )
 

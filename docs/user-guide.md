@@ -318,13 +318,16 @@ Your submission moves through these states:
 If you edit an **Approved** submission, what happens depends on which fields you changed:
 
 **Fields that reset status to Submitted** (any core service content — name, description, categories, responsible PIs, contact details, licenses, etc.):
-The status is reset to **Submitted** and the administration office is notified to re-review your changes. Your maturity tags are cleared and will be re-assigned after approval. You will receive a confirmation email with a summary of what changed and a note that re-review has been triggered.
+The status is reset to **Submitted** and the administration office is notified to re-review your changes. Your maturity tags are kept. You will receive a confirmation email with a summary of what changed and a note that re-review has been triggered.
 
 **Fields that preserve Approved status** (supplementary/reference fields — logo, GitHub URL, bio.tools URL, FAIRsharing URL, EDAM topic, operation annotations, etc.):
 The status stays **Approved** and your maturity tags are preserved. You receive a confirmation email listing what changed, with no lifecycle notice.
 
+
+Maturity tags are assigned by the registry team and are kept while a service goes through review. They are cleared only when a service is deprecated.
+
 !!! tip "When in doubt, check your confirmation email"
-    Every edit sends you an email listing exactly what changed. If the email includes the notice *"your service registration has been reset to Submitted"*, the re-review cycle has been triggered. If it does not, your service remains approved.
+    Every edit sends you an email listing exactly what changed. If the email includes the notice *"your service registration has been reset to Submitted"*, the re-review cycle has been triggered. If it does not, your service keeps its status.
 
 ### What happens after submission?
 
