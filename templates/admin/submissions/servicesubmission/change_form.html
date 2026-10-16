@@ -1,0 +1,6 @@
+{% extends "admin/change_form.html" %}
+
+{% block form_top %}
+{{ block.super }}
+{% if loaded_version %}<input type="hidden" name="loaded_version" value="{{ loaded_version }}">{% endif %}
+{% endblock %}

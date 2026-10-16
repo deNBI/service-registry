@@ -23,7 +23,7 @@ import uuid
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator, validate_email
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -201,6 +201,17 @@ class KpiMonitoring(models.TextChoices):
     PLANNED = "planned", _("Planned")
 
 
+class EditConflict(Exception):
+    """The service was saved by someone else after this copy of it was
+    loaded, or it was deleted. Nothing of the refused save is stored."""
+
+    message = (
+        "This service was changed while you were editing. Nothing was saved. "
+        "Reload the page to see the current version, then make your changes "
+        "again."
+    )
+
+
 class ServiceSubmission(models.Model):
     """
     A single service registration submitted to de.NBI & ELIXIR-DE.
@@ -242,6 +253,10 @@ class ServiceSubmission(models.Model):
     )
     submitted_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    # Raised by one with every save and every change of the service's links
+    # (see save() and apps/submissions/signals.py). A copy saved with an older
+    # number than the stored one is refused (EditConflict).
+    version = models.PositiveIntegerField(default=1, editable=False)
     # Stored for abuse investigation; never exposed in API or admin list views
     submission_ip = models.GenericIPAddressField(null=True, blank=True)
     # SHA-256 of raw User-Agent — used for bot pattern detection; raw UA not stored
@@ -650,7 +665,34 @@ class ServiceSubmission(models.Model):
             value = getattr(self, field, "")
             if value:
                 setattr(self, field, _sanitise_text(value))
-        super().save(**kwargs)
+        if self._state.adding:
+            super().save(**kwargs)
+            return
+        # Optimistic locking: the row is locked and its stored version must be
+        # the one this copy was loaded with (or, for a form, the one the page
+        # showed). Otherwise someone saved the service in the meantime and
+        # this save would put older values back.
+        loaded = self.version
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            kwargs["update_fields"] = {*update_fields, "version"}
+        with transaction.atomic():
+            stored = (
+                type(self)
+                ._base_manager.select_for_update()
+                .filter(pk=self.pk)
+                .values_list("version", flat=True)
+                .first()
+            )
+            # A deleted row counts as changed: saving would insert it again.
+            if stored is None or stored != loaded:
+                raise EditConflict(self.pk)
+            self.version = stored + 1
+            try:
+                super().save(**kwargs)
+            except BaseException:
+                self.version = loaded
+                raise
 
 
 # ---------------------------------------------------------------------------

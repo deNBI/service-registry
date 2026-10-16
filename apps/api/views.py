@@ -356,35 +356,39 @@ class SubmissionViewSet(
         kwargs["partial"] = True
         instance = self.get_object()
 
-        # Snapshot BEFORE serializer.save() — DRF's update() writes the new
-        # values to the instance, so we must capture the originals first.
-        before_scalar = snapshot(instance)
-        before_m2m = snapshot_m2m(instance)
-
-        # Detect an attempt to change the (immutable) service_name so we can tell
-        # the client it was ignored. The serializer marks service_name read-only
-        # on update, so the incoming value never reaches validated_data — compare
-        # the raw request value against the stored name here, before save.
-        # Normalise the incoming value exactly as the model does on save
-        # (_sanitise_text: strip null bytes → NFC → strip whitespace) so echoing
-        # the same name in a different byte form (whitespace, Unicode NFD, …) is
-        # correctly treated as unchanged and does not raise a spurious warning.
-        from apps.submissions.models import _sanitise_text
-
-        requested_name = request.data.get("service_name")
-        service_name_change_ignored = (
-            requested_name is not None
-            and _sanitise_text(str(requested_name)) != instance.service_name
-        )
-
-        serializer = self.get_serializer(instance, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        was_approved = instance.status == "approved"
-        before = {**before_scalar, **before_m2m}
-
-        # One transaction: the content change, the status reset it may require
-        # and the audit entry are stored together or not at all.
+        # One transaction, with the row re-read under a lock: the content
+        # change, the status reset it may require and the audit entry are
+        # stored together or not at all, and a save made after the row was
+        # first read is neither overwritten nor a reason for this one to fail.
         with transaction.atomic():
+            instance = type(instance).objects.select_for_update().get(pk=instance.pk)
+
+            # Snapshot BEFORE serializer.save() — DRF's update() writes the new
+            # values to the instance, so we must capture the originals first.
+            before_scalar = snapshot(instance)
+            before_m2m = snapshot_m2m(instance)
+
+            # Detect an attempt to change the (immutable) service_name so we can tell
+            # the client it was ignored. The serializer marks service_name read-only
+            # on update, so the incoming value never reaches validated_data — compare
+            # the raw request value against the stored name here, before save.
+            # Normalise the incoming value exactly as the model does on save
+            # (_sanitise_text: strip null bytes → NFC → strip whitespace) so echoing
+            # the same name in a different byte form (whitespace, Unicode NFD, …) is
+            # correctly treated as unchanged and does not raise a spurious warning.
+            from apps.submissions.models import _sanitise_text
+
+            requested_name = request.data.get("service_name")
+            service_name_change_ignored = (
+                requested_name is not None
+                and _sanitise_text(str(requested_name)) != instance.service_name
+            )
+
+            serializer = self.get_serializer(instance, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            was_approved = instance.status == "approved"
+            before = {**before_scalar, **before_m2m}
+
             serializer.save()
             # Field-level diff of what the save ACTUALLY changed. snapshot()
             # reads the saved (sanitised: stripped, NFC, LF) values, so
