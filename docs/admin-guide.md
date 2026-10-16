@@ -571,7 +571,7 @@ Both interfaces support soft-delete: `DELETE` via the API (or setting `is_active
 
 ### Deletion guard
 
-Hard deletion of any PI, service centre, or service category is **blocked** whenever the record is referenced by at least one submission (in any status, such as draft, submitted or approved), or by the last approved version of a service, which can still name a record the service has moved away from while an edit is under review.
+Hard deletion of any PI, service centre, or service category is **blocked** whenever the record is referenced by at least one submission (in any status, such as draft, submitted or approved), or by the last approved version of a service, which can still name a record the service has moved away from while an edit is under review. The Submissions column of the list shows both counts, for example "2 submissions, 1 published", so a record that blocks deletion never shows as unused.
 
 | Scenario                                                              | Behaviour                                                                                                                                                                                                                            |
 | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -1099,7 +1099,7 @@ Catalogue migration `0002` runs once with the other migrations and, when it find
 - every approved service, as active;
 - every deprecated service that went straight from approved to deprecated and whose content was not edited after that approval, as deprecated. A deprecated service has no maturity tag, because deprecation clears it.
 
-Other services stay private: deprecated services that were never approved or may have been edited after their last approval, and services that were approved once and are now waiting for review. The migration only counts them; `publish_backfill` lists the deprecated ones by id. A service waiting for review is published when it is approved.
+Other services stay private: deprecated services that were never approved or may have been edited after their last approval, and services that were approved once and are now waiting for review. A service that was approved before this release, then edited and rejected, also stays private until it is approved again. The migration only counts them; `publish_backfill` lists the deprecated ones by id. A service waiting for review is published when it is approved.
 
 ### Commands
 
@@ -1116,7 +1116,7 @@ docker compose exec web python manage.py rebuild_published --all
 docker compose exec web python manage.py rebuild_published --id <uuid>
 ```
 
-- **`publish_backfill`** repeats the migration for services that have no copy yet and is safe to run again. With `--dry-run` it writes nothing and shows what a run would do. It lists by id the deprecated services it does not publish (never approved, or content not confirmed as approved), so an admin can decide: approve the service again to publish it, or leave it private. It also repairs a published service whose stored status is not the last entry of its status history (an earlier release changed it): the history is recorded and the copy's state follows it, without publishing content. Finally it publishes the working copy of an approved service whose copy is behind it.
+- **`publish_backfill`** repeats the migration for services that have no copy yet and is safe to run again. With `--dry-run` it writes nothing and shows what a run would do. It lists by id the deprecated services it does not publish (never approved, or content not confirmed as approved), so an admin can decide: approve the service again to publish it, or leave it private. It also lists by id a service whose copy is lost and whose latest version names a deleted service centre, and carries on with the others. It also repairs a published service whose stored status is not the last entry of its status history (an earlier release changed it): the history is recorded and the copy's state follows it, without publishing content. Finally it publishes the working copy of an approved service whose copy is behind it.
 - **`verify_published`** exits non-zero when it finds a problem and lists the ids per class: `stale` (approved, no update pending, working copy differs from the copy), `unpublished_approved`, `drift` (the copy differs from its latest revision), `revision_without_copy` (a service that is not approved has revisions but no copy), `no_approval_event`, `missing_reference` (a revision names a registry record that was deleted), `state_mismatch`, `status_history_drift` and `status_history_broken`. It changes nothing.
 - **`rebuild_published`** recreates the read-model rows from the latest revision, never from the working copy, and creates no revision. `publish_backfill` does the same for an approved or deprecated service that has revisions but no copy, so it never publishes the working copy of a service that was published before.
 
@@ -1128,6 +1128,7 @@ What fixes each class `verify_published` reports:
 | `unpublished_approved` | `publish_backfill` |
 | `drift` | `rebuild_published` |
 | `revision_without_copy` | `rebuild_published --id <uuid>` |
+| `revision_without_copy`, and `rebuild_published` refuses it because the latest revision names a deleted service centre | Admin decision. `publish_backfill` lists the id under "public copy lost and its service centre was deleted". Give the service another centre, send it back to review and approve it again; the approval writes a new version and a new copy. |
 | `missing_reference` | Admin decision: restore the registry record, or update the service and approve it again. The commands cannot bring a deleted record back. |
 | `state_mismatch` | `publish_backfill` when the status history also lags (see `status_history_drift`); otherwise an admin decision, because `rebuild_published` sets the state only for a copy it recreates. |
 | `no_approval_event` | `publish_backfill` when the status history lags and the service is approved, because it records the missing status; otherwise an admin decision. |
@@ -1138,7 +1139,7 @@ Run `verify_published` after a release that includes the migration; it should pr
 
 ### Restoring the published version {#restore-published}
 
-The list action **Restore published version** (permission `change_servicesubmission`) puts the content of a service's latest published version back into its working copy, for example to discard an edit that was rejected. It restores the public fields and their links to centres, categories, PIs, EDAM terms and licences. Internal fields, such as `comments` and the internal contact data, are not touched. A centre, category, PI, EDAM term or licence that was switched off since the version was published (not deleted) is linked again. The status and the published copy itself do not change; approve the service again if it should go through review. The maturity tag comes back with the version, except on a deprecated service, which has none.
+The list action **Restore published version** (permission `change_servicesubmission`) puts the content of a service's latest published version back into its working copy, for example to discard an edit that was rejected. It restores the public fields and their links to centres, categories, PIs, EDAM terms and licences. Internal fields, such as `comments` and the internal contact data, are not touched. A centre, category, PI, EDAM term or licence that was switched off since the version was published (not deleted) is linked again. The status and the published copy itself do not change; approve the service again to make the restored content its approved version. The maturity tag comes back with the version, except on a deprecated service, which has none.
 
 The action overwrites the working copy, so it first shows a confirmation page. It lists each selected service with its status and the published version it would restore, and says whether anything would be discarded. Nothing changes until you press the confirm button.
 
