@@ -571,7 +571,7 @@ Both interfaces support soft-delete: `DELETE` via the API (or setting `is_active
 
 ### Deletion guard
 
-Hard deletion of any PI, service centre, or service category is **blocked** whenever the record is referenced by at least one submission (in any status, such as draft, submitted or approved).
+Hard deletion of any PI, service centre, or service category is **blocked** whenever the record is referenced by at least one submission (in any status, such as draft, submitted or approved), or by the last approved version of a service, which can still name a record the service has moved away from while an edit is under review.
 
 | Scenario                                                              | Behaviour                                                                                                                                                                                                                            |
 | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

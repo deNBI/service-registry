@@ -610,3 +610,92 @@ class TestDeleteActionPermissionGuard:
             {"action": "guarded_delete_selected", "_selected_action": [str(cat.pk)]},
         )
         assert not ServiceCategory.objects.filter(pk=cat.pk).exists()
+
+
+# ---------------------------------------------------------------------------
+# Records still used by a published copy
+# ---------------------------------------------------------------------------
+
+
+def _only_in_published_copy(model_label):
+    """A record the working copy no longer uses but the published copy still
+    does: the owner moved the service on in an edit that is under review."""
+    from apps.catalogue.models import PublishedService
+    from apps.submissions.lifecycle import set_status
+
+    sub = ServiceSubmissionFactory(biotools_url="")
+    set_status(sub, "approved", actor="admin:jane")
+    published = PublishedService.objects.get(pk=sub.pk)
+    if model_label == "servicecenter":
+        record = sub.service_center
+        type(sub).objects.filter(pk=sub.pk).update(
+            service_center=ServiceCenterFactory()
+        )
+    elif model_label == "servicecategory":
+        record = sub.service_categories.first()
+        sub.service_categories.set([ServiceCategoryFactory()])
+    else:
+        record = sub.responsible_pis.first()
+        sub.responsible_pis.set([PIFactory()])
+    set_status(sub, "submitted", actor="submitter", owner_edit=True)
+    assert record.submissions.count() == 0
+    assert published.pk in record.published_services.values_list("pk", flat=True)
+    return record
+
+
+@pytest.mark.parametrize(
+    "model_label", ["servicecenter", "servicecategory", "principalinvestigator"]
+)
+class TestRecordsUsedByAPublishedCopy:
+    def test_bulk_delete_is_blocked(self, admin_client, model_label):
+        record = _only_in_published_copy(model_label)
+        resp = _run_bulk_action(admin_client, model_label, record.pk)
+        assert resp.status_code == 302
+        assert "Deletion blocked" in _error_messages(resp)[0]
+        assert type(record).objects.filter(pk=record.pk).exists()
+
+    def test_single_delete_is_blocked(self, admin_client, model_label):
+        record = _only_in_published_copy(model_label)
+        resp = admin_client.post(_delete_url(model_label, record.pk), {"post": "yes"})
+        assert resp.status_code == 302
+        assert "Cannot delete" in _error_messages(resp)[0]
+        assert type(record).objects.filter(pk=record.pk).exists()
+
+    def test_the_delete_safety_net_keeps_the_record(self, db, rf, model_label):
+        from django.contrib import admin
+
+        record = _only_in_published_copy(model_label)
+        admin.site._registry[type(record)].delete_model(rf.post("/"), record)
+        assert type(record).objects.filter(pk=record.pk).exists()
+
+    def test_the_column_shows_a_record_used_only_by_a_published_copy(
+        self, admin_client, model_label
+    ):
+        record = _only_in_published_copy(model_label)
+        resp = admin_client.get(_changelist_url(model_label))
+        assert resp.status_code == 200
+        row = re.search(
+            rf'name="_selected_action" value="{record.pk}".*?'
+            r'field-linked_submissions_display">(.*?)</td>',
+            resp.content.decode(),
+            re.S,
+        )
+        assert row is not None
+        assert "1\xa0published" in row.group(1)
+
+    def test_the_column_counts_both_copies(self, admin_client, model_label):
+        record = _only_in_published_copy(model_label)
+        sub = ServiceSubmissionFactory(biotools_url="")
+        field = {
+            "servicecenter": "service_center",
+            "servicecategory": "service_categories",
+            "principalinvestigator": "responsible_pis",
+        }[model_label]
+        if field == "service_center":
+            type(sub).objects.filter(pk=sub.pk).update(service_center=record)
+        else:
+            getattr(sub, field).set([record])
+        resp = admin_client.get(_changelist_url(model_label))
+        text = resp.content.decode()
+        assert "1\xa0submission" in text
+        assert "1\xa0published" in text
