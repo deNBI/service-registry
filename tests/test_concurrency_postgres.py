@@ -188,3 +188,24 @@ def test_api_patch_waits_and_keeps_the_other_change():
     assert response.status_code == 200, response.content
     row = _row(sub)
     assert (row.service_description, row.comments) == (DESCRIPTION, "Changed by Jane")
+
+
+def test_api_patch_with_if_match_waits_and_is_refused_after_a_change():
+    sub = _service(status="approved")
+    _, key = APIKeyFactory.create_with_plaintext(submission=sub, scope="write")
+    api = APIClient()
+    api.credentials(HTTP_AUTHORIZATION=f"ApiKey {key}")
+    tag = api.get(f"/api/v1/submissions/{sub.pk}/")["ETag"]
+    with holding(lambda: _comment_by_jane(sub)):
+        writer = _second_writer(
+            lambda: api.patch(
+                f"/api/v1/submissions/{sub.pk}/",
+                {"service_description": DESCRIPTION},
+                format="json",
+                HTTP_IF_MATCH=tag,
+            )
+        )
+    assert _finish(*writer)["value"].status_code == 412
+    row = _row(sub)
+    assert row.comments == "Changed by Jane"
+    assert row.service_description != DESCRIPTION
