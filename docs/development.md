@@ -678,6 +678,7 @@ Approved services also have a published copy (`PublishedRevision`, `PublishedSer
 
 - `set_status` calls `on_status_change` inside its transaction after it writes the event, so a publish that fails undoes the status change. A status recorded late (see `record_unrecorded_status`) is applied with `apply_caught_up_status`, which only moves the copy's state. The catalogue is imported inside `set_status`, because the catalogue app imports the submission models.
 - The edit paths of an approved service call `republish` inside their own transaction, after the related rows are stored: `EditView`, the API `partial_update`, the admin change form (`save_related`) and the maturity tag action. It does nothing unless the stored status is approved and a copy exists, and it writes a revision only when a public field changed.
+- Catalogue migration `0002` publishes the services that existed before the copy; `publish_backfill`, `verify_published` and `rebuild_published` repeat and check that step (see [Published Copy of Services](admin-guide.md#published-copy)). The migration holds frozen copies of the content building and of the backfill rules, so later code changes cannot alter it; `tests/test_publish_existing_migration.py` checks that both give the same result.
 - Public fields are listed in `apps/catalogue/public_fields.py`. The private fields are listed in `tests/test_publishing.py`, which fails for a `ServiceSubmission` field that is in neither list.
 
 ---

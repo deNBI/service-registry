@@ -1088,6 +1088,42 @@ To change the schedule, edit `CELERY_BEAT_SCHEDULE` in `config/settings.py`:
 
 ---
 
+## Published Copy of Services {#published-copy}
+
+Approved services have a published copy that is kept apart from the working copy that owners edit and admins review. Nothing public reads it yet. Releases that add the copy publish the services that already exist as part of `manage.py migrate`; the commands below repeat that step and check the result. They print counts and service ids only, never field values.
+
+### What the migration publishes
+
+Catalogue migration `0002` runs once with the other migrations and, when it finds anything, prints one line of counts (`published`, `deprecated_never_approved`, `deprecated_unconfirmed`, `waiting_for_review`). It publishes:
+
+- every approved service, as active;
+- every deprecated service that went straight from approved to deprecated and whose content was not edited after that approval, as deprecated. A deprecated service has no maturity tag, because deprecation clears it.
+
+Other services stay private: deprecated services that were never approved or may have been edited after their last approval, and services that were approved once and are now waiting for review. The migration only counts them; `publish_backfill` lists the deprecated ones by id. A service waiting for review is published when it is approved.
+
+### Commands
+
+```bash
+# Publish what is missing, list what needs a decision, repair lagging copies
+docker compose exec web python manage.py publish_backfill --dry-run
+docker compose exec web python manage.py publish_backfill
+
+# Check every copy against its revision and its working copy
+docker compose exec web python manage.py verify_published
+
+# Recreate copies from their latest revision
+docker compose exec web python manage.py rebuild_published --all
+docker compose exec web python manage.py rebuild_published --id <uuid>
+```
+
+- **`publish_backfill`** repeats the migration for services that have no copy yet and is safe to run again. With `--dry-run` it writes nothing and shows what a run would do. It lists by id the deprecated services it does not publish (never approved, or content not confirmed as approved), so an admin can decide: approve the service again to publish it, or leave it private. It also repairs a published service whose stored status is not the last entry of its status history (an earlier release changed it): the history is recorded and the copy's state follows it, without publishing content. Finally it publishes the working copy of an approved service whose copy is behind it.
+- **`verify_published`** exits non-zero when it finds a problem and lists the ids per class: `stale` (approved, no update pending, working copy differs from the copy), `unpublished_approved`, `drift` (the copy differs from its latest revision), `no_approval_event`, `missing_reference` (a revision names a registry record that was deleted), `state_mismatch`, `status_history_drift` and `status_history_broken`. It changes nothing.
+- **`rebuild_published`** recreates the read-model rows from the latest revision, never from the working copy, and creates no revision. Use it for `drift`; run `publish_backfill` for `stale` and `unpublished_approved`.
+
+Run `verify_published` after a release that includes the migration; it should print `0 problems`.
+
+---
+
 ## Admin API Keys
 
 Scoped machine-to-machine keys that are **independent of any staff user account**.
