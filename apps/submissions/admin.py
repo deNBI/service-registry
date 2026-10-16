@@ -745,7 +745,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             try:
                 request._edit_before = capture(obj.__class__.objects.get(pk=obj.pk))
             except obj.__class__.DoesNotExist:
-                request._edit_before = {}
+                raise EditConflict from None
             return
         super().save_model(request, obj, form, change)
 
