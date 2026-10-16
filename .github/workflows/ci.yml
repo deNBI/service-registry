@@ -7,7 +7,7 @@
 #   manual → workflow_dispatch (for release builds with a custom tag)
 #
 # Jobs:
-#   test    pytest (SQLite, slow tests included) + ruff + pip-audit  — runs
+#   test    pytest (SQLite, slow tests included) + ruff + pip-audit; runs
 #           natively, no Docker
 #   test-postgres  the whole suite incl. row-lock and concurrency tests
 #                  (make test-postgres) on a PostgreSQL service container
