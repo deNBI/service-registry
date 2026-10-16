@@ -80,8 +80,11 @@ class Command(BaseCommand):
                 ):
                     problems["stale"].append(str(sub.pk))
 
+        # Approved services without a copy are already listed as
+        # unpublished_approved.
+        listed = set(problems["unpublished_approved"])
         problems["revision_without_copy"] = sorted(
-            str(pk) for pk in latest if pk not in published
+            str(pk) for pk in latest if pk not in published and str(pk) not in listed
         )
         for pk, ps in published.items():
             rev = latest.get(pk)

@@ -1105,9 +1105,7 @@ class TestVerifyPublished:
         with pytest.raises(CommandError, match="unpublished_approved=1"):
             _run("verify_published")
 
-    @pytest.mark.parametrize(
-        "status", ["approved", "deprecated", "under_review", "rejected"]
-    )
+    @pytest.mark.parametrize("status", ["deprecated", "under_review", "rejected"])
     def test_detects_a_revision_without_a_read_model(self, status):
         sub = _published()
         _reach(sub, status)
@@ -1115,6 +1113,13 @@ class TestVerifyPublished:
         out = _run_failing("verify_published")
         assert "revision_without_copy: 1" in out
         assert str(sub.pk) in out
+
+    def test_an_approved_service_without_its_copy_is_listed_once(self):
+        sub = _published()
+        PublishedService.objects.filter(pk=sub.pk).delete()
+        out = _run_failing("verify_published")
+        assert "unpublished_approved: 1" in out
+        assert "revision_without_copy: 0" in out
 
     def test_a_service_without_any_revision_is_not_a_revision_without_a_copy(self):
         ServiceSubmissionFactory(status="deprecated", biotools_url="")
