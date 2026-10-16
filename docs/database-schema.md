@@ -460,23 +460,9 @@ These are automatically managed by Django. They have no extra columns.
 
 **Source:** `apps/submissions/models.py` → `SubmissionStatus` (line 130) · status reset on approved-submission edit enforced in `apps/submissions/views.py`
 
-```
-          ┌──────────┐
-          │  draft   │  ← saved by form before submission (rare)
-          └────┬─────┘
-               │ submit
-          ┌────▼──────┐
-          │ submitted │  ← default on form POST
-          └────┬──────┘
-               │ admin action
-        ┌──────▼───────┐
-        │ under_review │
-        └──┬───────────┘
-           │           │
-    ┌──────▼─┐     ┌───▼──────┐
-    │approved│     │ rejected │
-    └────────┘     └──────────┘
-```
+The status values are `draft`, `submitted`, `under_review`, `approved`, `rejected` and `deprecated`. A new registration starts as `submitted`. `draft` is a legacy value that nothing sets and no change leads into.
+
+Which status can change to which is fixed by one table, listed under [Allowed status changes](admin-guide.md#allowed-status-changes) in the Admin Guide. Every change is recorded in the status history.
 
 If a submitter edits an **approved** submission, the status resets to `submitted` for re-review.
 

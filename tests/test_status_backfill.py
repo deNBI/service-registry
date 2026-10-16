@@ -328,7 +328,9 @@ def test_reverse_removes_every_status_event():
     live = ServiceSubmissionFactory(biotools_url="")
     set_status(live, "approved", actor="admin:jane")
     _run()
-    set_status(ServiceSubmission.objects.get(pk=sub.pk), "rejected", actor="admin:jane")
+    set_status(
+        ServiceSubmission.objects.get(pk=sub.pk), "deprecated", actor="admin:jane"
+    )
     MIGRATION.unbackfill(django_apps, None)
     assert SubmissionStatusEvent.objects.count() == 0
 
@@ -342,7 +344,9 @@ def test_reverse_then_forward_rebuilds_one_chain_for_every_service():
     live = ServiceSubmissionFactory(biotools_url="")
     set_status(live, "approved", actor="admin:jane")
     _run()
-    set_status(ServiceSubmission.objects.get(pk=old.pk), "rejected", actor="admin:jane")
+    set_status(
+        ServiceSubmission.objects.get(pk=old.pk), "deprecated", actor="admin:jane"
+    )
     set_status(
         ServiceSubmission.objects.get(pk=live.pk), "deprecated", actor="admin:jane"
     )
@@ -448,7 +452,7 @@ def test_rolling_back_past_the_backfill_and_applying_it_again_rebuilds_one_chain
         MigrationExecutor(connection).migrate(leaf())
         assert status_history_broken() == []
         set_status(
-            ServiceSubmission.objects.get(pk=sub.pk), "rejected", actor="admin:jane"
+            ServiceSubmission.objects.get(pk=sub.pk), "deprecated", actor="admin:jane"
         )
         assert status_history_broken() == []
 
@@ -462,7 +466,7 @@ def test_rolling_back_past_the_backfill_and_applying_it_again_rebuilds_one_chain
         ] == [
             (None, "submitted", False),
             ("submitted", "approved", False),
-            ("approved", "rejected", True),
+            ("approved", "deprecated", True),
         ]
         assert status_history_broken() == []
     finally:

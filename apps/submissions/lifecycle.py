@@ -168,7 +168,55 @@ def record_unrecorded_status(submission_id, status: str, now) -> bool:
     return True
 
 
-def set_status(submission, new_status, *, actor: str, extra_fields=()) -> bool:
+# Which status changes are possible: current status -> statuses it may move to.
+# An approved service is withdrawn by deprecating it, not by rejecting it.
+# ``draft`` is not used any more: nothing moves into it, and a legacy row in
+# draft may move to any other status.
+TRANSITIONS: dict[str, frozenset[str]] = {
+    "draft": frozenset(
+        {"submitted", "under_review", "approved", "rejected", "deprecated"}
+    ),
+    "submitted": frozenset({"under_review", "approved", "rejected", "deprecated"}),
+    "under_review": frozenset({"approved", "rejected", "deprecated"}),
+    "approved": frozenset({"under_review", "deprecated"}),
+    "rejected": frozenset({"submitted", "under_review", "approved", "deprecated"}),
+    "deprecated": frozenset({"submitted", "approved"}),
+}
+
+# Moves that exist only as the reset after an owner edit of an approved service
+# (web form or API); no button or action offers them.
+OWNER_EDIT_TRANSITIONS: dict[str, frozenset[str]] = {
+    "approved": frozenset({"submitted"}),
+}
+
+
+class TransitionNotAllowed(ValueError):
+    """The requested status change is not in the transition table."""
+
+
+def allowed_transitions(status: str, *, owner_edit: bool = False) -> frozenset[str]:
+    """
+    Return the statuses a service in ``status`` may move to.
+
+    ``owner_edit=True`` adds the reset of an approved service after an owner
+    edit. The admin and the owner page use this to decide which buttons to
+    show, so what they offer and what ``set_status`` accepts come from the
+    same table.
+    """
+    allowed = TRANSITIONS.get(str(status), frozenset())
+    if owner_edit:
+        allowed = allowed | OWNER_EDIT_TRANSITIONS.get(str(status), frozenset())
+    return allowed
+
+
+def set_status(
+    submission,
+    new_status,
+    *,
+    actor: str,
+    extra_fields=(),
+    owner_edit: bool = False,
+) -> bool:
     """
     Change a submission's status and record the change. The only status writer.
 
@@ -193,6 +241,11 @@ def set_status(submission, new_status, *, actor: str, extra_fields=()) -> bool:
     history did not end in it, the history is recorded and the result is True;
     with a complete history nothing is written and the result is False. So the
     result is True exactly when something was written.
+
+    Any other change must be in ``TRANSITIONS`` (checked against the status
+    read under the lock) or ``TransitionNotAllowed`` is raised and nothing is
+    written, not even the history recorded first. ``owner_edit=True`` also
+    allows the reset of an approved service after an owner edit.
     """
     from apps.submissions.models import (
         ServiceSubmission,
@@ -214,6 +267,12 @@ def set_status(submission, new_status, *, actor: str, extra_fields=()) -> bool:
         if current == new_status:
             submission.status = current
             return recorded
+        if new_status not in allowed_transitions(current, owner_edit=owner_edit):
+            labels = dict(SubmissionStatus.choices)
+            raise TransitionNotAllowed(
+                f"A service cannot change from {labels[current]} "
+                f"to {labels[new_status]}."
+            )
         # The history stays in time order: an event replayed now or earlier
         # can carry a later time than ``now`` (clocks differ between hosts).
         newest = SubmissionStatusEvent.objects.filter(

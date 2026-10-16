@@ -660,6 +660,8 @@ The exemption is enforced identically in:
 
 Call `get_no_reset_fields.cache_clear()` in tests that override `settings.SUBMISSION_NO_RESET_FIELDS`.
 
+The same module holds the status transition table (`TRANSITIONS`, plus `OWNER_EDIT_TRANSITIONS` for the reset of an approved service after an owner edit). `set_status` checks it against the status read under the row lock and raises `TransitionNotAllowed` (a `ValueError`) for any other change; the owner-edit paths pass `owner_edit=True`. `allowed_transitions(status, owner_edit=False)` returns the permitted targets, and the admin buttons and the owner's Deprecate button use it, so what the UI offers and what is accepted come from one table. The table is listed in the [Admin Guide](admin-guide.md#allowed-status-changes).
+
 ### When status resets
 
 On reset, both the web form and API:

@@ -42,7 +42,7 @@ from .diff_utils import (
 from . import idempotency
 from .forms import SubmissionForm, UpdateKeyForm
 from .http_utils import get_client_ip, hash_user_agent
-from .lifecycle import set_status
+from .lifecycle import allowed_transitions, set_status
 from .markdown_render import markdown_enabled, render_with_notice
 from .validation import normalize_newlines
 from .models import (
@@ -415,6 +415,8 @@ class EditView(View):
             "submission": submission,
             "altcha_enabled": bool(settings.ALTCHA_HMAC_KEY),
             "loaded_version": loaded_version,
+            "can_deprecate": SubmissionStatus.DEPRECATED
+            in allowed_transitions(submission.status),
         }
 
     def get(self, request: HttpRequest, submission_id) -> HttpResponse:
@@ -452,6 +454,17 @@ class EditView(View):
                 )
                 if submission is None:
                     raise Http404
+                if (
+                    submission.status != SubmissionStatus.DEPRECATED
+                    and SubmissionStatus.DEPRECATED
+                    not in allowed_transitions(submission.status)
+                ):
+                    messages.error(
+                        request,
+                        f"A {submission.get_status_display()} service cannot "
+                        "be deprecated.",
+                    )
+                    return redirect("submissions:edit", submission.id)
                 if submission.status != SubmissionStatus.DEPRECATED:
                     # Capture display values before mutation so the diff shows human labels.
                     old_status_display = (
@@ -629,6 +642,7 @@ class EditView(View):
                         updated,
                         SubmissionStatus.SUBMITTED,
                         actor=CHANGELOG_ACTOR_SUBMITTER,
+                        owner_edit=True,
                     )
 
                 # Snapshot AFTER saving and compute the diff.
