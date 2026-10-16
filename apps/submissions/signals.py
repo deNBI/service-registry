@@ -1,9 +1,10 @@
 """Signal receivers for the submissions app."""
 
 from django.db.models import F
-from django.db.models.signals import m2m_changed
+from django.db.models.signals import m2m_changed, post_save
+from django.utils import timezone
 
-from apps.submissions.models import ServiceSubmission
+from apps.submissions.models import ServiceSubmission, SubmissionStatusEvent
 
 
 def _column_to(through, model) -> str:
@@ -49,7 +50,30 @@ def raise_version_on_link_change(sender, instance, action, reverse, pk_set, **kw
         ServiceSubmission.objects.filter(pk__in=pks).update(version=F("version") + 1)
 
 
+def record_creation_event(sender, instance, created, raw=False, **kwargs):
+    """Record the initial status of every new submission, whatever created it.
+
+    The actor is always "system": the receiver sees only the saved row, not
+    whether the public form, the admin, an import or a script created it. The
+    version is not touched: a new row starts at version 1.
+    """
+    if not created or raw:
+        return
+    SubmissionStatusEvent.objects.create(
+        submission=instance,
+        from_status=None,
+        to_status=instance.status,
+        changed_at=timezone.now(),
+        changed_by="system",
+    )
+
+
 def connect_signals() -> None:
+    post_save.connect(
+        record_creation_event,
+        sender=ServiceSubmission,
+        dispatch_uid="submission_creation_status_event",
+    )
     for field in ServiceSubmission._meta.many_to_many:
         m2m_changed.connect(
             raise_version_on_link_change,

@@ -669,6 +669,41 @@ class TestAPIKeyAdminPermissions:
 
 
 # ---------------------------------------------------------------------------
+# Status history inline: visible to every staff role
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestStatusHistoryInline:
+    """Every staff role sees a submission's status history (read-only)."""
+
+    @pytest.mark.parametrize("role", ["viewer_user", "editor_user", "manager_user"])
+    def test_role_sees_status_history(self, request, role, submission):
+        user = request.getfixturevalue(role)
+        resp = _client_for(user).get(_change_url(submission.pk))
+        assert resp.status_code == 200
+        assert b"Status history" in resp.content
+
+    def test_no_role_can_change_or_delete_status_events(self, setup_groups_fixture):
+        from django.contrib.auth.models import Group
+
+        codenames = set(
+            Group.objects.filter(name__startswith="Registry ").values_list(
+                "permissions__codename", flat=True
+            )
+        )
+        assert "view_submissionstatusevent" in codenames
+        assert (
+            not {
+                "add_submissionstatusevent",
+                "change_submissionstatusevent",
+                "delete_submissionstatusevent",
+            }
+            & codenames
+        )
+
+
+# ---------------------------------------------------------------------------
 # 7. SubmissionChangeLogAdmin — read-only for everyone
 # ---------------------------------------------------------------------------
 

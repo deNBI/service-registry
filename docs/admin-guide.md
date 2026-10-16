@@ -274,8 +274,8 @@ Fix flagged rows by editing the description in this change form. **Admin edits d
 | **Deprecate**               | `change_servicesubmission`  | → `Deprecated`                         |
 | **Undeprecate → Submitted** | `change_servicesubmission`  | → `Submitted` (re-enters review queue) |
 
-!!! note "Status actions bypass the form diff"
-Status button clicks are processed separately from the regular form save — they do **not** produce a field-level diff entry in the **Last Change Summary** or **Change History**. They are recorded in the **Django LogEntry** (History tab) with a plain text message.
+!!! note "Status actions are logged"
+    Status button clicks and bulk actions add a **Change History** entry and set the **Last Change Summary**. They are also recorded in the **Django LogEntry** (History tab) with a plain text message.
 
 Two emails are sent automatically on every status transition:
 
@@ -293,6 +293,9 @@ Two emails are sent automatically on every status transition:
 | Undeprecate selected          | `change_servicesubmission`  | → `Submitted` (returns to review queue) |
 
 All bulk transitions fire the admin + submitter email notifications via Celery and are logged to Django's LogEntry.
+
+!!! note "Status history"
+    The change view lists every status change of a submission under **Status history**: when it happened, the old and new status, and who made it (the submitter, an admin user, an API key or the system). The list is read-only. Entries for services registered before the history existed were rebuilt from the change log; rows marked as synthetic were added to close gaps, and their dates are not real change dates.
 
 !!! note "Maturity tags are auto-cleared on any non-approved transition"
 Both individual buttons and bulk actions call the same underlying `_change_status` function, which clears maturity tags whenever moving away from `Approved`. See [Assigning Maturity Tags](#assigning-maturity-tags) for details.
@@ -402,8 +405,8 @@ Every submission change view includes a collapsible **Last Change Summary** sect
 | **Before**     | Previous value (shown in red)                                                                      |
 | **After**      | New value (shown in green)                                                                         |
 
-!!! note "Status button clicks are not captured here"
-The **Last Change Summary** (and **Change History**) only reflect field-level edits saved through the regular form. Status transitions triggered by the action buttons (Approve, Reject, etc.) do **not** produce a `SubmissionChangeLog` entry and will not appear here. Those actions are recorded in the **Django LogEntry** (History tab) instead.
+!!! note "Status button clicks"
+    The **Last Change Summary** and **Change History** also record status changes made with the admin buttons and actions (for example Approve or Reject). Every status change, whatever its origin, is listed under **Status history** in the change view.
 
 ### Email notifications for edits (updated event)
 

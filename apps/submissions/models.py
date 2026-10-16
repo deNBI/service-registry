@@ -666,7 +666,10 @@ class ServiceSubmission(models.Model):
             if value:
                 setattr(self, field, _sanitise_text(value))
         if self._state.adding:
-            super().save(**kwargs)
+            # The creation event (apps/submissions/signals.py) is written in
+            # the same transaction as the new row.
+            with transaction.atomic():
+                super().save(**kwargs)
             return
         # Optimistic locking: the row is locked and its stored version must be
         # the one this copy was loaded with (or, for a form, the one the page
@@ -745,6 +748,60 @@ class SubmissionChangeLog(models.Model):
 
     def __str__(self) -> str:
         return f"{self.changed_by} @ {self.changed_at:%Y-%m-%d %H:%M} ({len(self.changes)} fields)"
+
+
+class SubmissionStatusEvent(models.Model):
+    """
+    Append-only history of status transitions, one row per change.
+
+    Written by the creation receiver (apps/submissions/signals.py) and by
+    apps.submissions.lifecycle.set_status; nothing else may write status.
+    Backfilled rows have source="backfill"; rows invented by the backfill to
+    close gaps in the history have is_synthetic=True and their dates are not
+    real change dates.
+    """
+
+    SOURCE_LIVE = "live"
+    SOURCE_BACKFILL = "backfill"
+    SOURCE_CHOICES = [(SOURCE_LIVE, "Live"), (SOURCE_BACKFILL, "Backfill")]
+
+    submission = models.ForeignKey(
+        ServiceSubmission,
+        on_delete=models.CASCADE,
+        related_name="status_events",
+    )
+    from_status = models.CharField(
+        max_length=20,
+        choices=SubmissionStatus.choices,
+        null=True,
+        blank=True,
+        help_text="Status before the change (empty for the creation event).",
+    )
+    to_status = models.CharField(max_length=20, choices=SubmissionStatus.choices)
+    changed_at = models.DateTimeField(db_index=True)
+    changed_by = models.CharField(
+        max_length=200,
+        help_text='"submitter", "admin:<username>", "api:<key_label>" or "system".',
+    )
+    source = models.CharField(
+        max_length=10, choices=SOURCE_CHOICES, default=SOURCE_LIVE
+    )
+    is_synthetic = models.BooleanField(
+        default=False,
+        help_text="True only for rows invented to close gaps in the history.",
+    )
+
+    class Meta:
+        ordering = ["changed_at", "id"]
+        indexes = [models.Index(fields=["submission", "to_status"])]
+        verbose_name = "Status event"
+        verbose_name_plural = "Status history"
+
+    def __str__(self) -> str:
+        return (
+            f"{self.from_status or '-'} -> {self.to_status} "
+            f"@ {self.changed_at:%Y-%m-%d %H:%M}"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -155,6 +155,10 @@ def edit_form_payload(sub, **overrides):
         "api_keys-INITIAL_FORMS": "0",
         "api_keys-MIN_NUM_FORMS": "0",
         "api_keys-MAX_NUM_FORMS": "0",
+        "status_events-TOTAL_FORMS": "0",
+        "status_events-INITIAL_FORMS": "0",
+        "status_events-MIN_NUM_FORMS": "0",
+        "status_events-MAX_NUM_FORMS": "0",
         "edam_topics": [],
         "edam_operations": [],
         "primary_maturity_tag": sub.primary_maturity_tag or "",
@@ -162,6 +166,45 @@ def edit_form_payload(sub, **overrides):
     }
     payload.update(overrides)
     return payload
+
+
+def api_create_payload():
+    """Complete, valid POST payload for API submission creation."""
+    from django.utils import timezone
+
+    cat = ServiceCategoryFactory()
+    center = ServiceCenterFactory()
+    pi = PIFactory()
+    return {
+        "date_of_entry": timezone.now().date().isoformat(),
+        "submitter_first_name": "Jane",
+        "submitter_last_name": "Doe",
+        "submitter_affiliation": "Example Institute",
+        "register_as_elixir": False,
+        "service_name": "Example API Service",
+        "service_description": (
+            "A description created through the API that is long enough to pass "
+            "the minimum length validation of the model."
+        ),
+        "year_established": 2021,
+        "service_category_ids": [cat.pk],
+        "is_toolbox": False,
+        "publications_pmids": "12345678",
+        "responsible_pi_ids": [str(pi.pk)],
+        "host_institute": "Example Institute",
+        "service_center_id": str(center.pk),
+        "public_contact_email": "contact@example.org",
+        "internal_contact_name": "John Doe",
+        "internal_contact_email": "john.doe@example.org",
+        "website_url": "https://example.org",
+        "terms_of_use_url": "https://example.org/terms",
+        "licenses": [],
+        "license_note": "Custom licence",
+        "kpi_monitoring": "planned",
+        "kpi_start_year": "2021",
+        "survey_participation": True,
+        "data_protection_consent": True,
+    }
 
 
 def list_desc(content: bytes) -> str:

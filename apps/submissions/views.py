@@ -42,6 +42,7 @@ from .diff_utils import (
 from . import idempotency
 from .forms import SubmissionForm, UpdateKeyForm
 from .http_utils import get_client_ip, hash_user_agent
+from .lifecycle import set_status
 from .markdown_render import markdown_enabled, render_with_notice
 from .validation import normalize_newlines
 from .models import (
@@ -209,9 +210,10 @@ class RegisterView(View):
         return render(request, self.template_name, self._context(form), status=409)
 
     def _register(self, request, form, token):
-        # Save submission
+        # Save submission. New submissions start at the model's default status
+        # ("submitted"); the creation receiver records that in the status
+        # history.
         submission: ServiceSubmission = form.save(commit=False)
-        submission.status = "submitted"
         submission.submission_ip = get_client_ip(request) or None
         submission.user_agent_hash = hash_user_agent(request)
         submission.save()
@@ -443,9 +445,13 @@ class EditView(View):
             # Re-read the row under a lock: a save made after this page was
             # loaded is kept and does not make the deprecation fail.
             with transaction.atomic():
-                submission = ServiceSubmission.objects.select_for_update().get(
-                    pk=submission.pk
+                submission = (
+                    ServiceSubmission.objects.select_for_update()
+                    .filter(pk=submission.pk)
+                    .first()
                 )
+                if submission is None:
+                    raise Http404
                 if submission.status != SubmissionStatus.DEPRECATED:
                     # Capture display values before mutation so the diff shows human labels.
                     old_status_display = (
@@ -454,17 +460,13 @@ class EditView(View):
                     old_primary_tag = submission.primary_maturity_tag
                     old_secondary_tags = list(submission.secondary_maturity_tags or [])
 
-                    submission.status = SubmissionStatus.DEPRECATED
-                    # Maturity tags are only valid on approved services; clear them
-                    # so the service doesn't get stuck in an invalid state.
-                    submission.primary_maturity_tag = None
-                    submission.secondary_maturity_tags = []
-                    submission.save(
-                        update_fields=[
-                            "status",
-                            "primary_maturity_tag",
-                            "secondary_maturity_tags",
-                        ]
+                    # Maturity tags are only valid on approved services; set_status
+                    # clears them so the service doesn't get stuck in an invalid
+                    # state.
+                    set_status(
+                        submission,
+                        SubmissionStatus.DEPRECATED,
+                        actor=CHANGELOG_ACTOR_SUBMITTER,
                     )
 
                     # Build field-level diff for the audit log (mirrors build_diff format
@@ -610,23 +612,59 @@ class EditView(View):
             non_exempt_changed = actually_changed - exempt
 
             if non_exempt_changed or (not exempt and actually_changed):
-                updated.status = "submitted"
                 status_reset = True
 
-        # When status is reset to "submitted", clear maturity tags to maintain
-        # the model invariant (tags are only valid on approved services).
-        # When status is preserved (exempt-only edit), tags are untouched.
-        if status_reset:
-            updated.primary_maturity_tag = None
-            updated.secondary_maturity_tags = []
-
-        # Content and related rows are stored together, and only if the service
-        # is still at the version the form was loaded with (save() checks).
+        # Content, related rows, the status change and the audit entry are
+        # stored together, and only if the service is still at the version the
+        # form was loaded with (save() checks). A failed audit write undoes the
+        # whole edit. set_status clears the maturity tags (they are only valid
+        # on approved services); an exempt-only edit leaves them alone.
         use_loaded_version(updated, request.POST)
         try:
             with transaction.atomic():
                 updated.save()
                 form.save_m2m()
+                if status_reset:
+                    set_status(
+                        updated,
+                        SubmissionStatus.SUBMITTED,
+                        actor=CHANGELOG_ACTOR_SUBMITTER,
+                    )
+
+                # Snapshot AFTER saving and compute the diff.
+                after_scalar = snapshot(updated)
+                # Re-fetch M2M from the DB: form.save_m2m() has stored the new values.
+                after_m2m = snapshot_m2m(updated)
+
+                changes = build_diff(
+                    {**before_scalar, **before_m2m}, {**after_scalar, **after_m2m}
+                )
+                # Strip false positives caused by form sanitization (bleach, NFC
+                # normalisation, whitespace stripping) running on fields the user
+                # never actually changed.  form.changed_data is Django's
+                # authoritative signal for what the submitter explicitly modified.
+                changes = filter_sanitization_artifacts(
+                    changes,
+                    form_changed_data=form.changed_data,
+                    form_field_names=set(form.fields.keys()),
+                )
+
+                # Persist the diff on the submission so it's always visible in
+                # the admin.
+                if changes:
+                    changed_at = now()
+                    updated.last_change_summary = {
+                        "changed_by": CHANGELOG_ACTOR_SUBMITTER,
+                        "changed_at": changed_at.isoformat(),
+                        "changes": changes,
+                    }
+                    updated.save(update_fields=["last_change_summary"])
+                    SubmissionChangeLog.objects.create(
+                        submission=updated,
+                        changed_by=CHANGELOG_ACTOR_SUBMITTER,
+                        changed_at=changed_at,
+                        changes=changes,
+                    )
         except EditConflict:
             form.add_error(None, EditConflict.message)
             return render(
@@ -634,40 +672,6 @@ class EditView(View):
                 self.template_name,
                 self._context(form, submission, loaded_version),
                 status=409,
-            )
-
-        # Snapshot AFTER saving and compute the diff.
-        after_scalar = snapshot(updated)
-        # Re-fetch M2M from DB — form.save_m2m() has committed the new values.
-        after_m2m = snapshot_m2m(updated)
-
-        changes = build_diff(
-            {**before_scalar, **before_m2m}, {**after_scalar, **after_m2m}
-        )
-        # Strip false positives caused by form sanitization (bleach, NFC
-        # normalisation, whitespace stripping) running on fields the user
-        # never actually changed.  form.changed_data is Django's authoritative
-        # signal for what the submitter explicitly modified.
-        changes = filter_sanitization_artifacts(
-            changes,
-            form_changed_data=form.changed_data,
-            form_field_names=set(form.fields.keys()),
-        )
-
-        # Persist the diff on the submission so it's always visible in the admin.
-        if changes:
-            changed_at = now()
-            updated.last_change_summary = {
-                "changed_by": CHANGELOG_ACTOR_SUBMITTER,
-                "changed_at": changed_at.isoformat(),
-                "changes": changes,
-            }
-            updated.save(update_fields=["last_change_summary"])
-            SubmissionChangeLog.objects.create(
-                submission=updated,
-                changed_by=CHANGELOG_ACTOR_SUBMITTER,
-                changed_at=changed_at,
-                changes=changes,
             )
 
         logger.info(

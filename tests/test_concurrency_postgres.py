@@ -19,7 +19,9 @@ from django.db import connection, transaction
 from django.urls import reverse
 from rest_framework.test import APIClient
 
+from apps.submissions.lifecycle import set_status
 from apps.submissions.models import EditConflict, ServiceSubmission
+from apps.submissions.selectors import status_history_broken
 from tests.factories import APIKeyFactory, ServiceSubmissionFactory
 from tests.helpers import edit_form_data
 from tests.test_concurrency import _grant, _hidden_value
@@ -209,3 +211,34 @@ def test_api_patch_with_if_match_waits_and_is_refused_after_a_change():
     row = _row(sub)
     assert row.comments == "Changed by Jane"
     assert row.service_description != DESCRIPTION
+
+
+def _transitions(sub):
+    return [(e.from_status, e.to_status) for e in sub.status_events.order_by("id")]
+
+
+def test_two_parallel_status_changes_form_one_history():
+    sub = _service()
+    with holding(lambda: set_status(_row(sub), "under_review", actor="admin:jane")):
+        writer = _second_writer(
+            lambda: set_status(_row(sub), "approved", actor="admin:john")
+        )
+    assert _finish(*writer)["value"] is True
+    assert _row(sub).status == "approved"
+    assert _transitions(sub) == [
+        (None, "submitted"),
+        ("submitted", "under_review"),
+        ("under_review", "approved"),
+    ]
+    assert status_history_broken() == []
+
+
+def test_the_same_approval_twice_records_one_event():
+    sub = _service()
+    with holding(lambda: set_status(_row(sub), "approved", actor="admin:jane")):
+        writer = _second_writer(
+            lambda: set_status(_row(sub), "approved", actor="admin:john")
+        )
+    assert _finish(*writer)["value"] is False
+    assert _transitions(sub) == [(None, "submitted"), ("submitted", "approved")]
+    assert sub.status_events.latest("id").changed_by == "admin:jane"
