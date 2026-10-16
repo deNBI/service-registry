@@ -9,6 +9,13 @@ from apps.submissions.models import (
 )
 
 
+def was_ever_approved(submission_id) -> bool:
+    """True when any approval event exists (synthetic backfill rows included)."""
+    return SubmissionStatusEvent.objects.filter(
+        submission_id=submission_id, to_status=SubmissionStatus.APPROVED
+    ).exists()
+
+
 def first_approved_at(submission_id):
     """Earliest real (non-synthetic) approval time, or None when unknown."""
     return SubmissionStatusEvent.objects.filter(
