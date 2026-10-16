@@ -15,7 +15,11 @@ from apps.submissions.models import (
     SubmissionChangeLog,
     SubmissionStatusEvent,
 )
-from tests.factories import ServiceCategoryFactory, ServiceSubmissionFactory
+from tests.factories import (
+    ServiceCategoryFactory,
+    ServiceCenterFactory,
+    ServiceSubmissionFactory,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -84,6 +88,20 @@ def _legacy_approved(**kw):
 def _published(**kw):
     sub = ServiceSubmissionFactory(biotools_url="", **kw)
     set_status(sub, "approved", actor="admin:jane")
+    return sub
+
+
+def _lost_copy_naming_a_deleted_centre():
+    """A service whose public copy is gone and whose latest revision names a
+    service centre that was deleted afterwards (the working copy moved to
+    another centre first, so the delete went through)."""
+    sub = _published()
+    old = sub.service_center
+    ServiceSubmission.objects.filter(pk=sub.pk).update(
+        service_center=ServiceCenterFactory()
+    )
+    PublishedService.objects.filter(pk=sub.pk).delete()
+    type(old).objects.filter(pk=old.pk).delete()
     return sub
 
 
@@ -507,6 +525,25 @@ class TestPublishBackfill:
         _run("publish_backfill")
         assert PublishedService.objects.get(pk=sub.pk).state == "deprecated"
         assert PublishedRevision.objects.filter(submission=sub).count() == 1
+
+    def test_a_lost_copy_naming_a_deleted_centre_is_listed_and_the_run_goes_on(self):
+        stuck = _lost_copy_naming_a_deleted_centre()
+        fine = _published()
+        PublishedService.objects.filter(pk=fine.pk).delete()
+        other = _legacy_approved()
+        out = _run("publish_backfill")
+        assert "service centre was deleted (not rebuilt): 1" in out
+        assert str(stuck.pk) in out
+        assert not PublishedService.objects.filter(pk=stuck.pk).exists()
+        assert PublishedService.objects.filter(pk=fine.pk).exists()
+        assert PublishedService.objects.filter(pk=other.pk).exists()
+        assert "published: 2" in out
+
+    def test_a_dry_run_lists_a_lost_copy_naming_a_deleted_centre(self):
+        stuck = _lost_copy_naming_a_deleted_centre()
+        out = _run("publish_backfill", "--dry-run")
+        assert "service centre was deleted (not rebuilt): 1" in out
+        assert str(stuck.pk) in out
 
     def test_dry_run_writes_nothing(self):
         _legacy_approved()
@@ -1500,6 +1537,13 @@ class TestRebuildPublished:
     def test_unknown_id_fails(self):
         with pytest.raises(CommandError, match="no revision"):
             _run("rebuild_published", "--id", str(uuid.uuid4()))
+
+    def test_a_revision_naming_a_deleted_centre_fails_clearly(self):
+        sub = _lost_copy_naming_a_deleted_centre()
+        with pytest.raises(CommandError, match="service centre") as exc:
+            _run("rebuild_published", "--id", str(sub.pk))
+        assert str(sub.pk) in str(exc.value)
+        assert not PublishedService.objects.filter(pk=sub.pk).exists()
 
     def test_a_revision_with_an_unsupported_schema_version_fails_clearly(self):
         sub = _published()

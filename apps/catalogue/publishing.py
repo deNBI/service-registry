@@ -128,6 +128,10 @@ def _apply_m2m(ps: PublishedService, content: dict) -> None:
         manager.set(_existing(manager.model, content.get(name, [])))
 
 
+class DeletedCentre(ValueError):
+    """A revision names a service centre that was deleted after it was written."""
+
+
 def _revision_content(revision: PublishedRevision) -> dict:
     if revision.schema_version > PublishedRevision.SCHEMA_VERSION:
         raise ValueError(
@@ -297,6 +301,8 @@ def rebuild_from_revision(submission_id) -> PublishedService:
         if revision is None:
             raise PublishedRevision.DoesNotExist(str(submission_id))
         content = _revision_content(revision)
+        if names_deleted_foreign_key(content):
+            raise DeletedCentre("the service centre of its revision was deleted")
         ps = PublishedService.objects.filter(pk=submission_id).first()
         if ps is None:
             # The flags are not part of a revision; derive them from the
