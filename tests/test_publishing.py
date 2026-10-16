@@ -1116,6 +1116,18 @@ class TestDeletion:
         sub.service_center.submissions.all().delete()
         assert WithdrawnService.objects.filter(pk=sub.pk).exists()
 
+    def test_managers_do_not_offer_a_bulk_delete(self):
+        """Like any Django manager, neither the default manager nor a related
+        manager deletes every row; only a filtered queryset does."""
+        sub = self._published()
+        assert not hasattr(ServiceSubmission.objects, "delete")
+        assert not hasattr(sub.service_center.submissions, "delete")
+        with pytest.raises(AttributeError):
+            ServiceSubmission.objects.delete()
+        assert ServiceSubmission.objects.filter(pk=sub.pk).exists()
+        ServiceSubmission.objects.filter(pk=sub.pk).delete()
+        assert WithdrawnService.objects.filter(pk=sub.pk).exists()
+
     def test_queryset_delete_writes_tombstones(self):
         a, b = self._published(), self._published()
         ServiceSubmission.objects.filter(pk__in=[a.pk, b.pk]).delete()

@@ -25,10 +25,10 @@ from django.template import loader
 from django.utils import timezone
 from django.utils.html import escape, format_html, format_html_join, mark_safe
 
-from .choices import keep_linked
-from .concurrency import VERSION_FIELD, use_loaded_version
 from apps.catalogue.publishing import republish
 
+from .choices import keep_linked
+from .concurrency import VERSION_FIELD, use_loaded_version
 from .csv_utils import csv_safe
 from .diff_utils import build_diff, snapshot, snapshot_m2m
 from .markdown_render import markdown_enabled, render_submission_description

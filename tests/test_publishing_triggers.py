@@ -132,17 +132,13 @@ class TestApprovalPublishes:
         assert ServiceSubmission.objects.get(pk=sub.pk).status == "submitted"
         assert sub.status_events.count() == 1
 
-    @pytest.mark.parametrize(
-        "action",
-        ["action_approve"],
-    )
     def test_admin_bulk_approval_publishes_every_selected_service(
-        self, superuser_client, action
+        self, superuser_client
     ):
         subs = [ServiceSubmissionFactory(biotools_url="") for _ in range(3)]
         superuser_client.post(
             reverse(CHANGELIST),
-            {"action": action, "_selected_action": [str(s.pk) for s in subs]},
+            {"action": "action_approve", "_selected_action": [str(s.pk) for s in subs]},
         )
         assert PublishedService.objects.filter(pk__in=[s.pk for s in subs]).count() == 3
         assert {r.actor for r in PublishedRevision.objects.all()} == {"admin:testadmin"}
@@ -593,6 +589,27 @@ class TestAdminEdit:
         ps = _ps(sub)
         assert (ps.state, ps.pending_update) == expected
         assert PublishedRevision.objects.filter(submission=sub).count() == 1
+
+    def test_under_review_button_publishes_the_edit_sent_with_it(
+        self, superuser_client
+    ):
+        """An admin content edit posted together with the "under review"
+        button on an approved service is saved and published first; the copy
+        is then marked as waiting for review. Both changes are public: the
+        edit as the latest version, and the pending flag on that version."""
+        sub = _published()
+        superuser_client.post(
+            reverse(CHANGE, args=[sub.pk]),
+            edit_form_payload(
+                sub, _under_review="1", service_name="Example Renamed Service"
+            ),
+        )
+        sub.refresh_from_db()
+        assert sub.status == "under_review"
+        ps = _ps(sub)
+        assert ps.service_name == "Example Renamed Service"
+        assert (ps.state, ps.pending_update) == ("active", True)
+        assert PublishedRevision.objects.filter(submission=sub).count() == 2
 
     def test_reject_after_review_keeps_the_last_version_public(self, superuser_client):
         sub = _published()

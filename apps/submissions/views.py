@@ -32,9 +32,9 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 from django_ratelimit.decorators import ratelimit
 
-from .concurrency import VERSION_FIELD, use_loaded_version
 from apps.catalogue.publishing import republish
 
+from .concurrency import VERSION_FIELD, use_loaded_version
 from .diff_utils import (
     build_diff,
     filter_sanitization_artifacts,
