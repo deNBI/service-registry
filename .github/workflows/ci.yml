@@ -7,7 +7,8 @@
 #   manual → workflow_dispatch (for release builds with a custom tag)
 #
 # Jobs:
-#   test    pytest (SQLite) + ruff + pip-audit  — runs natively, no Docker
+#   test    pytest (SQLite, slow tests included) + ruff + pip-audit; runs
+#           natively, no Docker
 #   test-postgres  the whole suite incl. row-lock and concurrency tests
 #                  (make test-postgres) on a PostgreSQL service container
 #   build   docker buildx → validates image builds; push to registry (main only)
@@ -76,6 +77,17 @@ jobs:
 
       - name: pip-audit
         run: pip-audit -r requirements/production.txt
+
+      # The exhaustive lifecycle sequences are marked `slow` and left out of
+      # the first run; they come last so that lint and audit results show
+      # even when they fail.
+      - name: Run slow tests
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings_test
+          SECRET_KEY: ci-only-not-a-real-key
+          DB_PASSWORD: unused-in-test
+          REDIS_PASSWORD: unused-in-test
+        run: make test-slow
 
   #  The whole suite on the production database engine. SQLite ignores row
   #  locks, so the tests marked `postgres` only run here.
