@@ -367,6 +367,19 @@ def restorable_content(submission, content: dict, existing=None) -> dict:
     return restored
 
 
+def names_deleted_foreign_key(content: dict) -> bool:
+    """Whether ``content`` points at a reference row that no longer exists
+    through a single-valued field, which a restore cannot link again."""
+    for name in PUBLIC_FK_FIELDS:
+        pk = content.get(name)
+        if pk is None:
+            continue
+        model = ServiceSubmission._meta.get_field(name).related_model
+        if not model.objects.filter(pk=pk).exists():
+            return True
+    return False
+
+
 def apply_content_to_working_copy(submission, content: dict) -> None:
     """Copy revision content back into the working copy (restore action)."""
     restored = restorable_content(submission, content)

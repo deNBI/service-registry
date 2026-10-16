@@ -13,7 +13,9 @@ from django.urls import reverse
 from apps.catalogue import publishing
 from apps.catalogue.models import PublishedRevision, PublishedService
 from apps.catalogue.public_fields import PUBLIC_M2M_FIELDS, PUBLIC_SCALAR_FIELDS
-from apps.registry.models import PrincipalInvestigator
+from apps.edam.models import EdamTerm
+from apps.licenses.models import SpdxLicense
+from apps.registry.models import PrincipalInvestigator, ServiceCenter
 from apps.submissions.lifecycle import set_status
 from apps.submissions.models import ServiceSubmission, SubmissionChangeLog
 from tests.factories import (
@@ -29,7 +31,8 @@ VERSION_FIELD = "restore_version"
 
 WARNING = (
     "not restored and left unchanged: they changed after the confirmation page "
-    "was shown, have no published version, or are no longer in the list."
+    "was shown, have no published version, are no longer in the list, or cannot "
+    "be restored."
 )
 
 
@@ -1491,6 +1494,97 @@ class TestMalformedVersionField:
         assert f"1 submission(s) {WARNING}" in _messages(resp)
 
 
+def _topic():
+    return EdamTerm.objects.create(
+        uri="http://edamontology.org/topic_9001",
+        accession="topic_9001",
+        branch="topic",
+        label="Example topic",
+    )
+
+
+def _operation():
+    return EdamTerm.objects.create(
+        uri="http://edamontology.org/operation_9001",
+        accession="operation_9001",
+        branch="operation",
+        label="Example operation",
+    )
+
+
+def _licence():
+    return SpdxLicense.objects.create(license_id="MIT", name="Example MIT")
+
+
+class TestRetiredReferenceRowsAreLinkedAgain:
+    """A row switched off since the version was published (not deleted) is
+    still part of that version, so a restore links it again."""
+
+    @pytest.mark.parametrize(
+        "relation,make,retire",
+        [
+            ("service_categories", ServiceCategoryFactory, {"is_active": False}),
+            ("responsible_pis", PIFactory, {"is_active": False}),
+            ("edam_topics", _topic, {"is_obsolete": True}),
+            ("edam_operations", _operation, {"is_obsolete": True}),
+            ("licenses", _licence, {"is_deprecated": True}),
+        ],
+    )
+    def test_many_to_many_rows(self, superuser_client, relation, make, retire):
+        row = make()
+        sub = ServiceSubmissionFactory(biotools_url="")
+        getattr(sub, relation).set([row])
+        set_status(sub, "approved", actor="admin:jane")
+        set_status(sub, "submitted", actor="submitter", owner_edit=True)
+        getattr(sub, relation).clear()
+        set_status(sub, "rejected", actor="admin:jane")
+        type(row).objects.filter(pk=row.pk).update(**retire)
+        resp = _post(superuser_client, sub)
+        assert _messages(resp) == [restored_message(1)]
+        assert list(getattr(sub, relation).all()) == [type(row).objects.get(pk=row.pk)]
+
+    def test_service_centre(self, superuser_client):
+        sub = _published()
+        old = sub.service_center
+        _rejected_edit(sub, service_center=ServiceCenterFactory())
+        ServiceCenter.objects.filter(pk=old.pk).update(is_active=False)
+        resp = _post(superuser_client, sub)
+        assert _messages(resp) == [restored_message(1)]
+        assert ServiceSubmission.objects.get(pk=sub.pk).service_center_id == old.pk
+
+
+class TestVersionNamingADeletedServiceCentre:
+    """A version whose service centre is gone cannot be restored."""
+
+    def _without_copy_and_centre(self):
+        sub = _published()
+        old = sub.service_center
+        sub.service_center = ServiceCenterFactory()
+        sub.service_description = EDIT
+        sub.save()
+        PublishedService.objects.filter(pk=sub.pk).delete()
+        ServiceCenter.objects.filter(pk=old.pk).delete()
+        return ServiceSubmission.objects.get(pk=sub.pk)
+
+    def test_the_row_is_refused_and_left_unchanged(self, superuser_client):
+        sub = self._without_copy_and_centre()
+        before = ServiceSubmission.objects.values().get(pk=sub.pk)
+        logs = LogEntry.objects.count()
+        resp = _post(superuser_client, sub)
+        assert _messages(resp) == [f"1 submission(s) {WARNING}"]
+        assert ServiceSubmission.objects.values().get(pk=sub.pk) == before
+        assert LogEntry.objects.count() == logs
+        assert not SubmissionChangeLog.objects.filter(submission=sub).exists()
+
+    def test_the_other_rows_are_still_restored(self, superuser_client):
+        refused = self._without_copy_and_centre()
+        fine = _published()
+        _rejected_edit(fine, service_description=EDIT)
+        resp = _post(superuser_client, refused, fine)
+        assert _messages(resp) == [restored_message(1), f"1 submission(s) {WARNING}"]
+        assert ServiceSubmission.objects.get(pk=fine.pk).service_description != EDIT
+
+
 class TestSubmittingTheConfirmationTwice:
     def test_the_second_post_restores_nothing_and_changes_nothing(
         self, superuser_client
@@ -1519,6 +1613,23 @@ class TestSubmittingTheConfirmationTwice:
 
 
 class TestAdminLogOfARestore:
+    def test_a_failed_log_write_undoes_the_restore_of_that_row(self, rf, monkeypatch):
+        sub = _published()
+        _rejected_edit(sub, service_description=EDIT)
+        loaded = [ServiceSubmission.objects.get(pk=sub.pk)]
+        shown = _shown(sub)
+        before = ServiceSubmission.objects.values().get(pk=sub.pk)
+        changes = SubmissionChangeLog.objects.count()
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("log write failed")
+
+        monkeypatch.setattr(LogEntry.objects, "log_actions", broken)
+        with pytest.raises(RuntimeError):
+            _restore_directly(rf, loaded, shown)
+        assert ServiceSubmission.objects.values().get(pk=sub.pk) == before
+        assert SubmissionChangeLog.objects.count() == changes
+
     def test_the_entry_names_the_service_the_action_and_the_user(
         self, superuser_client
     ):

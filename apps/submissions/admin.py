@@ -36,6 +36,7 @@ from apps.catalogue.publishing import (
     build_content,
     content_hash,
     existing_references,
+    names_deleted_foreign_key,
     republish,
     restorable_content,
 )
@@ -1792,6 +1793,8 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 )
                 if revision is None or shown.get(str(sub.pk)) != sub.version:
                     continue
+                if names_deleted_foreign_key(revision.content):
+                    continue
                 handled.add(str(sub.pk))
                 if restore_matches(sub, revision):
                     unchanged += 1
@@ -1815,7 +1818,10 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                         changed_at=now,
                         changes=changes,
                     )
-            self._log(request, sub, f"Restored published revision {revision.number}")
+                # Inside the transaction: a failed log write undoes the row.
+                self._log(
+                    request, sub, f"Restored published revision {revision.number}"
+                )
             restored += 1
         if restored or unchanged:
             self.message_user(
@@ -1832,7 +1838,8 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 request,
                 f"{not_restored} submission(s) not restored and left unchanged: "
                 "they changed after the confirmation page was shown, have no "
-                "published version, or are no longer in the list.",
+                "published version, are no longer in the list, or cannot be "
+                "restored.",
                 messages.WARNING,
             )
 
