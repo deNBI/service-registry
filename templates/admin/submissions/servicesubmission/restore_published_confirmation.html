@@ -1,0 +1,72 @@
+{% extends "admin/base_site.html" %}
+{% load i18n l10n admin_urls %}
+
+{% block extrahead %}
+    {{ block.super }}
+    {{ media }}
+{% endblock %}
+
+{% block bodyclass %}{{ block.super }} app-{{ opts.app_label }} model-{{ opts.model_name }} delete-confirmation{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+<a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+&rsaquo; <a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_config.verbose_name }}</a>
+&rsaquo; <a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+&rsaquo; {{ title }}
+</div>
+{% endblock %}
+
+{% block content %}
+{% if discards %}
+<p>
+    The working copy of each service below will be replaced by its last
+    published version. Any edits made since that version was published are
+    discarded. The status and the public catalogue entry do not change.
+</p>
+{% else %}
+<p>
+    Nothing will be discarded: each service below either already matches its
+    last published version or has none. The status and the public catalogue
+    entry do not change.
+</p>
+{% endif %}
+<table>
+    <thead>
+        <tr>
+            <th scope="col">Service</th>
+            <th scope="col">Status</th>
+            <th scope="col">Restores</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for sub, revision, matches in rows %}
+        <tr>
+            <td>{{ sub.service_name }}</td>
+            <td>{{ sub.get_status_display }}</td>
+            <td>
+                {% if revision %}
+                    Published version {{ revision.number }}
+                    ({{ revision.created_at|date:"j M Y, H:i" }})
+                    {% if matches %}<br>Nothing to discard, the working copy already matches it{% endif %}
+                {% else %}
+                    No published version, will be skipped
+                {% endif %}
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+<form method="post" style="margin-top:1.2rem;">{% csrf_token %}
+<div>
+{% for sub, revision, matches in rows %}
+<input type="hidden" name="{{ action_checkbox_name }}" value="{{ sub.pk|unlocalize }}">
+{% endfor %}
+<input type="hidden" name="{{ restore_version_name }}" value="{{ restore_versions }}">
+<input type="hidden" name="action" value="action_restore_published">
+<input type="hidden" name="post" value="yes">
+<input type="submit" value="{% if discards %}Yes, restore and discard the edits{% else %}Yes, continue{% endif %}">
+<a class="button cancel-link" href="{{ cancel_url }}">No, take me back</a>
+</div>
+</form>
+{% endblock %}
