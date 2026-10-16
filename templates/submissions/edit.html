@@ -39,6 +39,7 @@
           data-draft-key="denbi_draft_edit_{{ submission.id }}_{{ submission.updated_at|date:'U' }}"
           data-draft-ttl-days="{{ FORM_DRAFT_TTL_DAYS }}">
       {% csrf_token %}
+      <input type="hidden" name="loaded_version" value="{{ loaded_version }}">
 
       {% include "submissions/partials/form_body.html" %}
 
