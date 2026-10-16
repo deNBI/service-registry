@@ -637,7 +637,7 @@ Manual browser verification: use DevTools → Application → Local Storage to i
 
 ## Submission lifecycle (status reset)
 
-When a submitter edits an **approved** service via the web form or REST API, the platform determines whether to reset the status to `submitted` (triggering a re-review) based on which fields actually changed.
+When a submitter edits an **approved** service via the web form or REST API, the platform determines whether to reset the status to `submitted` (triggering a re-review) based on which fields actually changed. A **rejected** service returns to `submitted` after any real change, exempt fields included (see [Submitter edits on rejected services](admin-guide.md#submitter-edits-on-rejected-services)). Other statuses keep their status.
 
 ### How "changed" is determined
 
@@ -654,6 +654,7 @@ The exemption is enforced identically in:
 - `apps/submissions/views.py` `EditView.post()` — web form path
 - `apps/api/views.py` `partial_update()` — REST API path
 
+The rejected-service rule runs in the same two places: it uses the same changed-field result, but ignores the exemption.
 
 ### `lifecycle.py`
 

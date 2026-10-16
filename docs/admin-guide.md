@@ -272,7 +272,7 @@ Fix flagged rows by editing the description in this change form. **Admin edits d
 | **Reject**                  | `approve_servicesubmission` | → `Rejected`                           |
 | **Mark Under Review**       | `change_servicesubmission`  | → `Under Review`                       |
 | **Deprecate**               | `change_servicesubmission`  | → `Deprecated`                         |
-| **Back to Submitted**       | `change_servicesubmission`  | → `Submitted` (re-enters review queue); offered on `Rejected`, `Deprecated` and legacy `Draft` services |
+| **Back to Submitted**       | `change_servicesubmission`  | → `Submitted` (re-enters review queue); offered on `Rejected`, `Deprecated` and legacy `Draft` services; a rejected service also returns to `Submitted` when its owner saves a change (see [Submitter edits on rejected services](#submitter-edits-on-rejected-services)) |
 
 !!! note "Status actions are logged"
     Status button clicks and bulk actions add a **Change History** entry and set the **Last Change Summary**. They are also recorded in the **Django LogEntry** (History tab) with a plain text message.
@@ -332,6 +332,10 @@ When a submitter edits an approved service (via the update form or REST API), th
 - **Exempt-only edits** (e.g. uploading a logo, updating EDAM annotations) preserve the `approved` status and maturity tags. The submitter receives the normal diff email with no lifecycle notice.
 
 Sanitization artifacts (trailing whitespace stripped by form cleaning, Unicode normalization) are excluded from the reset decision — only genuine value changes count.
+
+#### Submitter edits on rejected services
+
+When a submitter saves a genuine change to a rejected service (update form or REST API), the service returns to `submitted` for a new review. Unlike for approved services, exempt fields do not prevent this: any genuine change counts. A save that changes nothing leaves the service rejected. The change is recorded in the status history and the change log, maturity tags are kept, and the submitter receives the same update email with the lifecycle notice. Services in other statuses keep their status when the submitter edits them.
 
 ## Audit Logging
 

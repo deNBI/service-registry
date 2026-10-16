@@ -221,6 +221,7 @@ Updating an approved submission resets its status to `submitted` for re-review *
 
 The maturity tags are kept when a reset occurs. The submitter update email includes a lifecycle notice.
 
+Updating a rejected submission with at least one actual change returns it to `submitted` for a new review; this also applies when only exempt fields change. A request that changes nothing leaves it rejected.
 
 ```bash
 curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
