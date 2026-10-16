@@ -5,7 +5,7 @@
 # =============================================================================
 
 .PHONY: help build dev dev-down logs migrate makemigrations superuser shell \
-        test test-cov lint lint-fix audit typecheck collectstatic \
+        test test-slow test-cov lint lint-fix audit typecheck collectstatic \
         docs docs-build prod-up prod-down prod-migrate prod-logs clean nuke \
         dead-code security pre-commit
 
@@ -27,7 +27,8 @@ help:
 	@echo "    make collectstatic    Collect static files"
 	@echo ""
 	@echo "  Testing  (no Docker required)"
-	@echo "    make test             Run pytest with SQLite in-memory"
+	@echo "    make test             Run pytest with SQLite in-memory (without the slow tests)"
+	@echo "    make test-slow        Run only the slow tests (exhaustive lifecycle sequences)"
 	@echo "    make test-cov         Run pytest + HTML coverage report"
 	@echo ""
 	@echo "  Code quality  (requires: pip install -r requirements/development.txt)"
@@ -90,6 +91,11 @@ collectstatic:
 
 test:
 	pytest tests/
+
+# The exhaustive sequence tests (marked `slow`), which `test` leaves out. No
+# coverage report: they run a fraction of the suite.
+test-slow:
+	pytest tests/ -m slow --no-cov
 
 # The whole suite on a real PostgreSQL server, including the row-lock and
 # concurrency tests that `test` skips. Needs a server and TEST_DB_PASSWORD; see
