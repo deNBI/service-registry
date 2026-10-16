@@ -21,6 +21,17 @@ class IdempotencyConflict(APIException):
     default_code = "idempotency_conflict"
 
 
+class PreconditionFailed(APIException):
+    """The If-Match header does not match the submission as it is now."""
+
+    status_code = status.HTTP_412_PRECONDITION_FAILED
+    default_detail = (
+        "The submission was changed after the version named in If-Match. "
+        "Nothing was saved. Fetch the submission again, then resend the change."
+    )
+    default_code = "precondition_failed"
+
+
 def custom_exception_handler(exc, context):
     response = exception_handler(exc, context)
 

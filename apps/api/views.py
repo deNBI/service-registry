@@ -19,7 +19,7 @@ import logging
 
 from django.db import transaction
 from django.utils.timezone import now
-from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import filters, mixins, status, viewsets
 from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -42,7 +42,8 @@ from apps.submissions.tasks import (
 )
 
 from .authentication import AdminAPIKeyAuthentication, SubmissionAPIKeyAuthentication
-from .exceptions import IdempotencyConflict
+from .conditional import entity_tag, if_match_allows
+from .exceptions import IdempotencyConflict, PreconditionFailed
 from .permissions import IsAdminOrOwner, IsAdminTokenUser
 from .serializers import (
     PrincipalInvestigatorAdminSerializer,
@@ -55,6 +56,23 @@ from .serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+ETAG_HEADER = OpenApiParameter(
+    name="ETag",
+    location=OpenApiParameter.HEADER,
+    response=[200],
+    type=str,
+    description="Entity tag of the returned submission. Send it in If-Match "
+    "with a PATCH to update only this version.",
+)
+IF_MATCH_HEADER = OpenApiParameter(
+    name="If-Match",
+    location=OpenApiParameter.HEADER,
+    required=False,
+    type=str,
+    description="Optional. ETag from an earlier GET (or `*`). If the submission "
+    "has changed since, the PATCH is refused with 412 and nothing is saved.",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -330,10 +348,13 @@ class SubmissionViewSet(
             "Returns the full submission data for the submission linked to your API key.\n\n"
             "Requires `Authorization: ApiKey <your-key>` header."
         ),
+        parameters=[ETAG_HEADER],
         responses={200: SubmissionDetailSerializer},
     )
     def retrieve(self, request, *args, **kwargs):
-        return super().retrieve(request, *args, **kwargs)
+        response = super().retrieve(request, *args, **kwargs)
+        response["ETag"] = entity_tag(response.data)
+        return response
 
     @extend_schema(
         summary="List all submissions",
@@ -390,9 +411,19 @@ class SubmissionViewSet(
             "`warnings` entry noting the rename was ignored.\n\n"
             "Note: updating an approved submission resets its status to `submitted` "
             "for re-review, unless every changed field is listed in "
-            "`SUBMISSION_NO_RESET_FIELDS` (configured in `site.toml`)."
+            "`SUBMISSION_NO_RESET_FIELDS` (configured in `site.toml`).\n\n"
+            "Send the `ETag` of your last GET in `If-Match` to apply the "
+            "change only if the submission has not changed since; otherwise "
+            "the response is `412` and nothing is saved."
         ),
-        responses=SubmissionUpdateResponseSerializer,
+        parameters=[ETAG_HEADER, IF_MATCH_HEADER],
+        responses={
+            200: SubmissionUpdateResponseSerializer,
+            412: OpenApiResponse(
+                description="The submission changed after the version named in "
+                "If-Match; nothing was saved."
+            ),
+        },
     )
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
@@ -404,6 +435,12 @@ class SubmissionViewSet(
         # first read is neither overwritten nor a reason for this one to fail.
         with transaction.atomic():
             instance = type(instance).objects.select_for_update().get(pk=instance.pk)
+            # Checked before the request content (RFC 9110, section 13.2.1).
+            if_match = request.headers.get("If-Match")
+            if if_match is not None and not if_match_allows(
+                if_match, entity_tag(self.get_serializer(instance).data)
+            ):
+                raise PreconditionFailed()
 
             # Snapshot BEFORE serializer.save() — DRF's update() writes the new
             # values to the instance, so we must capture the originals first.
@@ -480,6 +517,7 @@ class SubmissionViewSet(
             extra={"submission_id": str(instance.id)},
         )
         data = serializer.data
+        etag = entity_tag(data)
         if service_name_change_ignored:
             data = {
                 **data,
@@ -489,7 +527,7 @@ class SubmissionViewSet(
                     "other changes were accepted."
                 ],
             }
-        return Response(data)
+        return Response(data, headers={"ETag": etag})
 
     @staticmethod
     def _record_api_change(request, instance, changes) -> None:
