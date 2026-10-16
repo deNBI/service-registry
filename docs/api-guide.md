@@ -228,6 +228,19 @@ curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
   -d '{"kpi_start_year": "2026"}'
 ```
 
+To avoid overwriting a change someone else made after you read the submission, send the `ETag` header of your last `GET` in an `If-Match` header. If the submission has changed since, the response is `412 Precondition Failed` and nothing is saved; fetch it again and resend your change. Without `If-Match`, the `PATCH` is applied to the current state. Successful `GET` and `PATCH` responses for a single submission carry its current `ETag`.
+
+```bash
+curl -i https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
+  -H "Authorization: ApiKey <your-key>"          # note the ETag header
+
+curl -X PATCH https://service-registry.bi.denbi.de/api/v1/submissions/<id>/ \
+  -H "Authorization: ApiKey <your-key>" \
+  -H 'If-Match: "<etag>"' \
+  -H "Content-Type: application/json" \
+  -d '{"kpi_start_year": "2026"}'
+```
+
 Full `PUT` is not supported — use `PATCH`.
 
 !!! warning "The service name is immutable after submission"

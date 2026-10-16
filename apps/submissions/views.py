@@ -18,9 +18,11 @@ import datetime
 import json
 import logging
 import unicodedata
+import uuid
 
 from django.conf import settings
 from django.contrib import messages
+from django.db import transaction
 from django.http import Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils.decorators import method_decorator
@@ -30,12 +32,14 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 from django_ratelimit.decorators import ratelimit
 
+from .concurrency import VERSION_FIELD, use_loaded_version
 from .diff_utils import (
     build_diff,
     filter_sanitization_artifacts,
     snapshot,
     snapshot_m2m,
 )
+from . import idempotency
 from .forms import SubmissionForm, UpdateKeyForm
 from .http_utils import get_client_ip, hash_user_agent
 from .markdown_render import markdown_enabled, render_with_notice
@@ -43,6 +47,7 @@ from .validation import normalize_newlines
 from .models import (
     CHANGELOG_ACTOR_SUBMITTER,
     DESCRIPTION_MAX_LENGTH,
+    EditConflict,
     PRIMARY_MATURITY_TAG_CHOICES,
     SECONDARY_MATURITY_TAG_CHOICES,
     ServiceSubmission,
@@ -145,7 +150,14 @@ class RegisterView(View):
     template_name = "submissions/register.html"
 
     def _context(self, form):
-        return {"form": form, "altcha_enabled": bool(settings.ALTCHA_HMAC_KEY)}
+        # Every render of the form gets its own one-time token (see
+        # apps.submissions.idempotency): posting the same form twice registers
+        # one service.
+        return {
+            "form": form,
+            "altcha_enabled": bool(settings.ALTCHA_HMAC_KEY),
+            "form_token": uuid.uuid4().hex,
+        }
 
     def get(self, request: HttpRequest) -> HttpResponse:
         form = SubmissionForm()
@@ -162,6 +174,41 @@ class RegisterView(View):
         if not form.is_valid():
             return render(request, self.template_name, self._context(form), status=422)
 
+        # A form without a (well-formed) token is registered as before.
+        token = request.POST.get("form_token", "")
+        if not idempotency.valid_form_token(token):
+            token = ""
+        if token and not idempotency.claim(idempotency.WEB_FORM, token):
+            return self._repeated_post(request, form, token)
+
+        try:
+            return self._register(request, form, token)
+        except Exception:
+            # Free the token so the user can submit the form again.
+            if token:
+                idempotency.release(idempotency.WEB_FORM, token)
+            raise
+
+    def _repeated_post(self, request, form, token):
+        """The same form was already posted: do not register it again."""
+        existing = idempotency.wait_for_result(idempotency.WEB_FORM, token)
+        if existing and existing != idempotency.PENDING:
+            return redirect("submissions:success", submission_id=existing)
+        if existing == idempotency.PENDING:
+            message = (
+                "This registration is already being processed. If you are not "
+                "taken to the confirmation page, wait a moment and submit the "
+                "form again."
+            )
+        else:
+            message = (
+                "An earlier attempt to submit this form did not finish. "
+                "Please submit the form again."
+            )
+        form.add_error(None, message)
+        return render(request, self.template_name, self._context(form), status=409)
+
+    def _register(self, request, form, token):
         # Save submission
         submission: ServiceSubmission = form.save(commit=False)
         submission.status = "submitted"
@@ -206,6 +253,8 @@ class RegisterView(View):
         request.session["pending_keys"] = pending_keys
         request.session.modified = True
 
+        if token:
+            idempotency.complete(idempotency.WEB_FORM, token, submission.id)
         return redirect("submissions:success", submission_id=submission.id)
 
 
@@ -358,11 +407,12 @@ class EditView(View):
 
         return key.submission
 
-    def _context(self, form, submission):
+    def _context(self, form, submission, loaded_version):
         return {
             "form": form,
             "submission": submission,
             "altcha_enabled": bool(settings.ALTCHA_HMAC_KEY),
+            "loaded_version": loaded_version,
         }
 
     def get(self, request: HttpRequest, submission_id) -> HttpResponse:
@@ -374,7 +424,11 @@ class EditView(View):
             return redirect("submissions:update")
 
         form = SubmissionForm(instance=submission)
-        return render(request, self.template_name, self._context(form, submission))
+        return render(
+            request,
+            self.template_name,
+            self._context(form, submission, submission.version),
+        )
 
     def post(self, request: HttpRequest, submission_id) -> HttpResponse:
         submission = self._get_submission(request, submission_id)
@@ -386,89 +440,104 @@ class EditView(View):
 
         # Handle deprecation request (separate action, not a form save)
         if "_deprecate" in request.POST:
-            if submission.status != SubmissionStatus.DEPRECATED:
-                # Capture display values before mutation so the diff shows human labels.
-                old_status_display = (
-                    submission.get_status_display() or submission.status
+            # Re-read the row under a lock: a save made after this page was
+            # loaded is kept and does not make the deprecation fail.
+            with transaction.atomic():
+                submission = ServiceSubmission.objects.select_for_update().get(
+                    pk=submission.pk
                 )
-                old_primary_tag = submission.primary_maturity_tag
-                old_secondary_tags = list(submission.secondary_maturity_tags or [])
+                if submission.status != SubmissionStatus.DEPRECATED:
+                    # Capture display values before mutation so the diff shows human labels.
+                    old_status_display = (
+                        submission.get_status_display() or submission.status
+                    )
+                    old_primary_tag = submission.primary_maturity_tag
+                    old_secondary_tags = list(submission.secondary_maturity_tags or [])
 
-                submission.status = SubmissionStatus.DEPRECATED
-                # Maturity tags are only valid on approved services; clear them
-                # so the service doesn't get stuck in an invalid state.
-                submission.primary_maturity_tag = None
-                submission.secondary_maturity_tags = []
-                submission.save(
-                    update_fields=[
-                        "status",
-                        "primary_maturity_tag",
-                        "secondary_maturity_tags",
+                    submission.status = SubmissionStatus.DEPRECATED
+                    # Maturity tags are only valid on approved services; clear them
+                    # so the service doesn't get stuck in an invalid state.
+                    submission.primary_maturity_tag = None
+                    submission.secondary_maturity_tags = []
+                    submission.save(
+                        update_fields=[
+                            "status",
+                            "primary_maturity_tag",
+                            "secondary_maturity_tags",
+                        ]
+                    )
+
+                    # Build field-level diff for the audit log (mirrors build_diff format
+                    # and the admin _change_status pattern).
+                    new_status_display = (
+                        submission.get_status_display() or SubmissionStatus.DEPRECATED
+                    )
+                    changes = [
+                        {
+                            "field": "status",
+                            "label": "Status",
+                            "old": old_status_display,
+                            "new": new_status_display,
+                        }
                     ]
-                )
+                    if old_primary_tag:
+                        changes.append(
+                            {
+                                "field": "primary_maturity_tag",
+                                "label": "Primary Maturity Tag",
+                                "old": str(
+                                    dict(PRIMARY_MATURITY_TAG_CHOICES).get(
+                                        old_primary_tag, old_primary_tag
+                                    )
+                                ),
+                                "new": "—",
+                            }
+                        )
+                    if old_secondary_tags:
+                        changes.append(
+                            {
+                                "field": "secondary_maturity_tags",
+                                "label": "Secondary Maturity Tags",
+                                "old": ", ".join(
+                                    str(dict(SECONDARY_MATURITY_TAG_CHOICES).get(t, t))
+                                    for t in old_secondary_tags
+                                ),
+                                "new": "—",
+                            }
+                        )
 
-                # Build field-level diff for the audit log (mirrors build_diff format
-                # and the admin _change_status pattern).
-                new_status_display = (
-                    submission.get_status_display() or SubmissionStatus.DEPRECATED
-                )
-                changes = [
-                    {
-                        "field": "status",
-                        "label": "Status",
-                        "old": old_status_display,
-                        "new": new_status_display,
+                    changed_at = now()
+                    submission.last_change_summary = {
+                        "changed_by": CHANGELOG_ACTOR_SUBMITTER,
+                        "changed_at": changed_at.isoformat(),
+                        "changes": changes,
                     }
-                ]
-                if old_primary_tag:
-                    changes.append(
-                        {
-                            "field": "primary_maturity_tag",
-                            "label": "Primary Maturity Tag",
-                            "old": str(
-                                dict(PRIMARY_MATURITY_TAG_CHOICES).get(
-                                    old_primary_tag, old_primary_tag
-                                )
-                            ),
-                            "new": "—",
-                        }
-                    )
-                if old_secondary_tags:
-                    changes.append(
-                        {
-                            "field": "secondary_maturity_tags",
-                            "label": "Secondary Maturity Tags",
-                            "old": ", ".join(
-                                str(dict(SECONDARY_MATURITY_TAG_CHOICES).get(t, t))
-                                for t in old_secondary_tags
-                            ),
-                            "new": "—",
-                        }
+                    submission.save(update_fields=["last_change_summary"])
+                    SubmissionChangeLog.objects.create(
+                        submission=submission,
+                        changed_by=CHANGELOG_ACTOR_SUBMITTER,
+                        changed_at=changed_at,
+                        changes=changes,
                     )
 
-                changed_at = now()
-                submission.last_change_summary = {
-                    "changed_by": CHANGELOG_ACTOR_SUBMITTER,
-                    "changed_at": changed_at.isoformat(),
-                    "changes": changes,
-                }
-                submission.save(update_fields=["last_change_summary"])
-                SubmissionChangeLog.objects.create(
-                    submission=submission,
-                    changed_by=CHANGELOG_ACTOR_SUBMITTER,
-                    changed_at=changed_at,
-                    changes=changes,
-                )
-
-                send_submission_notification.delay(
-                    str(submission.id), event="status_changed"
-                )
-                logger.info(
-                    "Submission deprecated by owner",
-                    extra={"submission_id": str(submission.id)},
-                )
+                    transaction.on_commit(
+                        lambda pk=str(
+                            submission.id
+                        ): send_submission_notification.delay(
+                            pk, event="status_changed"
+                        )
+                    )
+                    logger.info(
+                        "Submission deprecated by owner",
+                        extra={"submission_id": str(submission.id)},
+                    )
             messages.success(request, "Your service has been marked as deprecated.")
             return redirect("submissions:update")
+
+        # The form posts the version of the service it was loaded with. An
+        # error page hands the same value back, so a corrected form is still
+        # checked against the version the user originally saw.
+        loaded_version = request.POST.get(VERSION_FIELD, "")
 
         if not _verify_altcha(request):
             form = SubmissionForm(request.POST, request.FILES, instance=submission)
@@ -476,7 +545,7 @@ class EditView(View):
             return render(
                 request,
                 self.template_name,
-                self._context(form, submission),
+                self._context(form, submission, loaded_version),
                 status=400,
             )
 
@@ -492,7 +561,7 @@ class EditView(View):
             return render(
                 request,
                 self.template_name,
-                self._context(form, submission),
+                self._context(form, submission, loaded_version),
                 status=422,
             )
 
@@ -551,8 +620,21 @@ class EditView(View):
             updated.primary_maturity_tag = None
             updated.secondary_maturity_tags = []
 
-        updated.save()
-        form.save_m2m()
+        # Content and related rows are stored together, and only if the service
+        # is still at the version the form was loaded with (save() checks).
+        use_loaded_version(updated, request.POST)
+        try:
+            with transaction.atomic():
+                updated.save()
+                form.save_m2m()
+        except EditConflict:
+            form.add_error(None, EditConflict.message)
+            return render(
+                request,
+                self.template_name,
+                self._context(form, submission, loaded_version),
+                status=409,
+            )
 
         # Snapshot AFTER saving and compute the diff.
         after_scalar = snapshot(updated)

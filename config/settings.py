@@ -476,7 +476,15 @@ SPECTACULAR_SETTINGS = {
 CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", "")
 CORS_ALLOW_CREDENTIALS = env_bool("CORS_ALLOW_CREDENTIALS", False)
 CORS_ALLOW_METHODS = ["GET", "POST", "PATCH", "OPTIONS"]
-CORS_ALLOW_HEADERS = ["authorization", "content-type", "x-csrftoken"]
+CORS_ALLOW_HEADERS = [
+    "authorization",
+    "content-type",
+    "x-csrftoken",
+    "idempotency-key",
+    "if-match",
+]
+# Lets browser clients read the ETag they send back in If-Match.
+CORS_EXPOSE_HEADERS = ["ETag"]
 CORS_PREFLIGHT_MAX_AGE = 86400
 
 
