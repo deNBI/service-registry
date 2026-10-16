@@ -1361,6 +1361,8 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
     def _change_status(self, request, queryset, new_status, label):
         updated = 0
         tags_cleared = 0
+        username = getattr(request.user, "username", "admin")
+        changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
         # Re-read the selected rows under a lock (in primary-key order) and
         # change them in one transaction, so a save made after the changelist
         # was loaded is neither overwritten nor a reason for this one to fail.
@@ -1371,6 +1373,20 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 .order_by("pk")
             ):
                 if sub.status == new_status:
+                    # Nothing changes, but the status history may not show
+                    # this status (an earlier release set it): set_status then
+                    # records it, which counts as marked. The catch-up events
+                    # carry "system" or the change-log actor, not this admin,
+                    # and no e-mail or change-log entry is written. Otherwise
+                    # the row is skipped.
+                    if set_status(sub, new_status, actor=changed_by):
+                        self._log(
+                            request,
+                            sub,
+                            f"Status {new_status} confirmed; "
+                            "earlier status changes recorded",
+                        )
+                        updated += 1
                     continue
                 old = sub.status
                 # Capture display values before mutation so the diff shows human labels.
@@ -1431,8 +1447,6 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                         }
                     )
 
-                username = getattr(request.user, "username", "admin")
-                changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
                 now = timezone.now()
                 sub.last_change_summary = {
                     "changed_by": changed_by,

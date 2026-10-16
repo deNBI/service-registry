@@ -30,6 +30,7 @@ import logging
 from functools import lru_cache
 
 from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,80 @@ def get_no_reset_fields() -> frozenset:
     return frozenset(validated)
 
 
+def record_unrecorded_status(submission_id, status: str, now) -> bool:
+    """
+    Record ``status`` when the status history does not end in it.
+
+    A status can be written without an event, for example by an earlier
+    release running on this database. That release still writes change-log
+    entries, so the status changes it logged after the latest event are
+    replayed as real events (time and actor from the entry), one chain from
+    the latest recorded status. Rules, the same as the backfill migration
+    (0022) except for the first:
+
+    - an entry whose old status does not continue the chain is skipped (0022
+      closes the gap with an invented event). The entry this release writes
+      for each of its own events starts at that event's from-status, and is
+      stamped just after the event (the admin bulk status action stamps it
+      just before, so the time rule below already ignores it); read as a gap
+      it would invent two wrong events.
+    - entries are taken by ``changed_at``, then row id; entries not newer than
+      the newest event time are ignored, so an entry is never replayed twice;
+      unreadable entries and unknown labels are skipped (see
+      ``status_log.status_transitions``).
+    - when the chain still does not end in ``status``, one event invented to
+      close it (is_synthetic=True, changed_by "system") does.
+
+    Nothing is replayed while the history already ends in ``status``, even if
+    an earlier release moved the service away and back: the entries this
+    release writes around its own events would be replayed as new ones.
+
+    A service without any event gets one invented event (from none to
+    ``status``) and no replay. The caller holds the submission's row lock.
+    Returns True when an event was written.
+    """
+    from apps.submissions.models import SubmissionChangeLog, SubmissionStatusEvent
+    from apps.submissions.status_log import status_transitions
+
+    latest = (
+        SubmissionStatusEvent.objects.filter(submission_id=submission_id)
+        .order_by("-id")
+        .values_list("to_status", "changed_at")
+        .first()
+    )
+    last_status = latest[0] if latest else None
+    if last_status == status:
+        return False
+    # Row order says where the chain ends; the newest time bounds the replay.
+    last_at = SubmissionStatusEvent.objects.filter(
+        submission_id=submission_id
+    ).aggregate(newest=Max("changed_at"))["newest"]
+
+    def record(to_status, at, by, synthetic):
+        nonlocal last_status, last_at
+        SubmissionStatusEvent.objects.create(
+            submission_id=submission_id,
+            from_status=last_status,
+            to_status=to_status,
+            changed_at=at,
+            changed_by=by,
+            is_synthetic=synthetic,
+        )
+        last_status, last_at = to_status, max(at, last_at) if last_at else at
+
+    if latest is not None:
+        entries = SubmissionChangeLog.objects.filter(
+            submission_id=submission_id, changed_at__gt=last_at
+        ).order_by("changed_at", "id")
+        for entry in entries:
+            for old, new in status_transitions(entry.changes):
+                if old == last_status and new != old:
+                    record(new, entry.changed_at, entry.changed_by, False)
+    if last_status != status:
+        record(status, max(now, last_at) if last_at else now, "system", True)
+    return True
+
+
 def set_status(submission, new_status, *, actor: str, extra_fields=()) -> bool:
     """
     Change a submission's status and record the change. The only status writer.
@@ -111,8 +186,13 @@ def set_status(submission, new_status, *, actor: str, extra_fields=()) -> bool:
     check, so callers pass only fields they have just computed (such as
     ``updated_at`` or ``last_change_summary``), never content loaded earlier.
 
-    When ``new_status`` is the stored status, nothing is changed and the result
-    is False; otherwise the result is True.
+    A stored status the history does not end in is recorded first (see
+    ``record_unrecorded_status``).
+
+    When ``new_status`` is the stored status, nothing is changed. If the
+    history did not end in it, the history is recorded and the result is True;
+    with a complete history nothing is written and the result is False. So the
+    result is True exactly when something was written.
     """
     from apps.submissions.models import (
         ServiceSubmission,
@@ -129,9 +209,18 @@ def set_status(submission, new_status, *, actor: str, extra_fields=()) -> bool:
             .values_list("status", "version")
             .get(pk=submission.pk)
         )
+        now = timezone.now()
+        recorded = record_unrecorded_status(submission.pk, current, now)
         if current == new_status:
             submission.status = current
-            return False
+            return recorded
+        # The history stays in time order: an event replayed now or earlier
+        # can carry a later time than ``now`` (clocks differ between hosts).
+        newest = SubmissionStatusEvent.objects.filter(
+            submission_id=submission.pk
+        ).aggregate(newest=Max("changed_at"))["newest"]
+        if newest is not None:
+            now = max(now, newest)
         submission.version = version
         submission.status = new_status
         fields = ["status", *extra_fields]
@@ -144,7 +233,7 @@ def set_status(submission, new_status, *, actor: str, extra_fields=()) -> bool:
             submission=submission,
             from_status=current,
             to_status=new_status,
-            changed_at=timezone.now(),
+            changed_at=now,
             changed_by=actor,
         )
     return True
