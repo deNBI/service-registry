@@ -219,7 +219,9 @@ class ServiceSubmission(models.Model):
     The full form maps to sections A–G. All required fields raise
     ValidationError if blank on clean(). The status lifecycle is:
 
-        draft → submitted → under_review → approved / rejected / deprecated
+        submitted → under_review → approved / rejected / deprecated
+
+    The allowed changes are the table in apps.submissions.lifecycle.
 
     Sensitive internal fields (internal_contact_email, submission_ip,
     user_agent_hash) are never serialised in API responses.

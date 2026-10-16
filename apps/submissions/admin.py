@@ -18,6 +18,7 @@ from django import forms
 from django.contrib import admin, messages
 from django.forms.widgets import CheckboxSelectMultiple
 from django.contrib.admin.models import CHANGE, LogEntry
+from django.contrib.admin.utils import unquote
 from django.db import transaction
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.template import loader
@@ -43,11 +44,22 @@ from .models import (
     SubmissionStatus,
     SubmissionStatusEvent,
 )
-from .lifecycle import set_status
+from .lifecycle import allowed_transitions, set_status
 from .tasks import send_submission_notification
 from .widgets import MarkdownTextareaWidget
 
 logger = logging.getLogger(__name__)
+
+# Change-form status buttons and the status each one moves to, in the order
+# response_change() looks for them. API key buttons take precedence.
+STATUS_BUTTONS = {
+    "_approve": "approved",
+    "_reject": "rejected",
+    "_under_review": "under_review",
+    "_deprecate": "deprecated",
+    "_undeprecate": "submitted",
+}
+KEY_BUTTONS = ("_revoke_all_keys", "_reset_key", "_issue_new_key")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -577,6 +589,12 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         )
 
     def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        refusal = self._refused_status_button(request, object_id)
+        if refusal:
+            # Nothing is saved: the posted field edits are dropped with the
+            # refused button, so the page can be reloaded and tried again.
+            self.message_user(request, refusal, messages.ERROR)
+            return HttpResponseRedirect(request.get_full_path())
         try:
             return super().changeform_view(request, object_id, form_url, extra_context)
         except EditConflict:
@@ -584,6 +602,30 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             # (including any status or key button) was rolled back.
             self.message_user(request, EditConflict.message, messages.ERROR)
             return HttpResponseRedirect(request.get_full_path())
+
+    def _refused_status_button(self, request, object_id):
+        """Return the error text when a posted status button is not allowed.
+
+        The check runs against the stored status, before the form is saved.
+        A button for the status the service already has is not a change.
+        """
+        if request.method != "POST" or object_id is None:
+            return ""
+        if any(key in request.POST for key in KEY_BUTTONS):
+            return ""
+        button = next((b for b in STATUS_BUTTONS if b in request.POST), None)
+        if button is None:
+            return ""
+        obj = self.get_object(request, unquote(object_id))
+        if obj is None or not self.has_change_permission(request, obj):
+            return ""
+        target = STATUS_BUTTONS[button]
+        if target == obj.status or target in allowed_transitions(obj.status):
+            return ""
+        return (
+            f"A change to {dict(SubmissionStatus.choices)[target]} is not "
+            f"allowed from {obj.get_status_display()}. Nothing was saved."
+        )
 
     def render_change_form(
         self, request, context, add=False, change=False, form_url="", obj=None
@@ -691,6 +733,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     obj.__class__.objects.filter(pk=obj.pk),
                     "approved",
                     "Approved",
+                    skipped_level=messages.ERROR,
                 )
         elif "_reject" in request.POST:
             if self._require_perm(
@@ -701,6 +744,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     obj.__class__.objects.filter(pk=obj.pk),
                     "rejected",
                     "Rejected",
+                    skipped_level=messages.ERROR,
                 )
         elif "_under_review" in request.POST:
             if self._require_perm(
@@ -711,6 +755,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     obj.__class__.objects.filter(pk=obj.pk),
                     "under_review",
                     "Under Review",
+                    skipped_level=messages.ERROR,
                 )
         elif "_deprecate" in request.POST:
             if self._require_perm(
@@ -721,16 +766,20 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     obj.__class__.objects.filter(pk=obj.pk),
                     "deprecated",
                     "Deprecated",
+                    skipped_level=messages.ERROR,
                 )
         elif "_undeprecate" in request.POST:
             if self._require_perm(
-                request, "change_servicesubmission", "undeprecate submissions"
+                request,
+                "change_servicesubmission",
+                "move submissions back to Submitted",
             ):
                 self._change_status(
                     request,
                     obj.__class__.objects.filter(pk=obj.pk),
                     "submitted",
-                    "Submitted (undeprecated)",
+                    "Submitted",
+                    skipped_level=messages.ERROR,
                 )
         else:
             # Regular form save — show a diff banner if fields changed.
@@ -1269,21 +1318,15 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             ("_reject", "Reject", "#991b1b", "#fef2f2", "#fecaca"),
             ("_under_review", "Mark Under Review", "#92400e", "#fffbeb", "#fde68a"),
             ("_deprecate", "Deprecate", "#374151", "#f9fafb", "#d1d5db"),
-            (
-                "_undeprecate",
-                "Undeprecate → Submitted",
-                "#1e40af",
-                "#eff6ff",
-                "#bfdbfe",
-            ),
+            ("_undeprecate", "Back to Submitted", "#1e40af", "#eff6ff", "#bfdbfe"),
         ]
+        targets = STATUS_BUTTONS
+        allowed = allowed_transitions(current)
         for name, label, color, bg, border in status_opts:
-            active = (
-                (name == "_approve" and current == "approved")
-                or (name == "_reject" and current == "rejected")
-                or (name == "_under_review" and current == "under_review")
-                or (name == "_deprecate" and current == "deprecated")
-            )
+            target = targets[name]
+            active = name != "_undeprecate" and target == current
+            if not active and target not in allowed:
+                continue
             style = (
                 f"background:{bg};color:{color};border:1.5px solid {border};"
                 f"border-radius:5px;padding:.3rem .8rem;font-size:.8rem;"
@@ -1358,8 +1401,11 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
 
     # ── Actions ──────────────────────────────────────────────────────────────
 
-    def _change_status(self, request, queryset, new_status, label):
+    def _change_status(
+        self, request, queryset, new_status, label, *, skipped_level=messages.WARNING
+    ):
         updated = 0
+        skipped_from = []
         tags_cleared = 0
         username = getattr(request.user, "username", "admin")
         changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
@@ -1387,6 +1433,9 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                             "earlier status changes recorded",
                         )
                         updated += 1
+                    continue
+                if new_status not in allowed_transitions(sub.status):
+                    skipped_from.append(sub.get_status_display())
                     continue
                 old = sub.status
                 # Capture display values before mutation so the diff shows human labels.
@@ -1477,9 +1526,20 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 )
                 self._log(request, sub, "; ".join(log_parts))
                 updated += 1
-        self.message_user(
-            request, f"{updated} submission(s) marked as {label}.", messages.SUCCESS
-        )
+        if skipped_from:
+            target = dict(SubmissionStatus.choices)[new_status]
+            self.message_user(
+                request,
+                f"{len(skipped_from)} submission(s) left unchanged: a change to "
+                f"{target} is not allowed from {', '.join(sorted(set(skipped_from)))}.",
+                skipped_level,
+            )
+        if updated or not skipped_from:
+            self.message_user(
+                request,
+                f"{updated} submission(s) marked as {label}.",
+                messages.SUCCESS,
+            )
         if tags_cleared:
             self.message_user(
                 request,
@@ -1536,15 +1596,15 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         self._change_status(request, queryset, "deprecated", "Deprecated")
 
     @admin.action(
-        description="♻️ Undeprecate selected (→ Submitted)",
+        description="♻️ Back to Submitted (selected)",
         permissions=["change"],
     )
     def action_undeprecate(self, request, queryset):
         if not self._require_perm(
-            request, "change_servicesubmission", "undeprecate submissions"
+            request, "change_servicesubmission", "move submissions back to Submitted"
         ):
             return
-        self._change_status(request, queryset, "submitted", "Submitted (undeprecated)")
+        self._change_status(request, queryset, "submitted", "Submitted")
 
     def _export_queryset(self, queryset):
         """Return a fully prefetched queryset suitable for both export actions."""

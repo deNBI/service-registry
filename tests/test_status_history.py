@@ -139,9 +139,7 @@ class TestSetStatus:
             "Saved with the status"
         )
 
-    @pytest.mark.parametrize(
-        "target", ["draft", "submitted", "under_review", "rejected", "deprecated"]
-    )
+    @pytest.mark.parametrize("target", ["under_review", "deprecated"])
     def test_tags_are_cleared_whatever_the_instance_holds(self, target):
         """The caller's copy may have been loaded before the tags were set."""
         sub = ServiceSubmissionFactory(
@@ -180,7 +178,7 @@ class TestSetStatus:
         before = ServiceSubmission.objects.get(pk=sub.pk).updated_at
         set_status(sub, "approved", actor="admin:jane")
         assert ServiceSubmission.objects.get(pk=sub.pk).updated_at == before
-        set_status(sub, "submitted", actor="admin:jane", extra_fields=["updated_at"])
+        set_status(sub, "under_review", actor="admin:jane", extra_fields=["updated_at"])
         assert ServiceSubmission.objects.get(pk=sub.pk).updated_at != before
 
     def test_locks_the_row_before_it_reads_the_status(self, locked_models):
@@ -692,9 +690,9 @@ class TestBulkStatusChange:
                 primary_maturity_tag="mature", secondary_maturity_tags=["unstable"]
             )
 
-        stale_rows("action_reject", sub, approve_and_tag)
+        stale_rows("action_deprecate", sub, approve_and_tag)
         sub.refresh_from_db()
-        assert sub.status == "rejected"
+        assert sub.status == "deprecated"
         assert sub.primary_maturity_tag is None
         assert sub.secondary_maturity_tags == []
         log = sub.change_log.latest("id")
@@ -915,16 +913,16 @@ class TestVersionAfterStatusChange:
         return sub
 
     @staticmethod
-    def _reject_elsewhere(sub):
+    def _deprecate_elsewhere(sub):
         set_status(
-            ServiceSubmission.objects.get(pk=sub.pk), "rejected", actor="admin:jane"
+            ServiceSubmission.objects.get(pk=sub.pk), "deprecated", actor="admin:jane"
         )
 
     def _assert_edit_refused(self, sub):
         stored = ServiceSubmission.objects.get(pk=sub.pk)
-        assert stored.status == "rejected"
+        assert stored.status == "deprecated"
         assert stored.github_url != self.MOVED
-        assert _transitions(sub)[-1] == ("approved", "rejected")
+        assert _transitions(sub)[-1] == ("approved", "deprecated")
 
     def test_a_status_change_raises_the_version(self):
         sub = ServiceSubmissionFactory(biotools_url="")
@@ -953,7 +951,7 @@ class TestVersionAfterStatusChange:
     def test_saving_a_stale_copy_after_a_status_change_is_refused(self):
         sub = self._approved()
         loaded = ServiceSubmission.objects.get(pk=sub.pk)
-        self._reject_elsewhere(sub)
+        self._deprecate_elsewhere(sub)
         loaded.github_url = self.MOVED
         with pytest.raises(EditConflict):
             loaded.save()
@@ -965,9 +963,9 @@ class TestVersionAfterStatusChange:
         sub = self._approved()
         stale = ServiceSubmission.objects.get(pk=sub.pk)
         ServiceSubmission.objects.filter(pk=sub.pk).update(version=F("version") + 5)
-        assert set_status(stale, "rejected", actor="admin:jane") is True
+        assert set_status(stale, "deprecated", actor="admin:jane") is True
         stored = ServiceSubmission.objects.get(pk=sub.pk)
-        assert stored.status == "rejected"
+        assert stored.status == "deprecated"
         assert stored.version == stale.version
 
     def test_a_copy_can_be_saved_after_its_own_status_change(self):
@@ -993,14 +991,14 @@ class TestVersionAfterStatusChange:
         sub = self._approved()
         ServiceSubmission.objects.filter(pk=sub.pk).delete()
         with pytest.raises(ServiceSubmission.DoesNotExist):
-            set_status(sub, "rejected", actor="admin:jane")
+            set_status(sub, "deprecated", actor="admin:jane")
 
     def test_web_edit_loaded_before_a_status_change_is_refused(self, client, exempt):
         sub = self._approved()
         _grant(client, sub)
         data = edit_form_data(sub, github_url=self.MOVED)
         data["loaded_version"] = str(ServiceSubmission.objects.get(pk=sub.pk).version)
-        self._reject_elsewhere(sub)
+        self._deprecate_elsewhere(sub)
         resp = client.post(reverse("submissions:edit", args=[sub.pk]), data)
         assert resp.status_code == 409
         assert EditConflict.message in resp.content.decode()
@@ -1012,7 +1010,7 @@ class TestVersionAfterStatusChange:
         client = APIClient()
         client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
         etag = client.get(f"/api/v1/submissions/{sub.pk}/")["ETag"]
-        self._reject_elsewhere(sub)
+        self._deprecate_elsewhere(sub)
         resp = client.patch(
             f"/api/v1/submissions/{sub.pk}/",
             {"github_url": self.MOVED},
@@ -1028,7 +1026,7 @@ class TestVersionAfterStatusChange:
         sub = self._approved()
         data = edit_form_payload(sub, github_url=self.MOVED)
         data["loaded_version"] = str(ServiceSubmission.objects.get(pk=sub.pk).version)
-        self._reject_elsewhere(sub)
+        self._deprecate_elsewhere(sub)
         resp = superuser_client.post(reverse(CHANGE, args=[sub.pk]), data)
         assert resp.status_code == 302
         page = superuser_client.get(resp["Location"]).content.decode()
@@ -1111,7 +1109,7 @@ class TestCatchUpAfterUnrecordedChange:
 
         sub = ServiceSubmissionFactory(biotools_url="")
         set_status(sub, "approved", actor="admin:jane")
-        set_status(sub, "submitted", actor="submitter")
+        set_status(sub, "submitted", actor="submitter", owner_edit=True)
         sub.status_events.filter(to_status="approved").update(
             changed_at=timezone.now() + timedelta(days=1)
         )

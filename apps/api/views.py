@@ -496,6 +496,7 @@ class SubmissionViewSet(
                         SubmissionStatus.SUBMITTED,
                         actor=self._api_actor(request),
                         extra_fields=["updated_at"],
+                        owner_edit=True,
                     )
                     status_reset = True
                     # Include the reset (status, tags) in the recorded diff.

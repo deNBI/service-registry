@@ -836,16 +836,16 @@ class TestServiceSubmissionAdminTags:
         assert sub1.service_name.encode() in response.content
         assert sub2.service_name.encode() not in response.content
 
-    def test_status_action_clears_tags_on_reject(self, admin_client):
-        """Rejecting an approved+tagged submission auto-clears maturity tags."""
+    def test_status_action_clears_tags_on_under_review(self, admin_client):
+        """Moving an approved+tagged submission to review auto-clears its tags."""
         sub = ServiceSubmissionFactory(
             status="approved",
             primary_maturity_tag="mature",
             secondary_maturity_tags=["unstable"],
         )
-        admin_client.post(_change_url(sub), _edit_form_payload(sub, _reject="1"))
+        admin_client.post(_change_url(sub), _edit_form_payload(sub, _under_review="1"))
         sub.refresh_from_db()
-        assert sub.status == "rejected"
+        assert sub.status == "under_review"
         assert sub.primary_maturity_tag is None
         assert not sub.secondary_maturity_tags
 
@@ -1078,7 +1078,10 @@ class TestAssignMaturityTagsAction:
         # Simulate status change between modal open and submit
         sub2.primary_maturity_tag = None
         set_status(
-            sub2, "rejected", actor="admin:test", extra_fields=["primary_maturity_tag"]
+            sub2,
+            "deprecated",
+            actor="admin:test",
+            extra_fields=["primary_maturity_tag"],
         )
         resp = _ajax_post(
             admin_client,

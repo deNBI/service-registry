@@ -174,7 +174,7 @@ Specifically: the **Status Actions** panel is shown to any user who has **either
 `change_servicesubmission` **or** `approve_servicesubmission`. A user with only
 `change_servicesubmission` will see the buttons, but the Approve and Reject
 buttons are still blocked by the inner `_require_perm` guard if that permission
-is absent — only Under Review, Deprecate, and Undeprecate will succeed.
+is absent — only Under Review, Deprecate, and Back to Submitted will succeed.
 The **Key Management** panel is shown only to users with `manage_apikeys`.
 
 ---
@@ -264,7 +264,7 @@ Fix flagged rows by editing the description in this change form. **Admin edits d
 - **Admin notification** — full internal report with a direct link to the admin change view sent to the registry coordination address.
 - **Submitter confirmation** — a brief receipt confirmation ("We have received your service registration") sent to `internal_contact_email`. Contains no admin URL or internal details.
 
-**Individual status change (change view):** Open a submission. The **Status & Metadata** fieldset contains a row of action buttons — the current status is highlighted and its button is disabled. Click any other button to trigger the transition:
+**Individual status change (change view):** Open a submission. The **Status & Metadata** fieldset contains a row of action buttons — the current status is highlighted and its button is disabled. Only buttons for [allowed status changes](#allowed-status-changes) are shown. Click one to trigger the transition:
 
 | Button                      | Required permission         | Result                                 |
 | --------------------------- | --------------------------- | -------------------------------------- |
@@ -272,7 +272,7 @@ Fix flagged rows by editing the description in this change form. **Admin edits d
 | **Reject**                  | `approve_servicesubmission` | → `Rejected`                           |
 | **Mark Under Review**       | `change_servicesubmission`  | → `Under Review`                       |
 | **Deprecate**               | `change_servicesubmission`  | → `Deprecated`                         |
-| **Undeprecate → Submitted** | `change_servicesubmission`  | → `Submitted` (re-enters review queue) |
+| **Back to Submitted**       | `change_servicesubmission`  | → `Submitted` (re-enters review queue); offered on `Rejected`, `Deprecated` and legacy `Draft` services |
 
 !!! note "Status actions are logged"
     Status button clicks and bulk actions add a **Change History** entry and set the **Last Change Summary**. They are also recorded in the **Django LogEntry** (History tab) with a plain text message.
@@ -290,9 +290,24 @@ Two emails are sent automatically on every status transition:
 | Reject selected               | `approve_servicesubmission` | → `Rejected`                            |
 | Mark selected as Under Review | `change_servicesubmission`  | → `Under Review`                        |
 | Deprecate selected            | `change_servicesubmission`  | → `Deprecated`                          |
-| Undeprecate selected          | `change_servicesubmission`  | → `Submitted` (returns to review queue) |
+| Back to Submitted (selected)  | `change_servicesubmission`  | → `Submitted` (returns to review queue) |
 
-All bulk transitions fire the admin + submitter email notifications via Celery and are logged to Django's LogEntry.
+All bulk transitions fire the admin + submitter email notifications via Celery and are logged to Django's LogEntry. Selected submissions whose change is not allowed are left unchanged: one warning gives their number, and the others are changed as usual (no e-mail or change-log entry for the skipped ones).
+
+#### Allowed status changes
+
+Only the changes in this table are possible. Anything else is refused: a bulk action skips the row, and a button that is somehow posted anyway is refused before anything is saved, so field edits sent with it are dropped too, and one error message is shown.
+
+| Current status | May change to                                       |
+| -------------- | --------------------------------------------------- |
+| `Submitted`    | `Under Review`, `Approved`, `Rejected`, `Deprecated` |
+| `Under Review` | `Approved`, `Rejected`, `Deprecated`                 |
+| `Approved`     | `Under Review`, `Deprecated`                         |
+| `Rejected`     | `Submitted`, `Under Review`, `Approved`, `Deprecated` |
+| `Deprecated`   | `Submitted`, `Approved`                              |
+| `Draft`        | any status except `Draft`                            |
+
+An approved service is withdrawn by deprecating it; it cannot be rejected. Nothing changes a service into `Draft`. The only way from `Approved` to `Submitted` is the automatic reset after the owner edits the service (see [Submitter edits on approved services](#submitter-edits-on-approved-services)). A request for the status a service already has is not a change and is not refused. The service owner's **Deprecate** button on the edit page is shown only while deprecating is allowed.
 
 !!! note "Status history"
     The change view lists every status change of a submission under **Status history**: when it happened, the old and new status, and who made it (the submitter, an admin user, an API key or the system). The list is read-only. Entries for services registered before the history existed were rebuilt from the change log. Rows marked as synthetic close gaps, for those services or for status changes made without a history entry, and their dates are not real change dates. A status bulk action on services already in the target status records such missing history and changes nothing else.
@@ -301,12 +316,12 @@ All bulk transitions fire the admin + submitter email notifications via Celery a
 Both individual buttons and bulk actions call the same underlying `_change_status` function, which clears maturity tags whenever moving away from `Approved`. See [Assigning Maturity Tags](#assigning-maturity-tags) for details.
 
 !!! note "Deprecation is owner-reversible only by admins"
-Service owners can mark their own service as deprecated via the edit form. Only admins can reverse a deprecation (via bulk action or the change view button), which resets status to `Submitted` for re-review.
+Service owners can mark their own service as deprecated via the edit form. Only admins can reverse a deprecation. An admin can move a deprecated service back to `Submitted` for re-review (**Back to Submitted**), or straight to `Approved` (**Approve**), from the change view or with a bulk action.
 
 !!! note "Draft status"
 `draft` is defined in the data model but is not set by the submission form
-or any automated workflow. It can only be assigned via direct admin edit
-and is reserved for a future "save as draft" feature.
+or any automated workflow, and no status change leads into it. A legacy row
+in `draft` can move to any other status.
 
 #### Submitter edits on approved services
 
@@ -472,7 +487,7 @@ Maturity tags categorize services by lifecycle state. Tags can **only be assigne
 
 ### Tag lifecycle and auto-clear on unapproval
 
-Tags are bound to approved status. **Any status transition away from Approved automatically clears all maturity tags** — this covers single-service status buttons and bulk actions (Reject, Mark Under Review, Deprecate, Undeprecate → Submitted).
+Tags are bound to approved status. **Any status transition away from Approved automatically clears all maturity tags** — this covers single-service status buttons and bulk actions (Mark Under Review, Deprecate).
 
 When a tagged service is about to be unapproved, the change form shows a yellow warning banner listing which tags will be cleared. An info message is also shown after the action confirms how many services had tags cleared.
 
@@ -487,7 +502,7 @@ To re-tag a service after re-approval, use the change form or bulk action again.
 5. Save
 
 !!! note
-Using a status button (Reject, Deprecate, etc.) in the same section will automatically clear any selected tags — the warning banner indicates this before you act.
+Using a status button (Mark Under Review or Deprecate) in the same section will automatically clear any selected tags — the warning banner indicates this before you act.
 
 ### Bulk assignment: List action
 
