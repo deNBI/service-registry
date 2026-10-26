@@ -32,7 +32,7 @@ DJANGO_SETTINGS_MODULE = config.settings_test
 addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 ```
 
-`pytest.ini` also turns `ResourceWarning` into an error: a test that leaves a file or socket open fails. `tests/conftest.py` runs a garbage collection of the young generations after each test, so the error is reported on the test that left the object open. Close responses whose body a test does not read (`resp.close()`): a file response keeps its file open until it is read to the end or closed.
+`pytest.ini` also turns `ResourceWarning` into an error, as well as exceptions that are only reported, not raised (in `__del__` or in a background thread such as the live server): a test that leaves a file or socket open fails. `tests/conftest.py` collects the young garbage generations after each test, so an object freed there is reported on the test that left it open. An object that lives long enough to reach the oldest generation is reported later, on whichever test is running when a full collection happens, at the latest on the last test of the run; the message names the file, and running with `PYTHONTRACEMALLOC=25` adds where it was opened. Close responses whose body a test does not read (`resp.close()`): a file response keeps its file open until it is read to the end or closed.
 
 **`config/settings_test.py`** — key overrides:
 
