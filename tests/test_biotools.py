@@ -725,74 +725,153 @@ class TestBioToolsSignal:
     """
     Tests for the post_save signal that triggers bio.tools sync.
 
+    The sync is queued when the saving transaction commits; tests run inside
+    a transaction, so they run the commit callbacks explicitly.
     CELERY_TASK_ALWAYS_EAGER=True in settings_test means apply_async runs
     synchronously. We mock the bio.tools API client to avoid real HTTP calls
     and check the observable side effect (BioToolsRecord creation).
     """
 
-    def test_signal_creates_record_for_new_submission_with_url(self):
+    def test_signal_creates_record_for_new_submission_with_url(
+        self, django_capture_on_commit_callbacks
+    ):
         """End-to-end: saving a submission with a biotools_url triggers sync."""
         from apps.biotools.models import BioToolsRecord
 
         entry = BioToolsClient._parse_tool(FULL_RAW)
-        with patch("apps.biotools.client.BioToolsClient.get_tool", return_value=entry):
+        with (
+            patch("apps.biotools.client.BioToolsClient.get_tool", return_value=entry),
+            django_capture_on_commit_callbacks(execute=True),
+        ):
             sub = ServiceSubmissionFactory(biotools_url="https://bio.tools/blast")
 
         assert BioToolsRecord.objects.filter(submission=sub).exists()
         record = BioToolsRecord.objects.get(submission=sub)
         assert record.name == "BLAST"
 
-    def test_signal_skips_when_no_url(self):
-        """Submission without biotools_url does not create a record."""
+    def test_signal_skips_when_no_url(self, django_capture_on_commit_callbacks):
+        """Submission without biotools_url queues no sync and creates no record."""
         from apps.biotools.models import BioToolsRecord
 
-        sub = ServiceSubmissionFactory(biotools_url="")
+        with django_capture_on_commit_callbacks(execute=True) as callbacks:
+            sub = ServiceSubmissionFactory(biotools_url="")
+        assert callbacks == []
         assert not BioToolsRecord.objects.filter(submission=sub).exists()
 
-    def test_signal_skips_update_when_url_unchanged_and_synced(self):
+    def test_signal_skips_update_when_url_unchanged_and_synced(
+        self, django_capture_on_commit_callbacks
+    ):
         """Resaving a submission with unchanged biotools_url and existing record skips re-sync."""
         from apps.biotools.models import BioToolsRecord
-        from django.db.models.signals import post_save
-        from apps.submissions.models import ServiceSubmission
 
         entry = BioToolsClient._parse_tool(FULL_RAW)
-        with patch("apps.biotools.client.BioToolsClient.get_tool", return_value=entry):
+        with (
+            patch("apps.biotools.client.BioToolsClient.get_tool", return_value=entry),
+            django_capture_on_commit_callbacks(execute=True),
+        ):
             sub = ServiceSubmissionFactory(biotools_url="https://bio.tools/blast")
 
         assert BioToolsRecord.objects.filter(submission=sub).exists()
 
-        # Resave with same URL — should skip (record already exists, URL unchanged)
-        with patch(
-            "apps.biotools.client.BioToolsClient.get_tool", return_value=entry
-        ) as mock_get:
-            post_save.send(ServiceSubmission, instance=sub, created=False)
-            # get_tool should NOT have been called again
-            mock_get.assert_not_called()
+        # Resave with same URL: nothing is queued (record exists, URL unchanged)
+        with (
+            patch(
+                "apps.biotools.client.BioToolsClient.get_tool", return_value=entry
+            ) as mock_get,
+            django_capture_on_commit_callbacks(execute=True) as callbacks,
+        ):
+            sub.save()
+        assert callbacks == []
+        mock_get.assert_not_called()
 
-    def test_signal_resyncs_when_url_changes_to_another_tool(self):
+    def test_signal_syncs_again_when_the_record_is_missing(
+        self, django_capture_on_commit_callbacks
+    ):
+        """Control for the skip above: with the same unchanged URL but no
+        record, a resave does queue a sync."""
+        from apps.biotools.models import BioToolsRecord
+
+        entry = BioToolsClient._parse_tool(FULL_RAW)
+        with (
+            patch("apps.biotools.client.BioToolsClient.get_tool", return_value=entry),
+            django_capture_on_commit_callbacks(execute=True),
+        ):
+            sub = ServiceSubmissionFactory(biotools_url="https://bio.tools/blast")
+        BioToolsRecord.objects.filter(submission=sub).delete()
+
+        with (
+            patch(
+                "apps.biotools.client.BioToolsClient.get_tool", return_value=entry
+            ) as mock_get,
+            django_capture_on_commit_callbacks(execute=True) as callbacks,
+        ):
+            sub.save()
+        assert len(callbacks) == 1
+        mock_get.assert_called_once()
+        assert BioToolsRecord.objects.filter(submission=sub).exists()
+
+    def test_sync_is_queued_only_when_the_save_commits(
+        self, django_capture_on_commit_callbacks
+    ):
+        """The task reads the submission from the database, so it must not be
+        queued before the saving transaction has committed."""
+        with patch("apps.biotools.tasks.sync_biotools_record.apply_async") as queue:
+            with django_capture_on_commit_callbacks() as callbacks:
+                sub = ServiceSubmissionFactory(biotools_url="https://bio.tools/blast")
+                queue.assert_not_called()
+            assert len(callbacks) == 1
+            callbacks[0]()
+        queue.assert_called_once_with(args=[str(sub.pk)])
+
+    def test_sync_is_not_queued_when_the_save_is_rolled_back(
+        self, django_capture_on_commit_callbacks
+    ):
+        from django.db import transaction
+
+        with patch("apps.biotools.tasks.sync_biotools_record.apply_async") as queue:
+            with django_capture_on_commit_callbacks(execute=True) as callbacks:
+                try:
+                    with transaction.atomic():
+                        ServiceSubmissionFactory(biotools_url="https://bio.tools/blast")
+                        raise RuntimeError("the edit failed")
+                except RuntimeError:
+                    pass
+        assert callbacks == []
+        queue.assert_not_called()
+
+    def test_signal_resyncs_when_url_changes_to_another_tool(
+        self, django_capture_on_commit_callbacks
+    ):
         """Saving a new bio.tools URL replaces the record of the old tool."""
         from apps.biotools.models import BioToolsRecord
 
         with patch(
             "apps.biotools.client.BioToolsClient.get_tool", side_effect=_entry_for
         ):
-            sub = ServiceSubmissionFactory(biotools_url="https://bio.tools/blast")
+            with django_capture_on_commit_callbacks(execute=True):
+                sub = ServiceSubmissionFactory(biotools_url="https://bio.tools/blast")
             assert BioToolsRecord.objects.get(submission=sub).biotools_id == "blast"
 
             sub.biotools_url = "https://bio.tools/interproscan"
-            sub.save()
+            with django_capture_on_commit_callbacks(execute=True):
+                sub.save()
 
         record = BioToolsRecord.objects.get(submission=sub)
         assert record.biotools_id == "interproscan"
         assert record.name == "INTERPROSCAN"
 
-    def test_signal_removes_record_when_url_is_cleared(self):
+    def test_signal_removes_record_when_url_is_cleared(
+        self, django_capture_on_commit_callbacks
+    ):
         """Clearing the bio.tools URL removes the old record, so its data is
         no longer shown."""
         from apps.biotools.models import BioToolsRecord
 
-        with patch(
-            "apps.biotools.client.BioToolsClient.get_tool", side_effect=_entry_for
+        with (
+            patch(
+                "apps.biotools.client.BioToolsClient.get_tool", side_effect=_entry_for
+            ),
+            django_capture_on_commit_callbacks(execute=True),
         ):
             sub = ServiceSubmissionFactory(biotools_url="https://bio.tools/blast")
         assert BioToolsRecord.objects.filter(submission=sub).exists()
@@ -802,17 +881,21 @@ class TestBioToolsSignal:
 
         assert not BioToolsRecord.objects.filter(submission=sub).exists()
 
-    def test_ordinary_save_does_not_resync(self):
+    def test_ordinary_save_does_not_resync(self, django_capture_on_commit_callbacks):
         """A save that leaves the bio.tools URL as it is (e.g. a status change)
         does not call bio.tools again."""
         with patch(
             "apps.biotools.client.BioToolsClient.get_tool", side_effect=_entry_for
         ) as mock_get:
-            sub = ServiceSubmissionFactory(biotools_url="https://bio.tools/blast")
+            with django_capture_on_commit_callbacks(execute=True):
+                sub = ServiceSubmissionFactory(biotools_url="https://bio.tools/blast")
             assert mock_get.call_count == 1
 
             sub.status = "under_review"
-            sub.save(update_fields=["status", "updated_at"])
+            with django_capture_on_commit_callbacks(execute=True) as callbacks:
+                sub.save(update_fields=["status", "updated_at"])
+
+            assert callbacks == []
 
             assert mock_get.call_count == 1
 
