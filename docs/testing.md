@@ -56,7 +56,7 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_views.py` | Registration form, update flow, session handling, logo upload via views, deprecation via edit form, ALTCHA challenge endpoint, ALTCHA verification on register and edit (missing payload, invalid payload, expired challenge, valid solved challenge, bypass when key empty, widget presence/absence in GET responses), health endpoints |
 | `test_forms.py` | `SubmissionForm` required fields, cross-field rules, URL validation, logo `clean_logo()` |
 | `test_api.py` | All REST endpoints — auth, permissions, response shape, error envelopes, logo upload, `?status=deprecated` filter |
-| `test_admin.py` | Admin bulk actions (deprecate/undeprecate), change-view buttons, CSV/JSON export completeness |
+| `test_admin.py` | Admin bulk actions (deprecate, Back to Submitted), change-view buttons, CSV/JSON export completeness |
 | `test_security.py` | API key auth, logging scrubber, CSRF, request ID middleware, ALTCHA challenge security (public access, JSON content type, HMAC key not leaked, non-empty fields, `Cache-Control: no-store`) |
 | `test_tasks.py` | Celery email notification and cleanup tasks |
 | `test_biotools.py` | bio.tools client (HTTP mocks), sync logic, tasks, signals, views |
@@ -78,6 +78,15 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_query_counts.py` | List endpoints (API list, admin changelist) issue the same number of queries for 3 and 12 rows: no per-row (N+1) queries |
 | `test_api_patch_reset.py` | API `PATCH` on an approved submission resets it only on a real non-exempt change (re-sent, re-padded or NFD values keep approval), content + reset in one transaction, no-change notification contract |
 | `test_http_utils.py` | `get_client_ip()` returns only valid IPs (malformed `X-Real-IP`/`X-Forwarded-For` fall through), `get_ratelimit_ip()` always gives django-ratelimit a parseable IP |
+| `test_status_history.py` | Status events: creation event, `set_status` recording and version handling, history selectors |
+| `test_status_transitions.py` | The transition table through every layer: `set_status`, bulk actions, change-view buttons and the owner's Deprecate button; refused changes leave status, version, history, change log and mail untouched |
+| `test_status_backfill.py` | Migration `0022`: status history rebuilt from the change log, synthetic rows, malformed entries, forward and reverse runs through the migration executor |
+| `test_status_log.py` | Reading status changes out of change-log entries; the reader agrees with the frozen copy in migration `0022` |
+| `test_status_write_guard.py` | Static scan: only `apps/submissions/lifecycle.py` may write a submission status |
+| `test_rejected_edit.py` | An owner edit of a rejected service (web form and API) returns it to `submitted`; tags kept; no-change saves and other statuses keep their status |
+| `test_clear_tags_on_deprecated.py` | Deprecation clears maturity tags; migration `0023` (cleared tags, version, change-log entry); a deprecated service holding tags gives a form error, not a server error |
+
+After every database test, an autouse fixture in `tests/conftest.py` checks that each submission's status events form one chain from its creation and that the latest event equals its status. A test that sets a status directly (for example with `QuerySet.update`) fails with "status history out of sync". Tests that build such rows on purpose, such as the legacy-data migration tests, opt out with `@pytest.mark.allow_status_drift`; everything else should change status through `set_status`.
 
 Run `pytest --collect-only -q` for the current test count; a coverage threshold of ≥ 80% is enforced.
 

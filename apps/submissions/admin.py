@@ -4,7 +4,7 @@ Submissions Admin
 Features:
   - Rich list view with colour-coded status badges and key metrics
   - Custom change view with API-key management panel
-  - Bulk actions: approve, reject, mark-under-review, deprecate, undeprecate, CSV/JSON export
+  - Bulk actions: approve, reject, mark-under-review, deprecate, back to submitted, CSV/JSON export
   - Status transitions fire email notifications via Celery
   - All admin key operations logged to Django LogEntry
 """
@@ -18,6 +18,7 @@ from django import forms
 from django.contrib import admin, messages
 from django.forms.widgets import CheckboxSelectMultiple
 from django.contrib.admin.models import CHANGE, LogEntry
+from django.contrib.admin.utils import unquote
 from django.db import transaction
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.template import loader
@@ -41,11 +42,24 @@ from .models import (
     SubmissionChangeLog,
     SubmissionDeletionAudit,
     SubmissionStatus,
+    SubmissionStatusEvent,
 )
+from .lifecycle import allowed_transitions, set_status
 from .tasks import send_submission_notification
 from .widgets import MarkdownTextareaWidget
 
 logger = logging.getLogger(__name__)
+
+# Change-form status buttons and the status each one moves to, in the order
+# response_change() looks for them. API key buttons take precedence.
+STATUS_BUTTONS = {
+    "_approve": "approved",
+    "_reject": "rejected",
+    "_under_review": "under_review",
+    "_deprecate": "deprecated",
+    "_undeprecate": "submitted",
+}
+KEY_BUTTONS = ("_revoke_all_keys", "_reset_key", "_issue_new_key")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -105,6 +119,30 @@ class SubmissionAPIKeyInline(admin.TabularInline):
         return request.user.has_perm(
             "submissions.view_submissionapikey"
         ) or request.user.has_perm("submissions.manage_apikeys")
+
+
+class SubmissionStatusEventInline(admin.TabularInline):
+    """Read-only status history; events are written by set_status only."""
+
+    model = SubmissionStatusEvent
+    extra = 0
+    can_delete = False
+    ordering = ("-changed_at", "-id")
+    fields = readonly_fields = (
+        "changed_at",
+        "from_status",
+        "to_status",
+        "changed_by",
+        "source",
+        "is_synthetic",
+    )
+    verbose_name_plural = "Status history"
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -279,6 +317,31 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             kwargs["widget"] = CheckboxSelectMultiple()
         return super().formfield_for_manytomanyfield(db_field, request, **kwargs)
 
+    def get_readonly_fields(self, request, obj=None):
+        # Tags are assigned while a service is approved. On any other status
+        # they are shown, not editable (a service keeps the tags it had).
+        # A deprecated row that still holds tags (data from before tags were
+        # cleared on deprecation) keeps the fields editable so they can be
+        # cleared; validation otherwise rejects the row with no way to fix it.
+        readonly = super().get_readonly_fields(request, obj)
+        if obj is None or obj.status != SubmissionStatus.APPROVED:
+            if not (
+                obj is not None
+                and obj.status == SubmissionStatus.DEPRECATED
+                and (obj.primary_maturity_tag or obj.secondary_maturity_tags)
+            ):
+                readonly = (
+                    *readonly,
+                    "primary_maturity_tag",
+                    "secondary_maturity_tags",
+                )
+        return readonly
+
+    @admin.display(description="Secondary maturity tags")
+    def secondary_maturity_tags_display(self, obj):
+        """Secondary tags as labels. A read-only model field would show raw JSON."""
+        return ", ".join(obj.get_secondary_maturity_tag_display_list()) or "—"
+
     def formfield_for_dbfield(self, db_field, request, **kwargs):
         if db_field.name == "primary_maturity_tag":
             # Get the default form field then swap in RadioSelect + relabel empty option.
@@ -318,7 +381,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             "admin/js/submissions_filter_sidebar.js",
         )
 
-    inlines = [SubmissionAPIKeyInline]
+    inlines = [SubmissionAPIKeyInline, SubmissionStatusEventInline]
 
     readonly_fields = (
         "id",
@@ -333,6 +396,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         "data_protection_consent",
         "change_history_display",
         "description_rendered",
+        "secondary_maturity_tags_display",
     )
 
     @admin.display(description="Description (rendered)")
@@ -551,6 +615,12 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         )
 
     def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        refusal = self._refused_status_button(request, object_id)
+        if refusal:
+            # Nothing is saved: the posted field edits are dropped with the
+            # refused button, so the page can be reloaded and tried again.
+            self.message_user(request, refusal, messages.ERROR)
+            return HttpResponseRedirect(request.get_full_path())
         try:
             return super().changeform_view(request, object_id, form_url, extra_context)
         except EditConflict:
@@ -558,6 +628,30 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             # (including any status or key button) was rolled back.
             self.message_user(request, EditConflict.message, messages.ERROR)
             return HttpResponseRedirect(request.get_full_path())
+
+    def _refused_status_button(self, request, object_id):
+        """Return the error text when a posted status button is not allowed.
+
+        The check runs against the stored status, before the form is saved.
+        A button for the status the service already has is not a change.
+        """
+        if request.method != "POST" or object_id is None:
+            return ""
+        if any(key in request.POST for key in KEY_BUTTONS):
+            return ""
+        button = next((b for b in STATUS_BUTTONS if b in request.POST), None)
+        if button is None:
+            return ""
+        obj = self.get_object(request, unquote(object_id))
+        if obj is None or not self.has_change_permission(request, obj):
+            return ""
+        target = STATUS_BUTTONS[button]
+        if target == obj.status or target in allowed_transitions(obj.status):
+            return ""
+        return (
+            f"A change to {dict(SubmissionStatus.choices)[target]} is not "
+            f"allowed from {obj.get_status_display()}. Nothing was saved."
+        )
 
     def render_change_form(
         self, request, context, add=False, change=False, form_url="", obj=None
@@ -665,6 +759,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     obj.__class__.objects.filter(pk=obj.pk),
                     "approved",
                     "Approved",
+                    skipped_level=messages.ERROR,
                 )
         elif "_reject" in request.POST:
             if self._require_perm(
@@ -675,6 +770,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     obj.__class__.objects.filter(pk=obj.pk),
                     "rejected",
                     "Rejected",
+                    skipped_level=messages.ERROR,
                 )
         elif "_under_review" in request.POST:
             if self._require_perm(
@@ -685,6 +781,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     obj.__class__.objects.filter(pk=obj.pk),
                     "under_review",
                     "Under Review",
+                    skipped_level=messages.ERROR,
                 )
         elif "_deprecate" in request.POST:
             if self._require_perm(
@@ -695,16 +792,20 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                     obj.__class__.objects.filter(pk=obj.pk),
                     "deprecated",
                     "Deprecated",
+                    skipped_level=messages.ERROR,
                 )
         elif "_undeprecate" in request.POST:
             if self._require_perm(
-                request, "change_servicesubmission", "undeprecate submissions"
+                request,
+                "change_servicesubmission",
+                "move submissions back to Submitted",
             ):
                 self._change_status(
                     request,
                     obj.__class__.objects.filter(pk=obj.pk),
                     "submitted",
-                    "Submitted (undeprecated)",
+                    "Submitted",
+                    skipped_level=messages.ERROR,
                 )
         else:
             # Regular form save — show a diff banner if fields changed.
@@ -955,6 +1056,12 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         ):
             fieldsets = self._with_description_rendered(fieldsets)
 
+        if obj is not None and (
+            "secondary_maturity_tags" in self.get_readonly_fields(request, obj)
+            or not self.has_change_permission(request, obj)
+        ):
+            fieldsets = self._with_readable_secondary_tags(fieldsets)
+
         if not excluded:
             return fieldsets
 
@@ -967,6 +1074,26 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             # If filtered is empty the entire fieldset is dropped — this only
             # happens to "🔑 API Key Management" when manage_apikeys is absent.
         return result
+
+    @staticmethod
+    def _with_readable_secondary_tags(fieldsets):
+        """Return a copy of fieldsets that lists the label display in place of
+        the secondary tags field (used where that field is read-only)."""
+        result = []
+        for title, options in fieldsets:
+            fields = tuple(
+                tuple(
+                    "secondary_maturity_tags_display"
+                    if name == "secondary_maturity_tags"
+                    else name
+                    for name in row
+                )
+                if isinstance(row, (tuple, list))
+                else row
+                for row in options["fields"]
+            )
+            result.append((title, {**options, "fields": fields}))
+        return tuple(result)
 
     @staticmethod
     def _with_description_rendered(fieldsets):
@@ -1243,21 +1370,15 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             ("_reject", "Reject", "#991b1b", "#fef2f2", "#fecaca"),
             ("_under_review", "Mark Under Review", "#92400e", "#fffbeb", "#fde68a"),
             ("_deprecate", "Deprecate", "#374151", "#f9fafb", "#d1d5db"),
-            (
-                "_undeprecate",
-                "Undeprecate → Submitted",
-                "#1e40af",
-                "#eff6ff",
-                "#bfdbfe",
-            ),
+            ("_undeprecate", "Back to Submitted", "#1e40af", "#eff6ff", "#bfdbfe"),
         ]
+        targets = STATUS_BUTTONS
+        allowed = allowed_transitions(current)
         for name, label, color, bg, border in status_opts:
-            active = (
-                (name == "_approve" and current == "approved")
-                or (name == "_reject" and current == "rejected")
-                or (name == "_under_review" and current == "under_review")
-                or (name == "_deprecate" and current == "deprecated")
-            )
+            target = targets[name]
+            active = name != "_undeprecate" and target == current
+            if not active and target not in allowed:
+                continue
             style = (
                 f"background:{bg};color:{color};border:1.5px solid {border};"
                 f"border-radius:5px;padding:.3rem .8rem;font-size:.8rem;"
@@ -1271,7 +1392,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 f"{check}{label}</button>"
             )
         tag_warning = ""
-        if current == "approved" and (
+        if current != SubmissionStatus.DEPRECATED and (
             obj.primary_maturity_tag or obj.secondary_maturity_tags
         ):
             primary_label = obj.get_primary_maturity_tag_display() or ""
@@ -1285,7 +1406,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 '<p style="margin:.6rem 0 0;font-size:.78rem;color:#92400e;'
                 "background:#fffbeb;border:1px solid #fde68a;border-radius:4px;"
                 'padding:.3rem .6rem;">'
-                "⚠ Unapproving will automatically clear maturity tags: "
+                "⚠ Deprecating will automatically clear maturity tags: "
                 "<strong>{}</strong></p>",
                 tag_summary,
             )
@@ -1332,9 +1453,14 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
 
     # ── Actions ──────────────────────────────────────────────────────────────
 
-    def _change_status(self, request, queryset, new_status, label):
+    def _change_status(
+        self, request, queryset, new_status, label, *, skipped_level=messages.WARNING
+    ):
         updated = 0
+        skipped_from = []
         tags_cleared = 0
+        username = getattr(request.user, "username", "admin")
+        changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
         # Re-read the selected rows under a lock (in primary-key order) and
         # change them in one transaction, so a save made after the changelist
         # was loaded is neither overwritten nor a reason for this one to fail.
@@ -1345,6 +1471,23 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 .order_by("pk")
             ):
                 if sub.status == new_status:
+                    # Nothing changes, but the status history may not show
+                    # this status (an earlier release set it): set_status then
+                    # records it, which counts as marked. The catch-up events
+                    # carry "system" or the change-log actor, not this admin,
+                    # and no e-mail or change-log entry is written. Otherwise
+                    # the row is skipped.
+                    if set_status(sub, new_status, actor=changed_by):
+                        self._log(
+                            request,
+                            sub,
+                            f"Status {new_status} confirmed; "
+                            "earlier status changes recorded",
+                        )
+                        updated += 1
+                    continue
+                if new_status not in allowed_transitions(sub.status):
+                    skipped_from.append(sub.get_status_display())
                     continue
                 old = sub.status
                 # Capture display values before mutation so the diff shows human labels.
@@ -1352,24 +1495,22 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 old_primary_tag = sub.primary_maturity_tag
                 old_secondary_tags = list(sub.secondary_maturity_tags or [])
 
-                sub.status = new_status
-                update_fields = ["status"]
                 log_parts = [f"Status changed {old} → {new_status}"]
-                # Auto-clear maturity tags when moving away from approved — tags are
-                # only valid on approved services and should not persist after de-approval.
-                if new_status != SubmissionStatus.APPROVED and (
-                    sub.primary_maturity_tag or sub.secondary_maturity_tags
-                ):
-                    sub.primary_maturity_tag = None
-                    sub.secondary_maturity_tags = []
-                    update_fields += ["primary_maturity_tag", "secondary_maturity_tags"]
+                # set_status clears maturity tags when the service is deprecated;
+                # they are kept for every other status.
+                cleared_tags = new_status == SubmissionStatus.DEPRECATED and bool(
+                    old_primary_tag or old_secondary_tags
+                )
+                if cleared_tags:
                     log_parts.append("maturity tags cleared")
                     tags_cleared += 1
 
                 # Build field-level diff for the audit log (mirrors build_diff format).
-                # Done before save() so last_change_summary is written atomically with
-                # the status mutation in a single round-trip.
-                new_status_display = sub.get_status_display() or new_status
+                # Done before the write so last_change_summary is stored with the
+                # status change in a single save.
+                new_status_display = str(
+                    dict(SubmissionStatus.choices).get(new_status) or new_status
+                )
                 changes = [
                     {
                         "field": "status",
@@ -1378,7 +1519,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                         "new": new_status_display,
                     }
                 ]
-                if old_primary_tag:
+                if cleared_tags and old_primary_tag:
                     old_primary_display = str(
                         dict(PRIMARY_MATURITY_TAG_CHOICES).get(
                             old_primary_tag, old_primary_tag
@@ -1392,7 +1533,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                             "new": "—",
                         }
                     )
-                if old_secondary_tags:
+                if cleared_tags and old_secondary_tags:
                     old_secondary_display = ", ".join(
                         str(dict(SECONDARY_MATURITY_TAG_CHOICES).get(t, t))
                         for t in old_secondary_tags
@@ -1406,16 +1547,18 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                         }
                     )
 
-                username = getattr(request.user, "username", "admin")
-                changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
                 now = timezone.now()
                 sub.last_change_summary = {
                     "changed_by": changed_by,
                     "changed_at": now.isoformat(),
                     "changes": changes,
                 }
-                update_fields.append("last_change_summary")
-                sub.save(update_fields=update_fields)
+                set_status(
+                    sub,
+                    new_status,
+                    actor=changed_by,
+                    extra_fields=["last_change_summary"],
+                )
                 SubmissionChangeLog.objects.create(
                     submission=sub,
                     changed_by=changed_by,
@@ -1434,14 +1577,25 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                 )
                 self._log(request, sub, "; ".join(log_parts))
                 updated += 1
-        self.message_user(
-            request, f"{updated} submission(s) marked as {label}.", messages.SUCCESS
-        )
+        if skipped_from:
+            target = dict(SubmissionStatus.choices)[new_status]
+            self.message_user(
+                request,
+                f"{len(skipped_from)} submission(s) left unchanged: a change to "
+                f"{target} is not allowed from {', '.join(sorted(set(skipped_from)))}.",
+                skipped_level,
+            )
+        if updated or not skipped_from:
+            self.message_user(
+                request,
+                f"{updated} submission(s) marked as {label}.",
+                messages.SUCCESS,
+            )
         if tags_cleared:
             self.message_user(
                 request,
                 f"⚠ Maturity tags automatically cleared on {tags_cleared} submission(s) "
-                "that were moved away from Approved status.",
+                "that were deprecated.",
                 messages.WARNING,
             )
 
@@ -1493,15 +1647,15 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         self._change_status(request, queryset, "deprecated", "Deprecated")
 
     @admin.action(
-        description="♻️ Undeprecate selected (→ Submitted)",
+        description="♻️ Back to Submitted (selected)",
         permissions=["change"],
     )
     def action_undeprecate(self, request, queryset):
         if not self._require_perm(
-            request, "change_servicesubmission", "undeprecate submissions"
+            request, "change_servicesubmission", "move submissions back to Submitted"
         ):
             return
-        self._change_status(request, queryset, "submitted", "Submitted (undeprecated)")
+        self._change_status(request, queryset, "submitted", "Submitted")
 
     def _export_queryset(self, queryset):
         """Return a fully prefetched queryset suitable for both export actions."""

@@ -30,11 +30,13 @@ from apps.registry.models import PrincipalInvestigator, ServiceCategory, Service
 from apps.submissions import idempotency
 from apps.submissions.diff_utils import build_diff, snapshot, snapshot_m2m
 from apps.submissions.http_utils import get_client_ip, hash_user_agent
+from apps.submissions.lifecycle import set_status
 from apps.submissions.models import (
     CHANGELOG_ACTOR_API_PREFIX,
     ServiceSubmission,
     SubmissionAPIKey,
     SubmissionChangeLog,
+    SubmissionStatus,
 )
 from apps.submissions.tasks import (
     send_submission_notification,
@@ -313,8 +315,9 @@ class SubmissionViewSet(
             raise
 
     def _create_submission(self, request, serializer, idempotency_key):
+        # The status is the model default ("submitted"); the creation receiver
+        # records it in the status history.
         submission = serializer.save(
-            status="submitted",
             submission_ip=get_client_ip(request) or None,
             user_agent_hash=hash_user_agent(request),
         )
@@ -465,7 +468,8 @@ class SubmissionViewSet(
 
             serializer = self.get_serializer(instance, data=request.data, partial=True)
             serializer.is_valid(raise_exception=True)
-            was_approved = instance.status == "approved"
+            was_approved = instance.status == SubmissionStatus.APPROVED
+            was_rejected = instance.status == SubmissionStatus.REJECTED
             before = {**before_scalar, **before_m2m}
 
             serializer.save()
@@ -478,29 +482,24 @@ class SubmissionViewSet(
 
             # Same rule as the web form (EditView): an approved submission goes
             # back to review only when a non-exempt field really changed, or
-            # when no no_reset_fields are configured and anything changed.
+            # when no no_reset_fields are configured and anything changed. A
+            # rejected submission goes back to submitted for any real change.
             status_reset = False
-            if was_approved and changes:
+            if changes and (was_approved or was_rejected):
                 from apps.submissions.lifecycle import get_no_reset_fields
 
                 exempt = get_no_reset_fields()
                 changed = {c["field"] for c in changes}
-                if (changed - exempt) or not exempt:
-                    # Clear maturity tags too: they are only valid on approved
-                    # services (model invariant).
-                    instance.status = "submitted"
-                    instance.primary_maturity_tag = None
-                    instance.secondary_maturity_tags = []
-                    instance.save(
-                        update_fields=[
-                            "status",
-                            "primary_maturity_tag",
-                            "secondary_maturity_tags",
-                            "updated_at",
-                        ]
+                if was_rejected or (changed - exempt) or not exempt:
+                    set_status(
+                        instance,
+                        SubmissionStatus.SUBMITTED,
+                        actor=self._api_actor(request),
+                        extra_fields=["updated_at"],
+                        owner_edit=True,
                     )
                     status_reset = True
-                    # Include the reset (status, tags) in the recorded diff.
+                    # Include the reset (status) in the recorded diff.
                     changes = build_diff(
                         before, {**snapshot(instance), **snapshot_m2m(instance)}
                     )
@@ -530,12 +529,16 @@ class SubmissionViewSet(
         return Response(data, headers={"ETag": etag})
 
     @staticmethod
+    def _api_actor(request) -> str:
+        """Changelog actor for API writes: "api:<key label>"."""
+        return f"{CHANGELOG_ACTOR_API_PREFIX}{getattr(request.auth, 'label', 'api')}"
+
+    @staticmethod
     def _record_api_change(request, instance, changes) -> None:
         """Persist the diff on the submission and in the append-only change log."""
         # Identify who made the change via the API key label (request.auth
         # is the SubmissionAPIKey instance set by SubmissionAPIKeyAuthentication).
-        key_label = getattr(request.auth, "label", "api")
-        changed_by = f"{CHANGELOG_ACTOR_API_PREFIX}{key_label}"
+        changed_by = SubmissionViewSet._api_actor(request)
         changed_at = now()
         instance.last_change_summary = {
             "changed_by": changed_by,

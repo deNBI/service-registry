@@ -648,10 +648,10 @@ class TestSubmissionUpdate:
         assert sub.primary_maturity_tag is None or sub.primary_maturity_tag == ""
         assert sub.secondary_maturity_tags == []
 
-    def test_patch_approved_non_exempt_field_clears_maturity_tags(
+    def test_patch_approved_non_exempt_field_keeps_maturity_tags(
         self, api_client, settings
     ):
-        """PATCH on approved submission with a non-exempt field must reset status and clear tags."""
+        """PATCH on approved submission with a non-exempt field must reset status and keep tags."""
         settings.SUBMISSION_NO_RESET_FIELDS = ["github_url"]
         from apps.submissions.lifecycle import get_no_reset_fields
 
@@ -671,8 +671,8 @@ class TestSubmissionUpdate:
         assert resp.status_code == 200
         sub.refresh_from_db()
         assert sub.status == "submitted"
-        assert not sub.primary_maturity_tag
-        assert sub.secondary_maturity_tags == []
+        assert sub.primary_maturity_tag == "mature"
+        assert sub.secondary_maturity_tags == ["unstable"]
         get_no_reset_fields.cache_clear()
 
     def test_patch_approved_exempt_field_preserves_status_and_tags(
@@ -723,7 +723,7 @@ class TestSubmissionUpdate:
         assert resp.status_code == 200
         sub.refresh_from_db()
         assert sub.status == "submitted"
-        assert not sub.primary_maturity_tag
+        assert sub.primary_maturity_tag == "mature"
         get_no_reset_fields.cache_clear()
 
 
@@ -2026,6 +2026,7 @@ class TestSubmissionMaturityTagsAPI:
         sub.refresh_from_db()
         assert sub.secondary_maturity_tags == []
 
+    @pytest.mark.allow_status_drift  # writes legacy data straight to the table
     def test_api_get_after_status_change_clears_tags(self):
         """GET a submission whose secondary_maturity_tags were cleared to None in the DB
         (simulating legacy data or a pre-fix _change_status write) must return 200,

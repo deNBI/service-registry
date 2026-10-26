@@ -16,7 +16,12 @@ from django.test import Client
 from django.urls import reverse
 
 from apps.edam.models import EdamTerm
-from apps.submissions.models import CHANGELOG_ACTOR_ADMIN_PREFIX, SubmissionChangeLog
+from apps.submissions.lifecycle import set_status
+from apps.submissions.models import (
+    CHANGELOG_ACTOR_ADMIN_PREFIX,
+    ServiceSubmission,
+    SubmissionChangeLog,
+)
 from tests.factories import (
     BioToolsFunctionFactory,
     BioToolsRecordFactory,
@@ -85,7 +90,7 @@ def _changelist_url():
     return reverse("admin:submissions_servicesubmission_changelist")
 
 
-def _run_action(admin_client, action, *submissions):
+def _run_action(admin_client, action, *submissions, **extra):
     ids = [str(s.pk) for s in submissions]
     return admin_client.post(
         _changelist_url(),
@@ -93,6 +98,7 @@ def _run_action(admin_client, action, *submissions):
             "action": action,
             "_selected_action": ids,
         },
+        **extra,
     )
 
 
@@ -835,18 +841,52 @@ class TestServiceSubmissionAdminTags:
         assert sub1.service_name.encode() in response.content
         assert sub2.service_name.encode() not in response.content
 
-    def test_status_action_clears_tags_on_reject(self, admin_client):
-        """Rejecting an approved+tagged submission auto-clears maturity tags."""
+    def test_status_action_keeps_tags_on_under_review(self, admin_client):
+        """Moving an approved+tagged submission to review keeps its tags."""
         sub = ServiceSubmissionFactory(
             status="approved",
             primary_maturity_tag="mature",
             secondary_maturity_tags=["unstable"],
         )
-        admin_client.post(_change_url(sub), _edit_form_payload(sub, _reject="1"))
+        resp = admin_client.post(
+            _change_url(sub), _edit_form_payload(sub, _under_review="1"), follow=True
+        )
+        sub.refresh_from_db()
+        assert sub.status == "under_review"
+        assert sub.primary_maturity_tag == "mature"
+        assert sub.secondary_maturity_tags == ["unstable"]
+        assert b"Maturity tags automatically cleared" not in resp.content
+        log = SubmissionChangeLog.objects.get(submission=sub)
+        assert [c["field"] for c in log.changes] == ["status"]
+
+    def test_status_action_keeps_tags_on_reject(self, admin_client):
+        sub = ServiceSubmissionFactory(
+            status="under_review", primary_maturity_tag="mature"
+        )
+        _run_action(admin_client, "action_reject", sub)
         sub.refresh_from_db()
         assert sub.status == "rejected"
-        assert sub.primary_maturity_tag is None
-        assert not sub.secondary_maturity_tags
+        assert sub.primary_maturity_tag == "mature"
+
+    def test_tags_return_with_approval_after_review(self, admin_client):
+        sub = ServiceSubmissionFactory(
+            status="approved",
+            primary_maturity_tag="emerging",
+            secondary_maturity_tags=["unstable"],
+        )
+        _run_action(admin_client, "action_mark_under_review", sub)
+        _run_action(admin_client, "action_approve", sub)
+        sub.refresh_from_db()
+        assert sub.status == "approved"
+        assert sub.primary_maturity_tag == "emerging"
+        assert sub.secondary_maturity_tags == ["unstable"]
+
+    def test_deprecate_action_announces_the_cleared_tags(self, admin_client):
+        sub = ServiceSubmissionFactory(status="approved", primary_maturity_tag="legacy")
+        resp = _run_action(admin_client, "action_deprecate", sub, follow=True)
+        assert b"Maturity tags automatically cleared on 1 submission(s)" in (
+            resp.content
+        )
 
     def test_status_action_clears_tags_on_deprecate(self, admin_client):
         """Deprecating an approved+tagged submission auto-clears maturity tags."""
@@ -861,8 +901,8 @@ class TestServiceSubmissionAdminTags:
         assert sub.primary_maturity_tag is None
         assert not sub.secondary_maturity_tags
 
-    def test_status_action_warning_shown_when_approved_has_tags(self, admin_client):
-        """Change form shows the tag-clear warning when service is approved with tags."""
+    def test_status_action_warning_shown_when_tagged(self, admin_client):
+        """Change form warns that deprecating clears the tags of a tagged service."""
         sub = ServiceSubmissionFactory(
             status="approved",
             primary_maturity_tag="emerging",
@@ -870,14 +910,14 @@ class TestServiceSubmissionAdminTags:
         )
         resp = admin_client.get(_change_url(sub))
         assert resp.status_code == 200
-        assert b"Unapproving will automatically clear maturity tags" in resp.content
+        assert b"Deprecating will automatically clear maturity tags" in resp.content
 
     def test_status_action_no_warning_when_no_tags(self, admin_client):
         """Change form does not show the tag-clear warning when service has no tags."""
         sub = ServiceSubmissionFactory(status="approved", primary_maturity_tag=None)
         resp = admin_client.get(_change_url(sub))
         assert resp.status_code == 200
-        assert b"Unapproving will automatically clear maturity tags" not in resp.content
+        assert b"Deprecating will automatically clear maturity tags" not in resp.content
 
     def test_change_form_renders_tag_fields(self, admin_client):
         """Change form loads without error and includes tag field markup."""
@@ -887,6 +927,98 @@ class TestServiceSubmissionAdminTags:
         assert response.status_code == 200
         assert b"primary_maturity_tag" in response.content
         assert b"secondary_maturity_tags" in response.content
+
+    @pytest.mark.parametrize(
+        "status", ["submitted", "under_review", "rejected", "deprecated"]
+    )
+    def test_tag_fields_are_read_only_when_not_approved(self, admin_client, status):
+        sub = ServiceSubmissionFactory(status=status)
+        resp = admin_client.get(_change_url(sub))
+        assert resp.status_code == 200
+        assert 'name="primary_maturity_tag"' not in resp.content.decode()
+        assert 'name="secondary_maturity_tags"' not in resp.content.decode()
+        form_fields = resp.context["adminform"].form.fields
+        assert "primary_maturity_tag" not in form_fields
+        assert "secondary_maturity_tags" not in form_fields
+
+    def test_tag_fields_are_editable_when_approved(self, admin_client):
+        sub = ServiceSubmissionFactory(status="approved")
+        resp = admin_client.get(_change_url(sub))
+        assert 'name="primary_maturity_tag"' in resp.content.decode()
+        assert 'name="secondary_maturity_tags"' in resp.content.decode()
+
+    def test_non_approved_service_shows_the_tags_it_keeps(self, admin_client):
+        sub = ServiceSubmissionFactory(
+            status="under_review",
+            primary_maturity_tag="emerging",
+            secondary_maturity_tags=["unstable"],
+        )
+        resp = admin_client.get(_change_url(sub))
+        content = resp.content.decode()
+        assert "Emerging" in content
+        assert "Unstable" in content
+        assert '["unstable"]' not in content
+        assert "&quot;unstable&quot;" not in content
+
+    def test_deprecated_service_with_tags_can_be_saved_after_clearing_them(
+        self, admin_client
+    ):
+        """Legacy data: a deprecated row that still has tags must not break the form."""
+        sub = ServiceSubmissionFactory(status="deprecated")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            primary_maturity_tag="mature", secondary_maturity_tags=["unstable"]
+        )
+        sub.refresh_from_db()
+        resp = admin_client.get(_change_url(sub))
+        assert resp.status_code == 200
+        assert 'name="primary_maturity_tag"' in resp.content.decode()
+        payload = _edit_form_payload(
+            sub, primary_maturity_tag="", secondary_maturity_tags=[]
+        )
+        resp = admin_client.post(_change_url(sub), data=payload)
+        assert resp.status_code == 302
+        sub.refresh_from_db()
+        assert sub.primary_maturity_tag is None
+        assert not sub.secondary_maturity_tags
+
+    def test_deprecated_service_with_tags_shows_an_error_when_tags_stay(
+        self, admin_client
+    ):
+        sub = ServiceSubmissionFactory(status="deprecated")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            primary_maturity_tag="mature"
+        )
+        sub.refresh_from_db()
+        resp = admin_client.post(_change_url(sub), data=_edit_form_payload(sub))
+        assert resp.status_code == 200
+        assert b"A deprecated service cannot have maturity tags" in resp.content
+
+    def test_posted_tags_do_not_change_a_non_approved_service(self, admin_client):
+        sub = ServiceSubmissionFactory(
+            status="under_review",
+            primary_maturity_tag="emerging",
+            secondary_maturity_tags=["unstable"],
+        )
+        payload = _edit_form_payload(
+            sub,
+            primary_maturity_tag="mature",
+            secondary_maturity_tags=[],
+            service_name="Renamed Tool",
+        )
+        admin_client.post(_change_url(sub), data=payload)
+        sub.refresh_from_db()
+        assert sub.service_name == "Renamed Tool"
+        assert sub.primary_maturity_tag == "emerging"
+        assert sub.secondary_maturity_tags == ["unstable"]
+
+    def test_posted_tags_change_an_approved_service(self, admin_client):
+        sub = ServiceSubmissionFactory(status="approved", primary_maturity_tag=None)
+        admin_client.post(
+            _change_url(sub),
+            data=_edit_form_payload(sub, primary_maturity_tag="mature"),
+        )
+        sub.refresh_from_db()
+        assert sub.primary_maturity_tag == "mature"
 
     def test_csv_export_includes_maturity_tags(self, admin_client):
         """CSV export includes Primary Maturity Tag and Secondary Maturity Tags columns."""
@@ -1075,9 +1207,13 @@ class TestAssignMaturityTagsAction:
         sub1 = ServiceSubmissionFactory(status="approved")
         sub2 = ServiceSubmissionFactory(status="approved")
         # Simulate status change between modal open and submit
-        sub2.status = "rejected"
         sub2.primary_maturity_tag = None
-        sub2.save(update_fields=["status", "primary_maturity_tag"])
+        set_status(
+            sub2,
+            "deprecated",
+            actor="admin:test",
+            extra_fields=["primary_maturity_tag"],
+        )
         resp = _ajax_post(
             admin_client,
             {

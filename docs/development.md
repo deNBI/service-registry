@@ -637,7 +637,7 @@ Manual browser verification: use DevTools → Application → Local Storage to i
 
 ## Submission lifecycle (status reset)
 
-When a submitter edits an **approved** service via the web form or REST API, the platform determines whether to reset the status to `submitted` (triggering a re-review) based on which fields actually changed.
+When a submitter edits an **approved** service via the web form or REST API, the platform determines whether to reset the status to `submitted` (triggering a re-review) based on which fields actually changed. A **rejected** service returns to `submitted` after any real change, exempt fields included (see [Submitter edits on rejected services](admin-guide.md#submitter-edits-on-rejected-services)). Other statuses keep their status.
 
 ### How "changed" is determined
 
@@ -647,12 +647,14 @@ When a submitter edits an **approved** service via the web form or REST API, the
 
 ### `no_reset_fields` exemption
 
-Fields listed in `settings.SUBMISSION_NO_RESET_FIELDS` (configured via `site.toml [submission] no_reset_fields`) are exempt. If all actually-changed fields are exempt, the `approved` status is preserved. If any non-exempt field changed, status is reset and maturity tags are cleared (they are only valid on approved services).
+Fields listed in `settings.SUBMISSION_NO_RESET_FIELDS` (configured via `site.toml [submission] no_reset_fields`) are exempt. If all actually-changed fields are exempt, the `approved` status is preserved. If any non-exempt field changed, the status is reset. Maturity tags are kept by the reset; only deprecation clears them (see [Assigning Maturity Tags](admin-guide.md#assigning-maturity-tags)).
 
 The exemption is enforced identically in:
 
 - `apps/submissions/views.py` `EditView.post()` — web form path
 - `apps/api/views.py` `partial_update()` — REST API path
+
+The rejected-service rule runs in the same two places: it uses the same changed-field result, but ignores the exemption.
 
 ### `lifecycle.py`
 
@@ -660,12 +662,14 @@ The exemption is enforced identically in:
 
 Call `get_no_reset_fields.cache_clear()` in tests that override `settings.SUBMISSION_NO_RESET_FIELDS`.
 
+The same module holds the status transition table (`TRANSITIONS`, plus `OWNER_EDIT_TRANSITIONS` for the reset of an approved service after an owner edit). `set_status` checks it against the status read under the row lock and raises `TransitionNotAllowed` (a `ValueError`) for any other change; the owner-edit paths pass `owner_edit=True`. `allowed_transitions(status, owner_edit=False)` returns the permitted targets, and the admin buttons and the owner's Deprecate button use it, so what the UI offers and what is accepted come from one table. The table is listed in the [Admin Guide](admin-guide.md#allowed-status-changes).
+
 ### When status resets
 
 On reset, both the web form and API:
 
-1. Set `status = "submitted"`
-2. Clear `primary_maturity_tag = None` and `secondary_maturity_tags = []`
+1. Set `status = "submitted"` through `set_status` (an approved service, after a non-exempt change, or a rejected service, after any real change)
+2. Keep the maturity tags as they are
 3. Pass `status_reset=True` to `send_update_notification` so the submitter email includes a lifecycle notice
 
 ---

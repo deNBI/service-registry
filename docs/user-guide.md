@@ -83,7 +83,7 @@ Each submission gets a **write-scope** API key by default, which allows full edi
    - **Administration office** — notified of your changes with a summary of what was updated.
    - **You** — a confirmation email is sent to your internal contact address listing exactly which fields changed (previous value → new value).
 
-> **Note:** If your submission was already approved and you edit it, the status will reset to "Submitted" for re-review.
+> **Note:** If your submission was already approved and you edit it, the status will reset to "Submitted" for re-review. A rejected submission also returns to "Submitted" when you save a change (see [Submission Status Lifecycle](#submission-status-lifecycle)).
 
 > **The service name is fixed after submission.** On the edit form the **Name of the Service** field is greyed out and cannot be changed — every other field remains editable. If the name genuinely needs correcting, contact the de.NBI administration office; only they can change it.
 
@@ -318,13 +318,17 @@ Your submission moves through these states:
 If you edit an **Approved** submission, what happens depends on which fields you changed:
 
 **Fields that reset status to Submitted** (any core service content — name, description, categories, responsible PIs, contact details, licenses, etc.):
-The status is reset to **Submitted** and the administration office is notified to re-review your changes. Your maturity tags are cleared and will be re-assigned after approval. You will receive a confirmation email with a summary of what changed and a note that re-review has been triggered.
+The status is reset to **Submitted** and the administration office is notified to re-review your changes. Your maturity tags are kept. You will receive a confirmation email with a summary of what changed and a note that re-review has been triggered.
 
 **Fields that preserve Approved status** (supplementary/reference fields — logo, GitHub URL, bio.tools URL, FAIRsharing URL, EDAM topic, operation annotations, etc.):
 The status stays **Approved** and your maturity tags are preserved. You receive a confirmation email listing what changed, with no lifecycle notice.
 
+If you edit a **Rejected** submission and save at least one change, the status returns to **Submitted** for a new review. This applies to every field, including the supplementary fields above. Saving without changing anything leaves the submission **Rejected**. The confirmation email includes the same note that the status was reset.
+
+Maturity tags are assigned by the registry team and are kept while a service goes through review. They are cleared only when a service is deprecated.
+
 !!! tip "When in doubt, check your confirmation email"
-    Every edit sends you an email listing exactly what changed. If the email includes the notice *"your service registration has been reset to Submitted"*, the re-review cycle has been triggered. If it does not, your service remains approved.
+    Every edit sends you an email listing exactly what changed. If the email includes the notice *"your service registration has been reset to Submitted"*, the re-review cycle has been triggered. If it does not, your service keeps its status.
 
 ### What happens after submission?
 

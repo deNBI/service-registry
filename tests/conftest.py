@@ -72,3 +72,50 @@ def frozen_ratelimit_clock(monkeypatch):
     monkeypatch.setattr(
         django_ratelimit.core, "time", SimpleNamespace(time=lambda: 1_800_000_000.0)
     )
+
+
+@pytest.fixture(autouse=True)
+def _status_history_invariant(request):
+    """After each database test, every submission's status events must form one
+    chain from the creation and the latest event must equal its status. Opt out
+    with @pytest.mark.allow_status_drift."""
+    # A test that gets the database through the db fixture (no django_db
+    # mark) would tear it down before this check: set it up first so it is
+    # torn down after.
+    for name in ("db", "transactional_db"):
+        if name in request.fixturenames:
+            request.getfixturevalue(name)
+            break
+    yield
+    if request.node.get_closest_marker("allow_status_drift"):
+        return
+    from apps.submissions.selectors import status_history_broken, status_history_drift
+
+    try:
+        drift = status_history_drift()
+        broken = status_history_broken()
+    except RuntimeError as exc:  # test without database access
+        if "Database access not allowed" in str(exc):
+            return
+        raise
+    assert not drift, f"status history out of sync: {drift}"
+    assert not broken, f"status history has gaps: {broken}"
+
+
+@pytest.fixture
+def locked_models(monkeypatch):
+    """Names of the models whose rows a test locks with select_for_update.
+
+    SQLite ignores row locks, so tests can only check that a lock is asked for.
+    """
+    from django.db.models.query import QuerySet
+
+    calls = []
+    real = QuerySet.select_for_update
+
+    def spy(self, *args, **kwargs):
+        calls.append(self.model.__name__)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(QuerySet, "select_for_update", spy)
+    return calls

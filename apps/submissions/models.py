@@ -21,7 +21,7 @@ import unicodedata
 import uuid
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.core.validators import URLValidator, validate_email
 from django.db import models, transaction
 from django.utils import timezone
@@ -219,7 +219,9 @@ class ServiceSubmission(models.Model):
     The full form maps to sections A–G. All required fields raise
     ValidationError if blank on clean(). The status lifecycle is:
 
-        draft → submitted → under_review → approved / rejected / deprecated
+        submitted → under_review → approved / rejected / deprecated
+
+    The allowed changes are the table in apps.submissions.lifecycle.
 
     Sensitive internal fields (internal_contact_email, submission_ip,
     user_agent_hash) are never serialised in API responses.
@@ -585,16 +587,15 @@ class ServiceSubmission(models.Model):
         """Cross-field validation called by forms and serialisers."""
         errors = {}
 
-        # Tags can only be assigned to approved services
-        if self.status != SubmissionStatus.APPROVED:
-            if self.primary_maturity_tag:
-                errors["primary_maturity_tag"] = _(
-                    "⚠ Maturity tags can only be assigned to approved services."
-                )
-            if self.secondary_maturity_tags:
-                errors["secondary_maturity_tags"] = _(
-                    "⚠ Maturity tags can only be assigned to approved services."
-                )
+        # A deprecated service has no maturity tags. Raised as a non-field
+        # error: the owner's web form and the API have no tag fields, and the
+        # admin shows it above the form.
+        if self.status == SubmissionStatus.DEPRECATED and (
+            self.primary_maturity_tag or self.secondary_maturity_tags
+        ):
+            errors[NON_FIELD_ERRORS] = _(
+                "⚠ A deprecated service cannot have maturity tags."
+            )
 
         # Validate tag choices if present
         if self.primary_maturity_tag:
@@ -666,7 +667,10 @@ class ServiceSubmission(models.Model):
             if value:
                 setattr(self, field, _sanitise_text(value))
         if self._state.adding:
-            super().save(**kwargs)
+            # The creation event (apps/submissions/signals.py) is written in
+            # the same transaction as the new row.
+            with transaction.atomic():
+                super().save(**kwargs)
             return
         # Optimistic locking: the row is locked and its stored version must be
         # the one this copy was loaded with (or, for a form, the one the page
@@ -745,6 +749,60 @@ class SubmissionChangeLog(models.Model):
 
     def __str__(self) -> str:
         return f"{self.changed_by} @ {self.changed_at:%Y-%m-%d %H:%M} ({len(self.changes)} fields)"
+
+
+class SubmissionStatusEvent(models.Model):
+    """
+    Append-only history of status transitions, one row per change.
+
+    Written by the creation receiver (apps/submissions/signals.py) and by
+    apps.submissions.lifecycle.set_status; nothing else may write status.
+    Backfilled rows have source="backfill"; rows invented by the backfill to
+    close gaps in the history have is_synthetic=True and their dates are not
+    real change dates.
+    """
+
+    SOURCE_LIVE = "live"
+    SOURCE_BACKFILL = "backfill"
+    SOURCE_CHOICES = [(SOURCE_LIVE, "Live"), (SOURCE_BACKFILL, "Backfill")]
+
+    submission = models.ForeignKey(
+        ServiceSubmission,
+        on_delete=models.CASCADE,
+        related_name="status_events",
+    )
+    from_status = models.CharField(
+        max_length=20,
+        choices=SubmissionStatus.choices,
+        null=True,
+        blank=True,
+        help_text="Status before the change (empty for the creation event).",
+    )
+    to_status = models.CharField(max_length=20, choices=SubmissionStatus.choices)
+    changed_at = models.DateTimeField(db_index=True)
+    changed_by = models.CharField(
+        max_length=200,
+        help_text='"submitter", "admin:<username>", "api:<key_label>" or "system".',
+    )
+    source = models.CharField(
+        max_length=10, choices=SOURCE_CHOICES, default=SOURCE_LIVE
+    )
+    is_synthetic = models.BooleanField(
+        default=False,
+        help_text="True only for rows invented to close gaps in the history.",
+    )
+
+    class Meta:
+        ordering = ["changed_at", "id"]
+        indexes = [models.Index(fields=["submission", "to_status"])]
+        verbose_name = "Status event"
+        verbose_name_plural = "Status history"
+
+    def __str__(self) -> str:
+        return (
+            f"{self.from_status or '-'} -> {self.to_status} "
+            f"@ {self.changed_at:%Y-%m-%d %H:%M}"
+        )
 
 
 # ---------------------------------------------------------------------------
