@@ -5,6 +5,8 @@ pytest==8.3.4
 pytest-django==4.9.0
 pytest-cov==6.0.0
 factory-boy==3.3.1            # Test fixtures / model factories
+playwright==1.64.1            # Browser tests (tests/e2e/, make test-browser)
+pytest-playwright==0.10.0
 
 # Code quality
 ruff==0.9.1                   # Linter + formatter

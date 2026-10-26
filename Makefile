@@ -5,7 +5,7 @@
 # =============================================================================
 
 .PHONY: help build dev dev-down logs migrate makemigrations superuser shell \
-        test test-cov lint lint-fix audit typecheck collectstatic \
+        test test-browser test-cov lint lint-fix audit typecheck collectstatic \
         docs docs-build prod-up prod-down prod-migrate prod-logs clean nuke \
         dead-code security pre-commit
 
@@ -27,7 +27,8 @@ help:
 	@echo "    make collectstatic    Collect static files"
 	@echo ""
 	@echo "  Testing  (no Docker required)"
-	@echo "    make test             Run pytest with SQLite in-memory"
+	@echo "    make test             Run pytest with SQLite in-memory (without the browser tests)"
+	@echo "    make test-browser     Run the browser tests in headless Chromium (needs: playwright install chromium)"
 	@echo "    make test-cov         Run pytest + HTML coverage report"
 	@echo ""
 	@echo "  Code quality  (requires: pip install -r requirements/development.txt)"
@@ -37,7 +38,7 @@ help:
 	@echo "    make typecheck        mypy type check"
 	@echo "    make dead-code        vulture dead-code scan (min confidence 80%)"
 	@echo "    make security         bandit SAST scan (low+ severity)"
-	@echo "    make pre-commit       ruff format-fix + pip-audit + full test suite + docs strict build"
+	@echo "    make pre-commit       ruff format-fix + pip-audit + test suite (without browser tests) + docs strict build"
 	@echo ""
 	@echo "  Documentation"
 	@echo "    make docs             Serve MkDocs at http://127.0.0.1:8001"
@@ -90,6 +91,12 @@ collectstatic:
 
 test:
 	pytest tests/
+
+# The tests in tests/e2e/ (marked `browser`), which `test` leaves out. They
+# drive headless Chromium against Django's live server. No coverage report:
+# they run a fraction of the suite.
+test-browser:
+	pytest tests/e2e -m browser --no-cov $(PYTEST_ARGS)
 
 test-cov:
 	pytest tests/ --cov=apps --cov-report=term-missing --cov-report=html
