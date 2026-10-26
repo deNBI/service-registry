@@ -19,11 +19,13 @@ from django.contrib import admin, messages
 from django.forms.widgets import CheckboxSelectMultiple
 from django.contrib.admin.models import CHANGE, LogEntry
 from django.db import transaction
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.template import loader
 from django.utils import timezone
 from django.utils.html import escape, format_html, format_html_join, mark_safe
 
+from .choices import keep_linked
+from .concurrency import VERSION_FIELD, use_loaded_version
 from .csv_utils import csv_safe
 from .diff_utils import build_diff, snapshot, snapshot_m2m
 from .markdown_render import markdown_enabled, render_submission_description
@@ -31,6 +33,7 @@ from .models import (
     CHANGELOG_ACTOR_ADMIN_PREFIX,
     CHANGELOG_ACTOR_API_PREFIX,
     CHANGELOG_ACTOR_SUBMITTER,
+    EditConflict,
     PRIMARY_MATURITY_TAG_CHOICES,
     SECONDARY_MATURITY_TAG_CHOICES,
     ServiceSubmission,
@@ -120,6 +123,13 @@ class ServiceSubmissionAdminForm(forms.ModelForm):
 
         if "logo" in self.fields:
             self.fields["logo"].help_text = logo_help_text()
+        # The model limits EDAM choices to non-obsolete terms; keep the ones the
+        # service already has so saving the page does not unlink them.
+        for name in ("edam_topics", "edam_operations"):
+            if name in self.fields:
+                self.fields[name].queryset = keep_linked(
+                    self.fields[name].queryset, self.instance, name
+                )
 
     def clean_logo(self):
         # Same checks as the public form and the API, for new uploads only.
@@ -540,6 +550,28 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             f'<div style="font-size:.85rem">{"".join(parts)}{footer}</div>'
         )
 
+    def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        try:
+            return super().changeform_view(request, object_id, form_url, extra_context)
+        except EditConflict:
+            # The service changed after this form was loaded; the whole save
+            # (including any status or key button) was rolled back.
+            self.message_user(request, EditConflict.message, messages.ERROR)
+            return HttpResponseRedirect(request.get_full_path())
+
+    def render_change_form(
+        self, request, context, add=False, change=False, form_url="", obj=None
+    ):
+        if change and obj is not None:
+            # After a failed save the posted version is handed back, so the
+            # corrected form is still checked against the page first shown.
+            context["loaded_version"] = (
+                request.POST.get(VERSION_FIELD, "")
+                if request.method == "POST"
+                else obj.version
+            )
+        return super().render_change_form(request, context, add, change, form_url, obj)
+
     # ── Diff capture — save_model / save_related / response_change ─────────────
 
     def save_model(self, request, obj, form, change):
@@ -550,8 +582,14 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         from the database to get a true "before" snapshot.  The snapshot is
         stored on the request object so save_related() can compare it after
         M2M relations are committed.
+
+        The save is refused (EditConflict) if the service changed after the
+        form was loaded (the whole change-form POST runs in one transaction,
+        so the refusal undoes everything, including the status and key
+        buttons handled later in response_change).
         """
         if change and obj.pk:
+            use_loaded_version(obj, request.POST)
             try:
                 original = obj.__class__.objects.get(pk=obj.pk)
                 request._diff_before_scalar = snapshot(original)
@@ -1297,89 +1335,105 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
     def _change_status(self, request, queryset, new_status, label):
         updated = 0
         tags_cleared = 0
-        for sub in queryset:
-            if sub.status == new_status:
-                continue
-            old = sub.status
-            # Capture display values before mutation so the diff shows human labels.
-            old_status_display = sub.get_status_display() or old
-            old_primary_tag = sub.primary_maturity_tag
-            old_secondary_tags = list(sub.secondary_maturity_tags or [])
-
-            sub.status = new_status
-            update_fields = ["status"]
-            log_parts = [f"Status changed {old} → {new_status}"]
-            # Auto-clear maturity tags when moving away from approved — tags are
-            # only valid on approved services and should not persist after de-approval.
-            if new_status != SubmissionStatus.APPROVED and (
-                sub.primary_maturity_tag or sub.secondary_maturity_tags
+        # Re-read the selected rows under a lock (in primary-key order) and
+        # change them in one transaction, so a save made after the changelist
+        # was loaded is neither overwritten nor a reason for this one to fail.
+        with transaction.atomic():
+            for sub in (
+                ServiceSubmission.objects.select_for_update()
+                .filter(pk__in=queryset.values("pk"))
+                .order_by("pk")
             ):
-                sub.primary_maturity_tag = None
-                sub.secondary_maturity_tags = []
-                update_fields += ["primary_maturity_tag", "secondary_maturity_tags"]
-                log_parts.append("maturity tags cleared")
-                tags_cleared += 1
+                if sub.status == new_status:
+                    continue
+                old = sub.status
+                # Capture display values before mutation so the diff shows human labels.
+                old_status_display = sub.get_status_display() or old
+                old_primary_tag = sub.primary_maturity_tag
+                old_secondary_tags = list(sub.secondary_maturity_tags or [])
 
-            # Build field-level diff for the audit log (mirrors build_diff format).
-            # Done before save() so last_change_summary is written atomically with
-            # the status mutation in a single round-trip.
-            new_status_display = sub.get_status_display() or new_status
-            changes = [
-                {
-                    "field": "status",
-                    "label": "Status",
-                    "old": old_status_display,
-                    "new": new_status_display,
+                sub.status = new_status
+                update_fields = ["status"]
+                log_parts = [f"Status changed {old} → {new_status}"]
+                # Auto-clear maturity tags when moving away from approved — tags are
+                # only valid on approved services and should not persist after de-approval.
+                if new_status != SubmissionStatus.APPROVED and (
+                    sub.primary_maturity_tag or sub.secondary_maturity_tags
+                ):
+                    sub.primary_maturity_tag = None
+                    sub.secondary_maturity_tags = []
+                    update_fields += ["primary_maturity_tag", "secondary_maturity_tags"]
+                    log_parts.append("maturity tags cleared")
+                    tags_cleared += 1
+
+                # Build field-level diff for the audit log (mirrors build_diff format).
+                # Done before save() so last_change_summary is written atomically with
+                # the status mutation in a single round-trip.
+                new_status_display = sub.get_status_display() or new_status
+                changes = [
+                    {
+                        "field": "status",
+                        "label": "Status",
+                        "old": old_status_display,
+                        "new": new_status_display,
+                    }
+                ]
+                if old_primary_tag:
+                    old_primary_display = str(
+                        dict(PRIMARY_MATURITY_TAG_CHOICES).get(
+                            old_primary_tag, old_primary_tag
+                        )
+                    )
+                    changes.append(
+                        {
+                            "field": "primary_maturity_tag",
+                            "label": "Primary Maturity Tag",
+                            "old": old_primary_display,
+                            "new": "—",
+                        }
+                    )
+                if old_secondary_tags:
+                    old_secondary_display = ", ".join(
+                        str(dict(SECONDARY_MATURITY_TAG_CHOICES).get(t, t))
+                        for t in old_secondary_tags
+                    )
+                    changes.append(
+                        {
+                            "field": "secondary_maturity_tags",
+                            "label": "Secondary Maturity Tags",
+                            "old": old_secondary_display,
+                            "new": "—",
+                        }
+                    )
+
+                username = getattr(request.user, "username", "admin")
+                changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
+                now = timezone.now()
+                sub.last_change_summary = {
+                    "changed_by": changed_by,
+                    "changed_at": now.isoformat(),
+                    "changes": changes,
                 }
-            ]
-            if old_primary_tag:
-                old_primary_display = str(
-                    dict(PRIMARY_MATURITY_TAG_CHOICES).get(
-                        old_primary_tag, old_primary_tag
+                update_fields.append("last_change_summary")
+                sub.save(update_fields=update_fields)
+                SubmissionChangeLog.objects.create(
+                    submission=sub,
+                    changed_by=changed_by,
+                    changed_at=now,
+                    changes=changes,
+                )
+
+                # Queue the e-mail once the status is committed: the change-form
+                # buttons and the bulk actions run inside a transaction, and a
+                # worker that picked the task up earlier would read the old
+                # status (or mail about a change that is then rolled back).
+                transaction.on_commit(
+                    lambda pk=str(sub.id): send_submission_notification.delay(
+                        pk, event="status_changed"
                     )
                 )
-                changes.append(
-                    {
-                        "field": "primary_maturity_tag",
-                        "label": "Primary Maturity Tag",
-                        "old": old_primary_display,
-                        "new": "—",
-                    }
-                )
-            if old_secondary_tags:
-                old_secondary_display = ", ".join(
-                    str(dict(SECONDARY_MATURITY_TAG_CHOICES).get(t, t))
-                    for t in old_secondary_tags
-                )
-                changes.append(
-                    {
-                        "field": "secondary_maturity_tags",
-                        "label": "Secondary Maturity Tags",
-                        "old": old_secondary_display,
-                        "new": "—",
-                    }
-                )
-
-            username = getattr(request.user, "username", "admin")
-            changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
-            now = timezone.now()
-            sub.last_change_summary = {
-                "changed_by": changed_by,
-                "changed_at": now.isoformat(),
-                "changes": changes,
-            }
-            update_fields.append("last_change_summary")
-            sub.save(update_fields=update_fields)
-            SubmissionChangeLog.objects.create(
-                submission=sub,
-                changed_by=changed_by,
-                changed_at=now,
-                changes=changes,
-            )
-
-            send_submission_notification.delay(str(sub.id), event="status_changed")
-            self._log(request, sub, "; ".join(log_parts))
-            updated += 1
+                self._log(request, sub, "; ".join(log_parts))
+                updated += 1
         self.message_user(
             request, f"{updated} submission(s) marked as {label}.", messages.SUCCESS
         )
@@ -1935,6 +1989,13 @@ class SubmissionAPIKeyAdmin(admin.ModelAdmin):
             ]
         return super().get_fieldsets(request, obj)
 
+    def get_readonly_fields(self, request, obj=None):
+        readonly = super().get_readonly_fields(request, obj)
+        if obj is not None and not obj.is_active:
+            # A revoked key can never be re-activated (see SubmissionAPIKey).
+            return (*readonly, "is_active")
+        return readonly
+
     def save_model(self, request, obj, form, change):
         if not change:
             # The standard save path leaves key_hash="" (the field is non-editable
@@ -1956,6 +2017,15 @@ class SubmissionAPIKeyAdmin(admin.ModelAdmin):
             request._new_api_key_plaintext = plaintext
         else:
             super().save_model(request, obj, form, change)
+            if request.POST.get("is_active") and not obj.is_active:
+                # The page was loaded while the key was active; it has been
+                # revoked since, and a revoked key stays revoked.
+                self.message_user(
+                    request,
+                    "This key was revoked and cannot be re-activated. "
+                    "Issue a new key instead.",
+                    messages.WARNING,
+                )
 
     def response_add(self, request, obj, post_url_continue=None):
         plaintext = getattr(request, "_new_api_key_plaintext", None)

@@ -19,13 +19,15 @@ import logging
 
 from django.db import transaction
 from django.utils.timezone import now
-from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import filters, mixins, status, viewsets
+from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
+from apps.submissions import idempotency
 from apps.submissions.diff_utils import build_diff, snapshot, snapshot_m2m
 from apps.submissions.http_utils import get_client_ip, hash_user_agent
 from apps.submissions.models import (
@@ -40,6 +42,8 @@ from apps.submissions.tasks import (
 )
 
 from .authentication import AdminAPIKeyAuthentication, SubmissionAPIKeyAuthentication
+from .conditional import entity_tag, if_match_allows
+from .exceptions import IdempotencyConflict, PreconditionFailed
 from .permissions import IsAdminOrOwner, IsAdminTokenUser
 from .serializers import (
     PrincipalInvestigatorAdminSerializer,
@@ -52,6 +56,23 @@ from .serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+ETAG_HEADER = OpenApiParameter(
+    name="ETag",
+    location=OpenApiParameter.HEADER,
+    response=[200],
+    type=str,
+    description="Entity tag of the returned submission. Send it in If-Match "
+    "with a PATCH to update only this version.",
+)
+IF_MATCH_HEADER = OpenApiParameter(
+    name="If-Match",
+    location=OpenApiParameter.HEADER,
+    required=False,
+    type=str,
+    description="Optional. ETag from an earlier GET (or `*`). If the submission "
+    "has changed since, the PATCH is refused with 412 and nothing is saved.",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -249,14 +270,49 @@ class SubmissionViewSet(
             "This key is shown exactly once — save it immediately. "
             "You will need it to retrieve or update your submission.\n\n"
             "Use it in subsequent requests as:\n"
-            "```\nAuthorization: ApiKey <your-key>\n```"
+            "```\nAuthorization: ApiKey <your-key>\n```\n\n"
+            "To make a retry safe, send an `Idempotency-Key` header with a value "
+            "you choose (for example a UUID). A second request with the same value "
+            "registers nothing and returns `409`; use a new value for a new service."
         ),
+        parameters=[
+            OpenApiParameter(
+                "Idempotency-Key",
+                str,
+                OpenApiParameter.HEADER,
+                required=False,
+                description="Optional. 1 to 255 printable ASCII characters.",
+            )
+        ],
         responses={201: SubmissionCreateSerializer},
     )
     def create(self, request, *args, **kwargs):
+        idempotency_key = request.headers.get("Idempotency-Key", "")
+        if idempotency_key and not idempotency.valid_api_key(idempotency_key):
+            raise ValidationError(
+                {
+                    "Idempotency-Key": (
+                        "Use 1 to 255 printable ASCII characters (for example a UUID)."
+                    )
+                }
+            )
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        # A repeated request (client retry after a timeout) must not register a
+        # second service: the first one's key was only shown in its response.
+        if idempotency_key and not idempotency.claim(
+            idempotency.API_REQUEST, idempotency_key
+        ):
+            raise IdempotencyConflict
+        try:
+            return self._create_submission(request, serializer, idempotency_key)
+        except Exception:
+            if idempotency_key:
+                idempotency.release(idempotency.API_REQUEST, idempotency_key)
+            raise
+
+    def _create_submission(self, request, serializer, idempotency_key):
         submission = serializer.save(
             status="submitted",
             submission_ip=get_client_ip(request) or None,
@@ -280,6 +336,10 @@ class SubmissionViewSet(
             submission,
             context={"request": request, "api_key_plaintext": plaintext},
         )
+        if idempotency_key:
+            idempotency.complete(
+                idempotency.API_REQUEST, idempotency_key, submission.id
+            )
         return Response(output.data, status=status.HTTP_201_CREATED)
 
     @extend_schema(
@@ -288,10 +348,13 @@ class SubmissionViewSet(
             "Returns the full submission data for the submission linked to your API key.\n\n"
             "Requires `Authorization: ApiKey <your-key>` header."
         ),
+        parameters=[ETAG_HEADER],
         responses={200: SubmissionDetailSerializer},
     )
     def retrieve(self, request, *args, **kwargs):
-        return super().retrieve(request, *args, **kwargs)
+        response = super().retrieve(request, *args, **kwargs)
+        response["ETag"] = entity_tag(response.data)
+        return response
 
     @extend_schema(
         summary="List all submissions",
@@ -348,43 +411,63 @@ class SubmissionViewSet(
             "`warnings` entry noting the rename was ignored.\n\n"
             "Note: updating an approved submission resets its status to `submitted` "
             "for re-review, unless every changed field is listed in "
-            "`SUBMISSION_NO_RESET_FIELDS` (configured in `site.toml`)."
+            "`SUBMISSION_NO_RESET_FIELDS` (configured in `site.toml`).\n\n"
+            "Send the `ETag` of your last GET in `If-Match` to apply the "
+            "change only if the submission has not changed since; otherwise "
+            "the response is `412` and nothing is saved."
         ),
-        responses=SubmissionUpdateResponseSerializer,
+        parameters=[ETAG_HEADER, IF_MATCH_HEADER],
+        responses={
+            200: SubmissionUpdateResponseSerializer,
+            412: OpenApiResponse(
+                description="The submission changed after the version named in "
+                "If-Match; nothing was saved."
+            ),
+        },
     )
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
         instance = self.get_object()
 
-        # Snapshot BEFORE serializer.save() — DRF's update() writes the new
-        # values to the instance, so we must capture the originals first.
-        before_scalar = snapshot(instance)
-        before_m2m = snapshot_m2m(instance)
-
-        # Detect an attempt to change the (immutable) service_name so we can tell
-        # the client it was ignored. The serializer marks service_name read-only
-        # on update, so the incoming value never reaches validated_data — compare
-        # the raw request value against the stored name here, before save.
-        # Normalise the incoming value exactly as the model does on save
-        # (_sanitise_text: strip null bytes → NFC → strip whitespace) so echoing
-        # the same name in a different byte form (whitespace, Unicode NFD, …) is
-        # correctly treated as unchanged and does not raise a spurious warning.
-        from apps.submissions.models import _sanitise_text
-
-        requested_name = request.data.get("service_name")
-        service_name_change_ignored = (
-            requested_name is not None
-            and _sanitise_text(str(requested_name)) != instance.service_name
-        )
-
-        serializer = self.get_serializer(instance, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        was_approved = instance.status == "approved"
-        before = {**before_scalar, **before_m2m}
-
-        # One transaction: the content change, the status reset it may require
-        # and the audit entry are stored together or not at all.
+        # One transaction, with the row re-read under a lock: the content
+        # change, the status reset it may require and the audit entry are
+        # stored together or not at all, and a save made after the row was
+        # first read is neither overwritten nor a reason for this one to fail.
         with transaction.atomic():
+            instance = type(instance).objects.select_for_update().get(pk=instance.pk)
+            # Checked before the request content (RFC 9110, section 13.2.1).
+            if_match = request.headers.get("If-Match")
+            if if_match is not None and not if_match_allows(
+                if_match, entity_tag(self.get_serializer(instance).data)
+            ):
+                raise PreconditionFailed()
+
+            # Snapshot BEFORE serializer.save() — DRF's update() writes the new
+            # values to the instance, so we must capture the originals first.
+            before_scalar = snapshot(instance)
+            before_m2m = snapshot_m2m(instance)
+
+            # Detect an attempt to change the (immutable) service_name so we can tell
+            # the client it was ignored. The serializer marks service_name read-only
+            # on update, so the incoming value never reaches validated_data — compare
+            # the raw request value against the stored name here, before save.
+            # Normalise the incoming value exactly as the model does on save
+            # (_sanitise_text: strip null bytes → NFC → strip whitespace) so echoing
+            # the same name in a different byte form (whitespace, Unicode NFD, …) is
+            # correctly treated as unchanged and does not raise a spurious warning.
+            from apps.submissions.models import _sanitise_text
+
+            requested_name = request.data.get("service_name")
+            service_name_change_ignored = (
+                requested_name is not None
+                and _sanitise_text(str(requested_name)) != instance.service_name
+            )
+
+            serializer = self.get_serializer(instance, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            was_approved = instance.status == "approved"
+            before = {**before_scalar, **before_m2m}
+
             serializer.save()
             # Field-level diff of what the save ACTUALLY changed. snapshot()
             # reads the saved (sanitised: stripped, NFC, LF) values, so
@@ -434,6 +517,7 @@ class SubmissionViewSet(
             extra={"submission_id": str(instance.id)},
         )
         data = serializer.data
+        etag = entity_tag(data)
         if service_name_change_ignored:
             data = {
                 **data,
@@ -443,7 +527,7 @@ class SubmissionViewSet(
                     "other changes were accepted."
                 ],
             }
-        return Response(data)
+        return Response(data, headers={"ETag": etag})
 
     @staticmethod
     def _record_api_change(request, instance, changes) -> None:

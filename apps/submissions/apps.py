@@ -11,5 +11,7 @@ class SubmissionsConfig(AppConfig):
         # unrecognised field names are surfaced immediately in the server log
         # rather than silently at request time.
         from apps.submissions.lifecycle import get_no_reset_fields
+        from apps.submissions.signals import connect_signals
 
         get_no_reset_fields()
+        connect_signals()

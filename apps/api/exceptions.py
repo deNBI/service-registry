@@ -1,9 +1,35 @@
 """Custom DRF exception handler — adds request_id to error responses."""
 
 import logging
+
+from rest_framework import status
+from rest_framework.exceptions import APIException
 from rest_framework.views import exception_handler
 
 logger = logging.getLogger(__name__)
+
+
+class IdempotencyConflict(APIException):
+    """A request with this Idempotency-Key was already handled (or is running)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "A request with this Idempotency-Key was already received, so no second "
+        "service was registered. The API key of a service is shown only once, in "
+        "the response to the first request."
+    )
+    default_code = "idempotency_conflict"
+
+
+class PreconditionFailed(APIException):
+    """The If-Match header does not match the submission as it is now."""
+
+    status_code = status.HTTP_412_PRECONDITION_FAILED
+    default_detail = (
+        "The submission was changed after the version named in If-Match. "
+        "Nothing was saved. Fetch the submission again, then resend the change."
+    )
+    default_code = "precondition_failed"
 
 
 def custom_exception_handler(exc, context):
