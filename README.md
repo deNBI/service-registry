@@ -5,11 +5,10 @@ Registration Platform for de.NBI & ELIXIR-DE services — structured form, REST 
 ## Quick start
 
 ```bash
-cp .env.example .env          # set SECRET_KEY, DB_PASSWORD, REDIS_PASSWORD
-docker compose up -d
-docker compose exec web python manage.py migrate
+cp .env.example .env          # set SECRET_KEY, DB_PASSWORD, REDIS_PASSWORD; for local http also
+                              # DEBUG=true, SECURE_SSL_REDIRECT=false, SESSION_COOKIE_SECURE=false, CSRF_COOKIE_SECURE=false
+docker compose up -d          # migrations and EDAM/SPDX seeding run on first start
 docker compose exec web python manage.py createsuperuser
-docker compose exec web python manage.py sync_edam
 # → http://localhost:8000
 ```
 
@@ -21,7 +20,7 @@ make lint          # ruff lint + format check
 make lint-fix      # auto-fix lint issues
 make docs          # serve MkDocs at http://127.0.0.1:8001
 make migrate       # run migrations in web container
-make sync-edam     # refresh EDAM ontology
+make logs          # tail the stack logs
 ```
 
 ## Production
@@ -30,7 +29,7 @@ make sync-edam     # refresh EDAM ontology
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
-Host nginx (`nginx/host/service-registry.bi.denbi.de.conf`) terminates TLS and proxies to Gunicorn. PostgreSQL and Redis run externally — not in Docker.
+Host nginx (`nginx/host/service-registry.bi.denbi.de.conf`) terminates TLS and proxies to Gunicorn. In production PostgreSQL runs externally; Redis runs as a Docker container. The live deployment is managed with Ansible.
 
 ## Documentation
 
@@ -38,15 +37,17 @@ Full docs at `make docs` or in `docs/`:
 
 |                                          |                                         |
 | ---------------------------------------- | --------------------------------------- |
+| [User guide](docs/user-guide.md)         | Registering and updating a service      |
+| [Using the API](docs/api-guide.md)       | API for service owners (own submission) |
+| [Admin guide](docs/admin-guide.md)       | Review, approve, export, reference data |
+| [Managing API keys](docs/admin/api-keys.md) · [Admin REST API](docs/admin/api.md) | Submission and Admin API keys, admin endpoints |
+| [Operator guide](docs/operator/index.md) | E-mail, data sync, operations, security, backups, troubleshooting |
 | [Development setup](docs/development.md) | Local env, make targets, project layout |
 | [Configuration](docs/configuration.md)   | `site.toml` and `.env` reference        |
-| [Deployment](docs/deployment.md)         | Production setup, TLS, backups          |
+| [Deployment](docs/deployment.md)         | Production setup, TLS, uploads          |
 | [Architecture](docs/architecture.md)     | System design, data flow, security      |
-| [User guide](docs/user-guide.md)         | Registration form, API keys             |
-| [Admin guide](docs/admin-guide.md)       | Review, approve, export                 |
-| [API reference](docs/api-guide.md)       | REST endpoints, auth, examples          |
 | [Testing](docs/testing.md)               | Test suite, coverage, writing tests     |
-| [Rollout](docs/rollout.md)               | Releases, CI, rollback runbook          |
+| [Releases and rollback](docs/rollout.md) | Building images, deploying, rollback    |
 
 Interactive API docs: `/api/docs/` (Swagger UI) · `/api/redoc/` (ReDoc)
 

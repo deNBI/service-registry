@@ -7,4 +7,4 @@ Place your logo file here as one of:
 - `logo.jpg`
 
 It will automatically appear in the navbar. Recommended height: 38px.
-Alternatively, set `LOGO_URL=/static/img/yourfile.png` in `.env` to use any filename.
+Alternatively, set `logo_url = "/static/img/yourfile.png"` under `[site]` in `config/site.toml` to use any filename.

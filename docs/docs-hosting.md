@@ -1,3 +1,7 @@
+---
+icon: material/book-open-variant
+---
+
 # Hosting the Documentation
 
 The documentation site is built with [MkDocs Material](https://squidfunk.github.io/mkdocs-material/).
@@ -8,8 +12,7 @@ that serves static files — GitHub Pages, GitLab Pages, Nginx, S3, or Netlify.
 
 ## Option A: GitHub Pages (recommended)
 
-GitHub Pages is the lowest-friction option for a repo hosted on GitHub.
-A GitHub Actions workflow builds the docs on every push to `main` and deploys them automatically.
+This is how the docs are published today: the workflow `.github/workflows/docs.yml` builds the site with `mkdocs build --strict` on every push to `main` that changes `docs/**` or `mkdocs.yml` (or when started by hand), and deploys it to `https://denbi.github.io/service-registry/`. The steps below describe that setup, for example to recreate it in a fork.
 
 ### 1. Enable GitHub Pages in the repository
 
@@ -17,9 +20,9 @@ A GitHub Actions workflow builds the docs on every push to `main` and deploys th
 2. Under **Source**, select **GitHub Actions** (not the legacy `gh-pages` branch option).
 3. Save. No branch configuration is needed — the workflow below handles everything.
 
-### 2. Add the deploy workflow
+### 2. The deploy workflow
 
-Create `.github/workflows/docs.yml`:
+`.github/workflows/docs.yml` is equivalent to:
 
 ```yaml
 name: Docs
@@ -78,13 +81,7 @@ jobs:
         uses: actions/deploy-pages@v4
 ```
 
-### 3. Commit and push
-
-```bash
-git add .github/workflows/docs.yml
-git commit -m "Add GitHub Pages docs deploy workflow"
-git push
-```
+### 3. First run
 
 The workflow runs immediately. After it completes (usually under 1 minute), the docs will
 be live at `https://<org>.github.io/<repo>/` — for example:
@@ -250,9 +247,7 @@ on:
       - 'apps/*/models.py' # Schema changes → update database-schema.md
 ```
 
-This surfaces the need to update docs when models or API endpoints change, by making
-the docs deploy fail to trigger (and thus the deployed site go stale) if those files
-are updated without a corresponding `docs/` change.
+With these paths the site is rebuilt whenever the API or a model changes, not only when `docs/` changes. It does not check that the docs were updated; that remains a review step. The current workflow uses only `docs/**` and `mkdocs.yml`.
 
 ---
 
@@ -281,7 +276,7 @@ mike deploy --push --update-aliases v1.1 latest
 mike set-default --push latest
 ```
 
-In CI, replace the `mkdocs gh-deploy` step with `mike deploy`. Each version gets its
+In CI, replace the `mkdocs build` and Pages deploy steps with `mike deploy`. Each version gets its
 own subdirectory on the `gh-pages` branch and a version selector dropdown appears in
 the navbar.
 
