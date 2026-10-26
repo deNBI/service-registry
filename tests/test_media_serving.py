@@ -18,6 +18,14 @@ def media(settings, tmp_path):
     return tmp_path
 
 
+def _get(client, url):
+    """GET ``url`` and close the response. A file response keeps its file
+    open until it is read to the end or closed; these tests read headers."""
+    resp = client.get(url)
+    resp.close()
+    return resp
+
+
 def _directives(resp) -> dict[str, str]:
     header = resp["Content-Security-Policy"]
     parts = [p.strip() for p in header.split(";") if p.strip()]
@@ -32,14 +40,14 @@ class TestMediaPolicyHeader:
         assert b"".join(resp.streaming_content) == SVG
 
     def test_media_responses_are_sandboxed(self, client, media):
-        d = _directives(client.get("/media/logos/a.svg"))
+        d = _directives(_get(client, "/media/logos/a.svg"))
         assert "sandbox" in d
         assert d["default-src"] == "'none'"
 
     def test_media_policy_allows_only_inline_styles_and_data_resources(
         self, client, media
     ):
-        d = _directives(client.get("/media/logos/a.svg"))
+        d = _directives(_get(client, "/media/logos/a.svg"))
         assert d["style-src"] == "'unsafe-inline'"
         assert d["img-src"] == "data:"
         assert d["font-src"] == "data:"

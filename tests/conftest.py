@@ -5,6 +5,8 @@ Django settings are handled by config/settings_test.py (see pytest.ini).
 No environment variable juggling needed here.
 """
 
+import gc
+
 import pytest
 
 # Rich assertion messages for the shared helpers in tests/helpers.py.
@@ -53,3 +55,23 @@ def frozen_ratelimit_clock(monkeypatch):
     monkeypatch.setattr(
         django_ratelimit.core, "time", SimpleNamespace(time=lambda: 1_800_000_000.0)
     )
+
+
+@pytest.fixture(autouse=True)
+def _collect_garbage_after_each_test():
+    """pytest.ini turns ResourceWarning (a file or socket that is never
+    closed) into an error. Objects that hold one are often freed only by the
+    garbage collector, at some later point; collecting the two youngest
+    generations when each test ends reports them on the test that left them
+    open. A full collection per test would cost minutes on this suite; the
+    young generations cost well under a second in total."""
+    yield
+    gc.collect(1)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _collect_all_garbage_at_the_end():
+    """One full collection after the last test, for any object that was
+    moved to the oldest generation before its test ended."""
+    yield
+    gc.collect()
