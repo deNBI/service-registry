@@ -11,6 +11,8 @@ ServiceSubmission (UUID PK)
 ├── SubmissionAPIKey (FK → submission, CASCADE)         — one-to-many
 ├── SubmissionChangeLog (FK → submission, CASCADE)      — one-to-many
 ├── SubmissionStatusEvent (FK → submission, CASCADE)    : one-to-many
+├── PublishedService (OneToOne → submission, CASCADE)   : one-to-one
+├── PublishedRevision (FK → submission, CASCADE)        : one-to-many
 ├── BioToolsRecord (OneToOne → submission, CASCADE)     — one-to-one
 │   └── BioToolsFunction (FK → record, CASCADE)        — one-to-many
 ├── service_categories → ServiceCategory               — many-to-many
@@ -21,6 +23,9 @@ ServiceSubmission (UUID PK)
 
 SubmissionDeletionAudit                                 — no FK (survives cascade)
 └── stores submission_id (UUID, plain field) + changelog snapshot
+
+WithdrawnService                                        : no FK (survives the delete)
+└── stores the submission id and the time it was deleted
 
 EdamTerm
 └── parent → EdamTerm (self-referential FK, SET_NULL)
@@ -36,6 +41,7 @@ EdamTerm
 | `ServiceCategory`, `ServiceCenter`, `PrincipalInvestigator` | `apps/registry/models.py` |
 | `EdamTerm` | `apps/edam/models.py` |
 | `BioToolsRecord`, `BioToolsFunction` | `apps/biotools/models.py` |
+| `PublishedRevision`, `PublishedService`, `WithdrawnService` | `apps/catalogue/models.py` |
 
 ---
 
@@ -210,6 +216,32 @@ Append-only history of status changes, one row per change. The creation of a ser
 | `is_synthetic` | boolean | default false | True only for rows invented to close gaps in a rebuilt history |
 
 Ordered by `changed_at`, then `id`. Shown read-only under "Status history" in the admin change view.
+
+---
+
+## `catalogue_publishedrevision`, `catalogue_publishedservice`, `catalogue_withdrawnservice`
+
+**Source:** `apps/catalogue/models.py` · written only by `apps/catalogue/publishing.py` and the delete receiver in `apps/catalogue/signals.py`
+
+The published copy of an approved service. Nothing public reads it yet.
+
+`PublishedRevision` is an immutable, numbered copy of the public fields (the lists in `apps/catalogue/public_fields.py`) stored as JSON, with the reason, the actor, a content hash and a schema version. A new revision is written only when the hash of the public content changes. `PublishedService` is the read model derived from the latest revision: one row per published service, with the same field names as the working copy plus `state` (`active` or `deprecated`), `pending_update` (an edit of the service waits for review), `public_modified_at` and `first_published_at`. `WithdrawnService` is written when a published service is deleted and holds only the id and the time.
+
+| Column (`PublishedService`) | Type | Notes |
+|---|---|---|
+| `submission_id` | UUID | PK, OneToOne → `ServiceSubmission`, CASCADE |
+| `revision_id` | UUID | FK → `PublishedRevision`, RESTRICT; the revision the row was built from |
+| `state` | varchar(12) | `active` (default) or `deprecated` |
+| `pending_update` | boolean | True while the working copy is submitted or under review |
+| `public_modified_at` | timestamptz | Last public change; moves with a new revision or a state change |
+| `first_published_at` | timestamptz | First real approval; NULL when only invented approvals exist |
+| public fields | as in the working copy | `service_center` is PROTECT; the many-to-many fields link the same reference rows |
+
+Rules:
+
+- An approval publishes the working copy. A change that leaves a published service approved (owner edit that needs no review, API edit, admin change form, maturity tag action) publishes again when a public field changed.
+- Other status changes only set `state` and `pending_update`; a service that goes back to review, or is rejected, keeps its last approved version public. Deprecation sets `state`; the maturity tags of the working copy are cleared, and the published copy keeps the tags of the last approved version until the service is approved again.
+- Registry records (centre, category, PI) that a published copy still uses cannot be deleted in the registry admin.
 
 ---
 

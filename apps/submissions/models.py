@@ -86,6 +86,33 @@ def _sanitise_text(value: str) -> str:
     return value.strip()
 
 
+# The free-text fields that ServiceSubmission.save() cleans.
+CLEANED_TEXT_FIELDS = (
+    "submitter_first_name",
+    "submitter_last_name",
+    "submitter_affiliation",
+    "service_name",
+    "service_description",
+    "toolbox_name",
+    "user_knowledge_required",
+    "host_institute",
+    "internal_contact_name",
+    "associated_partner_note",
+    "kpi_start_year",
+    "keywords_uncited",
+    "keywords_seo",
+    "comments",
+)
+
+
+def clean_text_fields(values: dict) -> None:
+    """Clean in place the entries of ``values`` (field name to value) that
+    ServiceSubmission.save() cleans, the way it stores them."""
+    for name in CLEANED_TEXT_FIELDS:
+        if values.get(name):
+            values[name] = _sanitise_text(values[name])
+
+
 def _validate_https_url(value: str) -> None:
     """Reject any URL that does not use the https:// scheme."""
     if value and not value.startswith("https://"):
@@ -212,6 +239,27 @@ class EditConflict(Exception):
     )
 
 
+class ServiceSubmissionQuerySet(models.QuerySet):
+    def delete(self):
+        """Lock the rows before Django collects what refers to them.
+
+        A publish of one of these services that is running at the same time
+        then finishes first, so its revision is deleted with the service and
+        the tombstone receiver sees it.
+        """
+        with transaction.atomic():
+            pks = list(self.values_list("pk", flat=True))
+            list(
+                self.model._base_manager.select_for_update()
+                .filter(pk__in=pks)
+                .order_by("pk")
+                .values_list("pk", flat=True)
+            )
+            return super().delete()
+
+    delete.queryset_only = True
+
+
 class ServiceSubmission(models.Model):
     """
     A single service registration submitted to de.NBI & ELIXIR-DE.
@@ -226,6 +274,8 @@ class ServiceSubmission(models.Model):
     Sensitive internal fields (internal_contact_email, submission_ip,
     user_agent_hash) are never serialised in API responses.
     """
+
+    objects = ServiceSubmissionQuerySet.as_manager()
 
     # -- Meta --
     id = models.UUIDField(
@@ -646,26 +696,10 @@ class ServiceSubmission(models.Model):
 
     def save(self, *args, **kwargs) -> None:
         """Sanitise free-text fields before saving."""
-        text_fields = [
-            "submitter_first_name",
-            "submitter_last_name",
-            "submitter_affiliation",
-            "service_name",
-            "service_description",
-            "toolbox_name",
-            "user_knowledge_required",
-            "host_institute",
-            "internal_contact_name",
-            "associated_partner_note",
-            "kpi_start_year",
-            "keywords_uncited",
-            "keywords_seo",
-            "comments",
-        ]
-        for field in text_fields:
-            value = getattr(self, field, "")
-            if value:
-                setattr(self, field, _sanitise_text(value))
+        values = {name: getattr(self, name, "") for name in CLEANED_TEXT_FIELDS}
+        clean_text_fields(values)
+        for name, value in values.items():
+            setattr(self, name, value)
         if self._state.adding:
             # The creation event (apps/submissions/signals.py) is written in
             # the same transaction as the new row.
@@ -697,6 +731,13 @@ class ServiceSubmission(models.Model):
             except BaseException:
                 self.version = loaded
                 raise
+
+    def delete(self, *args, **kwargs):
+        """Lock the row before Django collects what refers to it (see
+        ServiceSubmissionQuerySet.delete)."""
+        with transaction.atomic():
+            type(self)._base_manager.select_for_update().filter(pk=self.pk).exists()
+            return super().delete(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------

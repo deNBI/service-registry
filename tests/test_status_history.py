@@ -10,7 +10,11 @@ from apps.submissions.models import (
     ServiceSubmission,
     SubmissionStatusEvent,
 )
-from apps.submissions.selectors import status_history_broken, status_history_drift
+from apps.submissions.selectors import (
+    latest_public_decisions,
+    status_history_broken,
+    status_history_drift,
+)
 from tests.factories import ServiceCenterFactory, ServiceSubmissionFactory
 
 pytestmark = pytest.mark.django_db
@@ -285,6 +289,29 @@ def _grant(client, sub):
     session.save()
 
 
+class TestPublicDecisions:
+    def test_the_latest_approval_or_deprecation_decides(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        other = ServiceSubmissionFactory(biotools_url="")
+        for status in ("approved", "deprecated", "submitted", "rejected"):
+            set_status(sub, status, actor="admin:jane")
+        set_status(other, "approved", actor="admin:jane")
+        decisions = latest_public_decisions([sub.pk, other.pk])
+        assert decisions == {sub.pk: "deprecated", other.pk: "approved"}
+
+    def test_a_submission_without_either_is_absent(self):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        set_status(sub, "under_review", actor="admin:jane")
+        assert latest_public_decisions([sub.pk]) == {}
+
+    def test_only_the_asked_submissions_are_returned(self):
+        a = ServiceSubmissionFactory(status="approved", biotools_url="")
+        b = ServiceSubmissionFactory(status="approved", biotools_url="")
+        assert set(latest_public_decisions([a.pk])) == {a.pk}
+        queryset = ServiceSubmission.objects.filter(pk=b.pk).values("pk")
+        assert set(latest_public_decisions(queryset)) == {b.pk}
+
+
 class TestBrokenHistories:
     @pytest.mark.allow_status_drift
     def test_a_continuous_history_is_not_reported(self):
@@ -345,6 +372,8 @@ class TestWebPaths:
     def test_edit_ignores_a_status_sent_by_the_client(
         self, client, settings, exempt, status
     ):
+        from apps.catalogue.models import PublishedService
+
         settings.ALTCHA_HMAC_KEY = ""
         sub = ServiceSubmissionFactory(status="under_review", biotools_url="")
         _grant(client, sub)
@@ -358,6 +387,7 @@ class TestWebPaths:
             "https://github.com/example/moved",
         )
         assert len(_transitions(sub)) == 1
+        assert not PublishedService.objects.filter(pk=sub.pk).exists()
 
     def test_self_deprecate_records_event_and_clears_tags(self, client):
         sub = ServiceSubmissionFactory(
@@ -491,6 +521,8 @@ class TestApiPaths:
 
     @pytest.mark.parametrize("status", ["approved", "deprecated", "rejected"])
     def test_patch_ignores_a_status_sent_by_the_client(self, exempt, status):
+        from apps.catalogue.models import PublishedService
+
         sub = ServiceSubmissionFactory(status="under_review", biotools_url="")
         client, _ = self._client(sub)
         resp = client.patch(
@@ -505,6 +537,7 @@ class TestApiPaths:
             "https://github.com/example/moved",
         )
         assert len(_transitions(sub)) == 1
+        assert not PublishedService.objects.filter(pk=sub.pk).exists()
 
     def _client(self, sub):
         key_obj, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
@@ -832,6 +865,40 @@ class TestOwnerAuditEntries:
         assert stored.last_change_summary in (None, {})
         assert len(_transitions(sub)) == 1
 
+    def test_a_failed_audit_entry_undoes_a_live_edit(
+        self, client, exempt, monkeypatch, settings
+    ):
+        from apps.catalogue.models import PublishedRevision
+
+        settings.ALTCHA_HMAC_KEY = ""
+        sub = ServiceSubmissionFactory(biotools_url="")
+        set_status(sub, "approved", actor="admin:jane")
+        _grant(client, sub)
+        self._fail_log_writes(monkeypatch)
+        data = edit_form_data(sub, github_url="https://github.com/example/moved")
+        with pytest.raises(RuntimeError):
+            client.post(reverse("submissions:edit", args=[sub.pk]), data)
+        assert ServiceSubmission.objects.get(pk=sub.pk).github_url == sub.github_url
+        assert PublishedRevision.objects.filter(submission=sub).count() == 1
+
+    def test_a_failed_audit_entry_undoes_an_api_live_edit(self, exempt, monkeypatch):
+        from apps.catalogue.models import PublishedRevision
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        set_status(sub, "approved", actor="admin:jane")
+        key_obj, plaintext = APIKeyFactory.create_with_plaintext(submission=sub)
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"ApiKey {plaintext}")
+        self._fail_log_writes(monkeypatch)
+        with pytest.raises(RuntimeError):
+            client.patch(
+                f"/api/v1/submissions/{sub.pk}/",
+                {"github_url": "https://github.com/example/moved"},
+                format="json",
+            )
+        assert ServiceSubmission.objects.get(pk=sub.pk).github_url == sub.github_url
+        assert PublishedRevision.objects.filter(submission=sub).count() == 1
+
     def test_a_failed_audit_entry_undoes_an_api_patch(self, monkeypatch):
         sub = ServiceSubmissionFactory(
             status="approved", primary_maturity_tag="mature", biotools_url=""
@@ -1029,6 +1096,19 @@ class TestVersionAfterStatusChange:
             loaded.save()
         assert not ServiceSubmission.objects.filter(pk=sub.pk).exists()
         assert not SubmissionStatusEvent.objects.filter(submission_id=sub.pk).exists()
+
+    def test_saving_a_copy_of_a_deleted_published_service_brings_nothing_back(self):
+        from apps.catalogue.models import PublishedService, WithdrawnService
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        set_status(sub, "approved", actor="admin:jane")
+        loaded = ServiceSubmission.objects.get(pk=sub.pk)
+        ServiceSubmission.objects.filter(pk=sub.pk).delete()
+        loaded.github_url = self.MOVED
+        with pytest.raises(EditConflict):
+            loaded.save()
+        assert WithdrawnService.objects.filter(pk=sub.pk).exists()
+        assert not PublishedService.objects.filter(pk=sub.pk).exists()
 
     def test_set_status_on_a_deleted_row_fails_cleanly(self):
         sub = self._approved()
@@ -1485,6 +1565,102 @@ class TestCatchUpFromTheChangeLog:
         assert not sub.status_events.filter(is_synthetic=True).exists()
 
 
+class TestCatchUpOnAPublishedService:
+    """A status recorded late (written without an event by an earlier release)
+    decides the public copy's state exactly as a status change recorded on time
+    would, without making any content public."""
+
+    @staticmethod
+    def _service(copy_state):
+        sub = ServiceSubmissionFactory(biotools_url="")
+        set_status(sub, "approved", actor="admin:jane")
+        if copy_state == "deprecated":
+            set_status(sub, "deprecated", actor="admin:jane")
+        return sub
+
+    @staticmethod
+    def _written_without_event(sub, status):
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status=status)
+
+    def test_a_late_deprecation_moves_the_copy_to_deprecated(self):
+        from apps.catalogue.models import PublishedService
+
+        sub = self._service("active")
+        self._written_without_event(sub, "deprecated")
+        set_status(ServiceSubmission.objects.get(pk=sub.pk), "submitted", actor="x")
+        copy = PublishedService.objects.get(pk=sub.pk)
+        assert (copy.state, copy.pending_update) == ("deprecated", True)
+
+    def test_a_late_approval_moves_the_copy_to_active(self):
+        from apps.catalogue.models import PublishedService
+
+        sub = self._service("deprecated")
+        self._written_without_event(sub, "approved")
+        set_status(ServiceSubmission.objects.get(pk=sub.pk), "under_review", actor="x")
+        copy = PublishedService.objects.get(pk=sub.pk)
+        assert (copy.state, copy.pending_update) == ("active", True)
+
+    def test_a_late_approval_does_not_publish_the_edit_saved_with_the_change(self):
+        """The edit path saves the new content before the status change."""
+        from apps.catalogue.models import PublishedRevision, PublishedService
+
+        sub = self._service("deprecated")
+        approved_text = sub.service_description
+        self._written_without_event(sub, "approved")
+        row = ServiceSubmission.objects.get(pk=sub.pk)
+        row.service_description = "An unreviewed edit saved before the status change."
+        row.save()
+        set_status(row, "under_review", actor="submitter")
+        assert PublishedRevision.objects.filter(submission=sub).count() == 1
+        copy = PublishedService.objects.get(pk=sub.pk)
+        assert copy.service_description == approved_text
+
+    def test_a_service_that_was_never_published_stays_private(self):
+        from apps.catalogue.models import PublishedService
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        self._written_without_event(sub, "deprecated")
+        set_status(ServiceSubmission.objects.get(pk=sub.pk), "submitted", actor="x")
+        assert not PublishedService.objects.filter(pk=sub.pk).exists()
+
+    def test_the_copy_follows_the_last_decision_among_the_replayed_steps(self):
+        from datetime import timedelta
+
+        from apps.catalogue.models import PublishedService
+
+        sub = self._service("active")
+        at = sub.status_events.latest("id").changed_at
+        for number, (old, new) in enumerate(
+            [
+                ("Approved", "Deprecated"),
+                ("Deprecated", "Approved"),
+                ("Approved", "Deprecated"),
+            ],
+            start=1,
+        ):
+            _status_log(sub, old, new, at + timedelta(days=number))
+        self._written_without_event(sub, "deprecated")
+        set_status(ServiceSubmission.objects.get(pk=sub.pk), "submitted", actor="x")
+        assert PublishedService.objects.get(pk=sub.pk).state == "deprecated"
+
+    def test_a_failed_publish_undoes_the_recorded_history(self, monkeypatch):
+        from apps.catalogue import publishing
+
+        sub = ServiceSubmissionFactory(biotools_url="")
+        self._written_without_event(sub, "under_review")
+
+        def fail(*args, **kwargs):
+            raise RuntimeError("publishing failed")
+
+        monkeypatch.setattr(publishing, "on_status_change", fail)
+        with pytest.raises(RuntimeError):
+            set_status(sub, "approved", actor="admin:jane")
+        assert _transitions(sub) == [(None, "submitted")]
+        # Leave the database consistent for the end-of-test history check.
+        monkeypatch.undo()
+        set_status(sub, "approved", actor="admin:jane")
+
+
 class TestSettingTheStatusItAlreadyHas:
     """Setting the status a service already has records a history that does
     not end in it. A service with a complete history stays untouched."""
@@ -1504,6 +1680,88 @@ class TestSettingTheStatusItAlreadyHas:
         events = sub.status_events.count()
         assert set_status(sub, "approved", actor="admin:jane") is False
         assert sub.status_events.count() == events
+
+    def test_it_publishes_an_unpublished_approved_service(self):
+        from apps.catalogue.models import PublishedService
+
+        sub = self._approved_by_the_earlier_release()
+        set_status(sub, "approved", actor="admin:jane")
+        copy = PublishedService.objects.get(pk=sub.pk)
+        assert (copy.state, copy.pending_update) == ("active", False)
+        assert copy.revision.actor == "admin:jane"
+
+    def test_it_publishes_the_current_content_of_a_published_service(self):
+        from apps.catalogue.models import PublishedService
+
+        sub = TestCatchUpOnAPublishedService._service("active")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            status="approved", service_name="Example Renamed Service"
+        )
+        # The history shows the service back in review; the stored status
+        # (set without an event) is approved.
+        sub.status_events.create(
+            from_status="approved",
+            to_status="submitted",
+            changed_at=sub.status_events.latest("id").changed_at,
+            changed_by="system",
+        )
+        assert set_status(sub, "approved", actor="admin:jane") is True
+        assert (
+            PublishedService.objects.get(pk=sub.pk).service_name
+            == "Example Renamed Service"
+        )
+
+    def test_it_makes_a_deprecated_copy_active_again(self):
+        from apps.catalogue.models import PublishedService
+
+        sub = TestCatchUpOnAPublishedService._service("deprecated")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status="approved")
+        set_status(sub, "approved", actor="admin:jane")
+        copy = PublishedService.objects.get(pk=sub.pk)
+        assert (copy.state, copy.pending_update) == ("active", False)
+
+    def test_a_service_waiting_for_review_gets_its_copy_marked(self):
+        from apps.catalogue.models import PublishedService
+
+        sub = TestCatchUpOnAPublishedService._service("active")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status="under_review")
+        set_status(sub, "under_review", actor="admin:jane")
+        assert PublishedService.objects.get(pk=sub.pk).pending_update is True
+
+    def test_a_late_deprecation_deprecates_the_copy(self):
+        from apps.catalogue.models import PublishedService
+
+        sub = TestCatchUpOnAPublishedService._service("active")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status="deprecated")
+        set_status(sub, "deprecated", actor="admin:jane")
+        assert PublishedService.objects.get(pk=sub.pk).state == "deprecated"
+
+    def test_a_complete_history_changes_nothing_and_publishes_nothing(self):
+        from apps.catalogue.models import PublishedRevision
+
+        sub = TestCatchUpOnAPublishedService._service("active")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(
+            service_name="Example Edited But Not Republished"
+        )
+        revisions = PublishedRevision.objects.filter(submission=sub).count()
+        assert set_status(sub, "approved", actor="admin:jane") is False
+        assert PublishedRevision.objects.filter(submission=sub).count() == revisions
+
+    def test_a_failed_publish_undoes_the_recorded_history(self, monkeypatch):
+        from apps.catalogue import publishing
+
+        sub = self._approved_by_the_earlier_release()
+
+        def fail(*args, **kwargs):
+            raise RuntimeError("publish failed")
+
+        monkeypatch.setattr(publishing, "publish", fail)
+        with pytest.raises(RuntimeError):
+            set_status(sub, "approved", actor="admin:jane")
+        assert _transitions(sub) == [(None, "submitted")]
+        # Leave the database consistent for the end-of-test history check.
+        monkeypatch.undo()
+        set_status(sub, "approved", actor="admin:jane")
 
     def test_a_logged_approval_is_recorded_with_its_real_time(self):
         from datetime import timedelta
@@ -1581,6 +1839,26 @@ class TestBulkActionOnAStatusTheHistoryDoesNotShow:
         )
         assert messages == ["2 submission(s) marked as Approved."]
         assert notify.call_count == 1  # only the real change
+
+    def test_a_deprecated_copy_is_active_again_after_approving_again(
+        self, superuser_client
+    ):
+        from apps.catalogue.models import PublishedService
+
+        sub = TestCatchUpOnAPublishedService._service("deprecated")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status="approved")
+        self._action(superuser_client, "action_approve", sub)
+        assert PublishedService.objects.get(pk=sub.pk).state == "active"
+
+    def test_marking_a_waiting_service_under_review_again_heals_its_flag(
+        self, superuser_client
+    ):
+        from apps.catalogue.models import PublishedService
+
+        sub = TestCatchUpOnAPublishedService._service("active")
+        ServiceSubmission.objects.filter(pk=sub.pk).update(status="under_review")
+        self._action(superuser_client, "action_mark_under_review", sub)
+        assert PublishedService.objects.get(pk=sub.pk).pending_update is True
 
     def test_marking_a_waiting_service_under_review_again_heals_its_history(
         self, superuser_client

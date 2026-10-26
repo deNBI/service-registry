@@ -18,7 +18,6 @@ Authentication strategy
 import logging
 
 from django.db import transaction
-from django.utils.timezone import now
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import filters, mixins, status, viewsets
 from rest_framework.exceptions import ValidationError
@@ -28,15 +27,12 @@ from rest_framework.response import Response
 
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
 from apps.submissions import idempotency
-from apps.submissions.diff_utils import build_diff, snapshot, snapshot_m2m
+from apps.submissions.edits import apply_edit, capture
 from apps.submissions.http_utils import get_client_ip, hash_user_agent
-from apps.submissions.lifecycle import set_status
 from apps.submissions.models import (
     CHANGELOG_ACTOR_API_PREFIX,
     ServiceSubmission,
     SubmissionAPIKey,
-    SubmissionChangeLog,
-    SubmissionStatus,
 )
 from apps.submissions.tasks import (
     send_submission_notification,
@@ -447,8 +443,7 @@ class SubmissionViewSet(
 
             # Snapshot BEFORE serializer.save() — DRF's update() writes the new
             # values to the instance, so we must capture the originals first.
-            before_scalar = snapshot(instance)
-            before_m2m = snapshot_m2m(instance)
+            before = capture(instance)
 
             # Detect an attempt to change the (immutable) service_name so we can tell
             # the client it was ignored. The serializer marks service_name read-only
@@ -468,51 +463,28 @@ class SubmissionViewSet(
 
             serializer = self.get_serializer(instance, data=request.data, partial=True)
             serializer.is_valid(raise_exception=True)
-            was_approved = instance.status == SubmissionStatus.APPROVED
-            was_rejected = instance.status == SubmissionStatus.REJECTED
-            before = {**before_scalar, **before_m2m}
 
-            serializer.save()
-            # Field-level diff of what the save ACTUALLY changed. snapshot()
-            # reads the saved (sanitised: stripped, NFC, LF) values, so
-            # re-sending a stored value in another byte form is not a change.
-            changes = build_diff(
-                before, {**snapshot(instance), **snapshot_m2m(instance)}
+            # Content, links, the status reset (the same rules as the web form,
+            # see edits.py), publishing and the audit entry are stored
+            # together. The diff compares saved (sanitised: stripped, NFC, LF)
+            # values, so re-sending a stored value in another byte form is not
+            # a change.
+            result = apply_edit(
+                instance,
+                before=before,
+                store=serializer.save,
+                actor=self._api_actor(request),
+                by_owner=True,
             )
 
-            # Same rule as the web form (EditView): an approved submission goes
-            # back to review only when a non-exempt field really changed, or
-            # when no no_reset_fields are configured and anything changed. A
-            # rejected submission goes back to submitted for any real change.
-            status_reset = False
-            if changes and (was_approved or was_rejected):
-                from apps.submissions.lifecycle import get_no_reset_fields
-
-                exempt = get_no_reset_fields()
-                changed = {c["field"] for c in changes}
-                if was_rejected or (changed - exempt) or not exempt:
-                    set_status(
-                        instance,
-                        SubmissionStatus.SUBMITTED,
-                        actor=self._api_actor(request),
-                        extra_fields=["updated_at"],
-                        owner_edit=True,
-                    )
-                    status_reset = True
-                    # Include the reset (status) in the recorded diff.
-                    changes = build_diff(
-                        before, {**snapshot(instance), **snapshot_m2m(instance)}
-                    )
-
-            if changes:
-                self._record_api_change(request, instance, changes)
-
         send_update_notification.delay(
-            str(instance.id), changes=changes, status_reset=status_reset
+            str(instance.id),
+            changes=result.changes,
+            status_reset=result.status_reset,
         )
         logger.info(
             "API submission updated (%d field(s) changed)",
-            len(changes),
+            len(result.changes),
             extra={"submission_id": str(instance.id)},
         )
         data = serializer.data
@@ -532,26 +504,6 @@ class SubmissionViewSet(
     def _api_actor(request) -> str:
         """Changelog actor for API writes: "api:<key label>"."""
         return f"{CHANGELOG_ACTOR_API_PREFIX}{getattr(request.auth, 'label', 'api')}"
-
-    @staticmethod
-    def _record_api_change(request, instance, changes) -> None:
-        """Persist the diff on the submission and in the append-only change log."""
-        # Identify who made the change via the API key label (request.auth
-        # is the SubmissionAPIKey instance set by SubmissionAPIKeyAuthentication).
-        changed_by = SubmissionViewSet._api_actor(request)
-        changed_at = now()
-        instance.last_change_summary = {
-            "changed_by": changed_by,
-            "changed_at": changed_at.isoformat(),
-            "changes": changes,
-        }
-        instance.save(update_fields=["last_change_summary"])
-        SubmissionChangeLog.objects.create(
-            submission=instance,
-            changed_by=changed_by,
-            changed_at=changed_at,
-            changes=changes,
-        )
 
     def update(self, request, *args, **kwargs):
         """Full PUT is disabled — use PATCH."""

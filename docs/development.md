@@ -421,7 +421,7 @@ The list view hides the description toggle when nothing renders (for example an 
 
 ## Field-level diff (`diff_utils`)
 
-`apps/submissions/diff_utils.py` computes a human-readable before/after diff for any submission save. It is used by all three edit paths — the submitter web form (`views.py`), the admin backend (`admin.py`), and the REST API (`api/views.py`).
+`apps/submissions/diff_utils.py` computes a human-readable before/after diff for any submission save. It is used by `apps/submissions/edits.py` (see [One edit function](#one-edit-function)), which the submitter web form (`views.py`), the admin backend (`admin.py`) and the REST API (`api/views.py`) all call.
 
 ### Key functions
 
@@ -429,29 +429,24 @@ The list view hides the description toggle when nothing renders (for example an 
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `snapshot(instance)`        | Returns a `dict` of current scalar field values; **must be called before** `form.is_valid()` or admin `save_model()` |
 | `snapshot_m2m(instance)`    | Returns a `dict` of current M2M field values as sorted lists of strings                                              |
+| `snapshot_links(instance)`  | Returns the M2M links and the service centre by primary key (keys end in `#id`), so `build_diff()` can tell apart rows that share a name |
 | `build_diff(before, after)` | Compares two snapshots; returns `[{field, label, old, new}]` for changed fields only                                 |
 | `filter_sanitization_artifacts(changes, form_changed_data, form_field_names)` | Removes false-positive diff entries where form sanitization (bleach, NFC normalisation, whitespace stripping) produced a raw difference that resolved to the same stored value. Always applied after `build_diff()` in the web-form edit path. |
 
 ### Snapshot timing
 
-Django's `ModelForm._post_clean()` calls `construct_instance()` during `is_valid()`, which writes POST data onto `form.instance` **before** `form.save()` is called. Always take the `snapshot()` and `snapshot_m2m()` calls before constructing the form:
+Django's `ModelForm._post_clean()` calls `construct_instance()` during `is_valid()`, which writes POST data onto `form.instance` **before** `form.save()` is called. Take `capture(instance)` (the scalar and M2M snapshots together, from `edits.py`) before constructing the form, and pass it to `apply_edit()` as `before`:
 
 ```python
-before_scalar = snapshot(submission)          # ← before form construction
-before_m2m    = snapshot_m2m(submission)
+before = capture(submission)                  # ← before form construction
 form = SubmissionForm(request.POST, instance=submission)
 form.is_valid()                               # ← would corrupt before-state if snapshot taken here
-form.save()
-after_scalar = snapshot(submission)
-after_m2m    = snapshot_m2m(submission)
-changes = build_diff({**before_scalar, **before_m2m}, {**after_scalar, **after_m2m})
 ```
 
 In the admin, `save_model()` receives `obj` already populated with new form values — re-fetch the original from the database for the before-snapshot:
 
 ```python
-original = obj.__class__.objects.get(pk=obj.pk)
-before_scalar = snapshot(original)
+before = capture(obj.__class__.objects.get(pk=obj.pk))
 ```
 
 DRF serializers do **not** modify `self.instance` during `is_valid()`, so the snapshot can safely be taken before serializer construction.
@@ -464,11 +459,11 @@ DRF serializers do **not** modify `self.instance` during `is_valid()`, so the sn
 
 ### Sanitization artifacts
 
-Form `clean_*` methods (bleach, `unicodedata.normalize`, `.strip()`) may produce a cleaned value identical to the stored value even when the raw POST string differed slightly (trailing spaces, NFC variants). `build_diff()` compares snapshots of the **stored model value** before and after save, so such non-changes do not appear in the diff.
+Form `clean_*` methods (bleach, `unicodedata.normalize`, `.strip()`) may produce a cleaned value identical to the stored value even when the raw POST string differed slightly (trailing spaces, NFC variants). `build_diff()` compares snapshots of the **stored model value** before and after save, with text normalized as `save()` does (line endings, NFC, surrounding whitespace), so such non-changes do not appear in the diff.
 
-`filter_sanitization_artifacts()` provides a second layer: it removes any diff entry where the field is managed by the form **and** is absent from `form.changed_data`. It is called after `build_diff()` in the web-form path before persisting `last_change_summary`.
+`filter_sanitization_artifacts()` provides a second layer: it removes any diff entry where the field is managed by the form **and** is absent from `form.changed_data`. The web form passes it to `apply_edit()` as `refine_changes`, so it shapes what is logged before `last_change_summary` is persisted.
 
-**Status reset and sanitization:** `EditView` determines whether to reset status using a *prospective diff* — it compares `before_scalar` against `snapshot(updated)` taken from the in-memory instance after `form.save(commit=False)`. Because `_post_clean()` has already applied `clean_*` normalization at that point, sanitization artifacts never appear in the prospective diff and cannot trigger a false status reset.
+**Status reset and sanitization:** `apply_edit()` decides the reset from the diff of the saved values, not from the filtered log entries. A value that only differs from the stored one in line endings, Unicode form or surrounding whitespace is therefore not a change, and the web form's `refine_changes` filter never hides a real change from the reset decision.
 
 ---
 
@@ -637,24 +632,30 @@ Manual browser verification: use DevTools → Application → Local Storage to i
 
 ## Submission lifecycle (status reset)
 
-When a submitter edits an **approved** service via the web form or REST API, the platform determines whether to reset the status to `submitted` (triggering a re-review) based on which fields actually changed. A **rejected** service returns to `submitted` after any real change, exempt fields included (see [Submitter edits on rejected services](admin-guide.md#submitter-edits-on-rejected-services)). Other statuses keep their status.
+When a submitter edits an **approved** service via the web form or REST API, the platform determines whether to reset the status to `submitted` (triggering a re-review) based on which fields actually changed. A **rejected** service returns to `submitted` after any real change, exempt fields included (see [Submitter edits on rejected services](admin-guide.md#submitter-edits-on-rejected-services)). Other statuses keep their status. An admin save of the change form never resets the status.
+
+### One edit function
+
+`apply_edit()` in `apps/submissions/edits.py` is the only code that stores a form, API or change-form edit. (The maturity-tag bulk action and the restore-published action also write the service; they are not edits of its content by an owner or an admin form.) The owner web form (`EditView.post`), the API PATCH (`partial_update`) and the admin change form (`save_model` / `save_related`) validate their input, take `capture(instance)` before it is applied, and call it with:
+
+- `store`: a callable that saves the content and the links (the web view saves the instance and calls `form.save_m2m()`, the API passes `serializer.save`, the admin saves the instance and runs the standard `save_related`). The caller has put the version its form was loaded with on the instance, so a stale save raises `EditConflict` and undoes the edit.
+- `actor`, `by_owner` (an admin save never resets the status) and, for the web form, `refine_changes`.
+
+Inside one transaction it runs `store`, computes the diff, resets the status through `set_status(..., owner_edit=True)` when the rules below ask for it, calls `republish` (which does nothing unless the service is still approved and a public field changed), and writes `last_change_summary` and the `SubmissionChangeLog` entry. It returns an `EditResult` (`changes`, `status_reset`); the views use it for messages and queue their e-mails after the commit. The API view keeps its own outer transaction because the row lock and the `If-Match` check come before the save.
+
+The admin status buttons, bulk actions and the owner's Deprecate button are status actions, not edits; they keep calling `set_status` themselves. `tests/test_edit_guard.py` fails when `views.py`, `api/views.py` or `admin.py` call `publish`, `republish` or `set_status` for an edit, and lists the calls that remain.
 
 ### How "changed" is determined
 
-**Scalar fields** — a *prospective diff* compares the `before_scalar` snapshot (taken before form processing) with a snapshot of the in-memory instance after `form.save(commit=False)`. This uses the already-cleaned values, so sanitization artifacts (whitespace, NFC normalization) do not produce false positives.
+The diff of the values before the edit (`capture`) and after `store` ran, scalar fields and M2M links alike. Text is compared the way `save()` stores it (LF line endings, NFC, surrounding whitespace removed), so text that only differs in those respects, including legacy values written without `save()`, is not a change.
 
-**M2M fields** — `form.changed_data` filtered to the set of tracked M2M field names (`DIFFABLE_M2M`). M2M comparison is PK-based with no sanitization, so `form.changed_data` is reliable here.
+Linked rows (the M2M fields and the service centre) are compared by primary key, not by name. Swapping a row for another one with the same name, for example two PIs called "Doe, John" at different institutes, is a change: it counts for the status reset and is logged with the institute (or a short id) added to the name so the two entries can be told apart.
 
 ### `no_reset_fields` exemption
 
 Fields listed in `settings.SUBMISSION_NO_RESET_FIELDS` (configured via `site.toml [submission] no_reset_fields`) are exempt. If all actually-changed fields are exempt, the `approved` status is preserved. If any non-exempt field changed, the status is reset. Maturity tags are kept by the reset; only deprecation clears them (see [Assigning Maturity Tags](admin-guide.md#assigning-maturity-tags)).
 
-The exemption is enforced identically in:
-
-- `apps/submissions/views.py` `EditView.post()` — web form path
-- `apps/api/views.py` `partial_update()` — REST API path
-
-The rejected-service rule runs in the same two places: it uses the same changed-field result, but ignores the exemption.
+The exemption is applied in `apply_edit()`, so the web form and the REST API follow it identically. The rejected-service rule runs there too: it uses the same changed-field result, but ignores the exemption.
 
 ### `lifecycle.py`
 
@@ -666,11 +667,21 @@ The same module holds the status transition table (`TRANSITIONS`, plus `OWNER_ED
 
 ### When status resets
 
-On reset, both the web form and API:
+On reset, `apply_edit()` (for the web form and API):
 
 1. Set `status = "submitted"` through `set_status` (an approved service, after a non-exempt change, or a rejected service, after any real change)
 2. Keep the maturity tags as they are
 3. Pass `status_reset=True` to `send_update_notification` so the submitter email includes a lifecycle notice
+
+### Published copy (`apps/catalogue`)
+
+Approved services also have a published copy (`PublishedRevision`, `PublishedService`, `WithdrawnService`; see [Database Schema](database-schema.md#catalogue_publishedrevision-catalogue_publishedservice-catalogue_withdrawnservice)). Nothing public reads it yet. `apps/catalogue/publishing.py` writes it, and the delete receiver in `apps/catalogue/signals.py` writes the tombstones (`tests/test_publishing_guard.py` scans for other writers):
+
+- `set_status` calls `on_status_change` inside its transaction after it writes the event, so a publish that fails undoes the status change. A status recorded late (see `record_unrecorded_status`) is applied with `apply_caught_up_status`, which only moves the copy's state. The catalogue is imported inside `set_status`, because the catalogue app imports the submission models.
+- The edit paths of an approved service reach `republish` through `apply_edit()`, inside its transaction and after the related rows are stored: `EditView`, the API `partial_update` and the admin change form. The maturity tag action calls it directly. It does nothing unless the stored status is approved and a copy exists, and it writes a revision only when a public field changed.
+- Catalogue migration `0002` publishes the services that existed before the copy; `publish_backfill`, `verify_published` and `rebuild_published` repeat and check that step (see [Published Copy of Services](admin-guide.md#published-copy)). The migration holds frozen copies of the content building and of the backfill rules, so later code changes cannot alter it; `tests/test_publish_existing_migration.py` checks that both give the same result.
+- The admin action `action_restore_published` writes a published version back into the working copy (`apply_content_to_working_copy`, with `restorable_content` defining what is written). The confirmation page posts each row's `version`; the action re-reads every row under its lock in its own transaction and leaves a row alone when the version differs, there is no published version, its published version names a deleted service centre or the row is gone.
+- Public fields are listed in `apps/catalogue/public_fields.py`. The private fields are listed in `tests/test_publishing.py`, which fails for a `ServiceSubmission` field that is in neither list.
 
 ---
 

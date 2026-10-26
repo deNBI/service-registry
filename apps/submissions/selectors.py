@@ -1,11 +1,28 @@
 """Read-only queries over submission status history."""
 
-from django.db.models import OuterRef, Subquery
+from django.db.models import Min, OuterRef, Subquery
 
 from apps.submissions.models import (
     ServiceSubmission,
+    SubmissionStatus,
     SubmissionStatusEvent,
 )
+
+
+def was_ever_approved(submission_id) -> bool:
+    """True when any approval event exists (synthetic backfill rows included)."""
+    return SubmissionStatusEvent.objects.filter(
+        submission_id=submission_id, to_status=SubmissionStatus.APPROVED
+    ).exists()
+
+
+def first_approved_at(submission_id):
+    """Earliest real (non-synthetic) approval time, or None when unknown."""
+    return SubmissionStatusEvent.objects.filter(
+        submission_id=submission_id,
+        to_status=SubmissionStatus.APPROVED,
+        is_synthetic=False,
+    ).aggregate(first=Min("changed_at"))["first"]
 
 
 def status_history_drift() -> list[tuple[str, str, str | None]]:
@@ -23,6 +40,18 @@ def status_history_drift() -> list[tuple[str, str, str | None]]:
         "pk", "status", "latest"
     )
     return [(str(pk), status, last) for pk, status, last in rows if status != last]
+
+
+def latest_public_decisions(submission_ids) -> dict:
+    """Map submission id to the status of its latest approval or deprecation
+    event (the last row written). That event decides whether a published copy
+    is active or deprecated; later moves to other statuses do not change it.
+    ``submission_ids`` is any iterable or queryset of ids."""
+    events = SubmissionStatusEvent.objects.filter(
+        to_status__in=[SubmissionStatus.APPROVED, SubmissionStatus.DEPRECATED],
+        submission_id__in=submission_ids,
+    )
+    return dict(events.order_by("id").values_list("submission_id", "to_status"))
 
 
 def status_history_broken() -> list[str]:

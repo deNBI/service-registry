@@ -16,6 +16,9 @@ make test
 # HTML coverage report
 make test-cov
 # then open htmlcov/index.html
+
+# The slow tests, which the runs above leave out
+make test-slow
 ```
 
 Tests use SQLite in-memory and local-memory cache. No PostgreSQL, Redis, or external network access is required.
@@ -29,8 +32,10 @@ Tests use SQLite in-memory and local-memory cache. No PostgreSQL, Redis, or exte
 ```ini
 [pytest]
 DJANGO_SETTINGS_MODULE = config.settings_test
-addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
+addopts = -v --tb=short -m "not slow" --cov=apps --cov-report=term-missing --cov-fail-under=80
 ```
+
+The `slow` marker is registered in `pytest.ini`. A test marked `slow` is left out of `pytest tests/`, `make test` and `make pre-commit`; `make test-slow` (`pytest tests/ -m slow --no-cov`) runs only those tests, and so does the "Run slow tests" step of the CI test job. Use it for exhaustive checks that take over a minute, such as `test_every_sequence_of_three_operations`. To run one of them by hand, pass `-m slow` as well: a test selected by name is still left out without it.
 
 **`config/settings_test.py`** — key overrides:
 
@@ -83,8 +88,15 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_status_backfill.py` | Migration `0022`: status history rebuilt from the change log, synthetic rows, malformed entries, forward and reverse runs through the migration executor |
 | `test_status_log.py` | Reading status changes out of change-log entries; the reader agrees with the frozen copy in migration `0022` |
 | `test_status_write_guard.py` | Static scan: only `apps/submissions/lifecycle.py` may write a submission status |
+| `test_publishing.py` | Published copy: public field list pinned, read model mirrors the working copy, revisions (immutable, numbered), publish, republish and state changes, rebuild from a revision, row locks, relation query counts, deletion and tombstones, factory `published=True` |
+| `test_publishing_triggers.py` | What publishes: an approval through every path, live edits of an approved service (web form, API, admin), tag changes, and the status changes and review edits that leave the last approved version public |
+| `test_publish_existing_migration.py` | Migration `0002`: approved and deprecated services published, services left private, counts-only output, same result as `publish_backfill` for every case, a failure part way publishes nothing, rollback and re-run through the migration executor |
+| `test_publishing_commands.py` | `publish_backfill` (publish, list, repairs, changes during a run, dry run), `verify_published` (every problem class, flag combinations, ids only), `rebuild_published`, maturity tags on published copies |
+| `test_publishing_admin.py` | The admin action that restores the published version: confirmation page, restore of fields and links, refusal of services saved or deleted after the page was shown or without a published version, counts and messages, permission checks, query counts |
+| `test_publishing_guard.py` | Static scan: only `apps/catalogue/publishing.py` and `apps/catalogue/signals.py` write the published copy |
 | `test_rejected_edit.py` | An owner edit of a rejected service (web form and API) returns it to `submitted`; tags kept; no-change saves and other statuses keep their status |
 | `test_clear_tags_on_deprecated.py` | Deprecation clears maturity tags; migration `0023` (cleared tags, version, change-log entry); a deprecated service holding tags gives a form error, not a server error |
+| `test_publishing_lifecycle.py` | The published copy across whole review cycles, through the real entry points (owner form and API, admin buttons and actions, restore with its confirmation page): edits under review, rejection and the rejected-edit rule, deprecation, tags kept through review, refused moves, a host clock that steps back. The `slow` tests run every sequence of three operations from a new and from a published service against a model written from the rules alone, refused moves included |
 
 After every database test, an autouse fixture in `tests/conftest.py` checks that each submission's status events form one chain from its creation and that the latest event equals its status. A test that sets a status directly (for example with `QuerySet.update`) fails with "status history out of sync". Tests that build such rows on purpose, such as the legacy-data migration tests, opt out with `@pytest.mark.allow_status_drift`; everything else should change status through `set_status`.
 

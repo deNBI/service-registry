@@ -17,6 +17,7 @@ imports at module level) so they can be unit-tested without a database.
 
 from __future__ import annotations
 
+import unicodedata
 from typing import TYPE_CHECKING
 
 from apps.submissions.validation import normalize_newlines
@@ -98,6 +99,17 @@ _FILE_FIELDS = {"logo"}
 # method that returns human-readable labels, matching the _CHOICE_FIELDS pattern.
 _LIST_FIELDS = {"secondary_maturity_tags"}
 
+# Linked rows are shown by name, but two rows can share a name (two PIs called
+# "Doe, John", two centres with the same names). snapshot_links() therefore also
+# records each link by primary key, under the field name plus this suffix.
+# build_diff() treats a different row behind an equal name as a change.
+IDENTITY_SUFFIX = "#id"
+
+# Fields recorded by snapshot_links(): every M2M field and the service centre.
+_LINK_FIELDS: tuple[str, ...] = tuple(f for f, _ in DIFFABLE_M2M) + tuple(
+    sorted(_FK_FIELDS)
+)
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -139,7 +151,13 @@ def snapshot(instance: "ServiceSubmission") -> dict:
             raw = getattr(instance, field, None)
             # LF line endings: a CRLF-vs-LF difference (browser textarea vs
             # API/stored text) is never a change.
-            value = normalize_newlines(str(raw)).strip() if raw is not None else ""
+            # NFC, as ServiceSubmission.save() stores it: text written some
+            # other way is not a change by itself.
+            value = (
+                unicodedata.normalize("NFC", normalize_newlines(str(raw))).strip()
+                if raw is not None
+                else ""
+            )
         data[field] = value
     return data
 
@@ -164,6 +182,30 @@ def snapshot_m2m(instance: "ServiceSubmission") -> dict:
             data[field] = sorted(license.license_id for license in manager.all())
         else:
             data[field] = sorted(str(item) for item in manager.all())
+    return data
+
+
+def snapshot_links(instance: "ServiceSubmission") -> dict:
+    """
+    Return the linked rows (M2M fields and the service centre) by identity.
+
+    Each entry is a sorted list of (primary key, name, detail) tuples, where
+    ``detail`` tells rows with the same name apart (the institute of a PI, or
+    a short id). Pass it to build_diff() together with the other snapshots so
+    that swapping a row for another one with the same name counts as a change.
+    The keys carry IDENTITY_SUFFIX and never appear in the diff themselves.
+    """
+    data: dict = {}
+    for field in _LINK_FIELDS:
+        if field in _FK_FIELDS:
+            related = getattr(instance, field, None)
+            items = [related] if related is not None else []
+        else:
+            manager = getattr(instance, field, None)
+            items = list(manager.all()) if manager is not None else []
+        data[field + IDENTITY_SUFFIX] = sorted(
+            (str(item.pk), _name(field, item), _detail(item)) for item in items
+        )
     return data
 
 
@@ -195,7 +237,7 @@ def build_diff(
     label_map.update({f: lbl for f, lbl in DIFFABLE_M2M})
 
     changes: list[dict] = []
-    all_keys = set(before) | set(after)
+    all_keys = {k for k in set(before) | set(after) if not k.endswith(IDENTITY_SUFFIX)}
 
     for key in sorted(all_keys):
         old_val = before.get(key)
@@ -206,7 +248,18 @@ def build_diff(
         old_cmp = old_val if not isinstance(old_val, list) else tuple(old_val)
         new_cmp = new_val if not isinstance(new_val, list) else tuple(new_val)
         if old_cmp == new_cmp:
-            continue
+            # Same names: a different row behind a name is still a change.
+            old_ids = before.get(key + IDENTITY_SUFFIX)
+            new_ids = after.get(key + IDENTITY_SUFFIX)
+            if (
+                old_ids is None
+                or new_ids is None
+                or [i[0] for i in old_ids] == [i[0] for i in new_ids]
+            ):
+                continue
+            old_val, new_val = _tell_apart(old_ids, new_ids)
+            if key in _FK_FIELDS:
+                old_val, new_val = ", ".join(old_val), ", ".join(new_val)
         changes.append(
             {
                 "field": key,
@@ -264,6 +317,38 @@ def filter_sanitization_artifacts(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _name(field: str, item) -> str:
+    """The name a link is shown by (as in snapshot() and snapshot_m2m())."""
+    if field == "licenses":
+        return item.license_id
+    return str(item)
+
+
+def _detail(item) -> str:
+    """What tells a row apart from others with the same name."""
+    institute = getattr(item, "institute", "")
+    return institute if institute else f"id {str(item.pk)[:8]}"
+
+
+def _tell_apart(old_ids: list, new_ids: list) -> tuple[list[str], list[str]]:
+    """Labels for two link sets that show the same names but hold other rows.
+
+    The detail is appended to every name; when that still leaves the two sets
+    looking alike (same institute), the id is used instead.
+    """
+
+    def labels(ids, by_id):
+        return sorted(
+            f"{name} (id {pk[:8]})" if by_id else f"{name} ({detail})"
+            for pk, name, detail in ids
+        )
+
+    old, new = labels(old_ids, False), labels(new_ids, False)
+    if old == new:
+        old, new = labels(old_ids, True), labels(new_ids, True)
+    return old, new
 
 
 def _display(value) -> str:
