@@ -16,6 +16,22 @@ from .client import BioToolsClient, BioToolsError, BioToolsNotFound, BioToolsToo
 logger = logging.getLogger(__name__)
 
 
+def biotools_id_from_url(url: str) -> str:
+    """Return the bio.tools ID from a URL such as https://bio.tools/<id> ("" if none)."""
+    return (url or "").rstrip("/").split("/")[-1]
+
+
+def remove_records_without_url() -> int:
+    """Delete records whose submission no longer has a bio.tools URL.
+
+    Returns the number of records removed (their function rows go with them).
+    """
+    from .models import BioToolsRecord
+
+    _, per_model = BioToolsRecord.objects.filter(submission__biotools_url="").delete()
+    return per_model.get(BioToolsRecord._meta.label, 0)
+
+
 class SyncResult(NamedTuple):
     ok: bool
     biotools_id: str

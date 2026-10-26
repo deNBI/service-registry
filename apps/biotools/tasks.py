@@ -8,8 +8,8 @@ Tasks:
       One-off task, called when a submission with a bio.tools URL is saved.
 
   sync_all_biotools_records()
-      Periodic task (Celery beat, daily) that refreshes ALL linked records.
-      Runs at 03:00 Europe/Berlin to avoid overlap with EDAM sync.
+      Periodic task (Celery beat, every 24 hours) that syncs every submission
+      with a bio.tools URL, using the URL it has now.
 """
 
 import logging
@@ -39,7 +39,7 @@ def sync_biotools_record(self, submission_id: str) -> dict:
     Returns a dict with keys: ok, biotools_id, created, error.
     """
     from apps.submissions.models import ServiceSubmission
-    from .sync import sync_tool
+    from .sync import biotools_id_from_url, sync_tool
 
     try:
         submission = ServiceSubmission.objects.get(pk=submission_id)
@@ -51,7 +51,7 @@ def sync_biotools_record(self, submission_id: str) -> dict:
         return {"ok": False, "error": "Submission has no bio.tools URL"}
 
     # Extract the bio.tools ID from the URL: https://bio.tools/<id>
-    biotools_id = submission.biotools_url.rstrip("/").split("/")[-1]
+    biotools_id = biotools_id_from_url(submission.biotools_url)
     if not biotools_id:
         return {"ok": False, "error": "Could not extract bio.tools ID from URL"}
 
@@ -68,33 +68,43 @@ def sync_biotools_record(self, submission_id: str) -> dict:
 )
 def sync_all_biotools_records() -> None:
     """
-    Refresh ALL BioToolsRecord entries from the bio.tools API.
+    Sync every submission that has a bio.tools URL.
 
-    Scheduled daily (see Celery beat config in config/celery.py).
-    Iterates all records and calls sync_tool for each.
+    Scheduled every 24 hours (CELERY_BEAT_SCHEDULE in config/settings.py).
+    The bio.tools ID is taken from the submission's current URL, so a changed
+    URL replaces the old tool's data and a submission whose first sync failed
+    gets its record. Records of submissions without a URL are removed.
     Errors are logged and stored on the record but do not stop the loop.
     """
-    from apps.biotools.models import BioToolsRecord
-    from .sync import sync_tool
+    from apps.submissions.models import ServiceSubmission
+    from .sync import biotools_id_from_url, remove_records_without_url, sync_tool
 
-    records = BioToolsRecord.objects.select_related("submission").all()
-    total = records.count()
-    logger.info("Starting bio.tools bulk sync: %d records", total)
+    removed = remove_records_without_url()
+    if removed:
+        logger.info("Removed %d bio.tools record(s) without a bio.tools URL", removed)
+
+    submissions = (
+        ServiceSubmission.objects.exclude(biotools_url="")
+        .only("id", "biotools_url")
+        .order_by("pk")
+    )
+    total = submissions.count()
+    logger.info("Starting bio.tools bulk sync: %d submissions", total)
 
     ok_count = 0
     err_count = 0
 
-    for record in records:
-        result = sync_tool(
-            biotools_id=record.biotools_id,
-            submission_id=str(record.submission_id),
-        )
+    for submission in submissions:
+        biotools_id = biotools_id_from_url(submission.biotools_url)
+        if not biotools_id:
+            continue
+        result = sync_tool(biotools_id=biotools_id, submission_id=str(submission.pk))
         if result.ok:
             ok_count += 1
         else:
             err_count += 1
             logger.warning(
-                "bio.tools sync failed for %s: %s", record.biotools_id, result.error
+                "bio.tools sync failed for %s: %s", biotools_id, result.error
             )
 
     logger.info(
