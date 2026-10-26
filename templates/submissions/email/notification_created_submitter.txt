@@ -1,12 +1,12 @@
-de.NBI Service Registration Platform — Submission Received
+{% load submission_text %}de.NBI Service Registration Platform — Submission Received
 ===============================================
 
-Dear {{ submission.submitter_first_name }} {{ submission.submitter_last_name }},
+Dear {{ submission.submitter_first_name|legacy_decoded }} {{ submission.submitter_last_name|legacy_decoded }},
 
 We have received your service registration. A member of the coordination
 team will be in touch.
 
-  Service:      {{ submission.service_name }}
+  Service:      {{ submission.service_name|legacy_decoded }}
   Submission ID: {{ submission.id }}
   Submitted:    {{ submission.submitted_at|date:"Y-m-d H:i" }} UTC
 

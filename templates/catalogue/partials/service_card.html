@@ -1,4 +1,4 @@
-{% load static catalogue_tags markdown_tags %}
+{% load static catalogue_tags markdown_tags submission_text %}
 {% catalogue_service_url service as service_url %}
 
 <div class="card h-100 catalogue-card">
@@ -14,9 +14,9 @@
           loading="lazy"
           onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
         />
-        <span class="catalogue-avatar-initial" style="display:none;">{{ service.service_name|first|upper }}</span>
+        <span class="catalogue-avatar-initial" style="display:none;">{{ service.service_name|legacy_decoded|first|upper }}</span>
         {% else %}
-        <span class="catalogue-avatar-initial">{{ service.service_name|first|upper }}</span>
+        <span class="catalogue-avatar-initial">{{ service.service_name|legacy_decoded|first|upper }}</span>
         {% endif %}
       </div>
 
@@ -28,8 +28,8 @@
             target="_blank"
             rel="noopener noreferrer"
             class="text-decoration-none text-dark"
-          >{{ service.service_name }}</a>
-          {% else %}{{ service.service_name }}{% endif %}
+          >{{ service.service_name|legacy_decoded }}</a>
+          {% else %}{{ service.service_name|legacy_decoded }}{% endif %}
         </h3>
         {% if service.service_center %}
         <div class="catalogue-meta-tiny mt-1">{{ service.service_center.short_name }}</div>
@@ -87,7 +87,7 @@
           target="_blank"
           rel="noopener noreferrer"
           class="btn btn-sm btn-outline-success fw-semibold"
-          aria-label="Visit {{ service.service_name }}"
+          aria-label="Visit {{ service.service_name|legacy_decoded }}"
         >Visit Service</a>
         {% else %}
         <span></span>
@@ -101,7 +101,7 @@
             rel="noopener noreferrer"
             class="text-secondary catalogue-icon-link"
             title="View on GitHub"
-            aria-label="View {{ service.service_name }} on GitHub"
+            aria-label="View {{ service.service_name|legacy_decoded }} on GitHub"
           >
             <img src="{% static 'img/icons/github.svg' %}" alt="GitHub" width="20" height="20" aria-hidden="true"/>
           </a>
@@ -112,7 +112,7 @@
             target="_blank"
             rel="noopener noreferrer"
             title="View on bio.tools"
-            aria-label="View {{ service.service_name }} on bio.tools"
+            aria-label="View {{ service.service_name|legacy_decoded }} on bio.tools"
           >
             <img src="{% static 'img/icons/biotools.png' %}" alt="bio.tools" width="20" height="20" aria-hidden="true" style="object-fit:contain;"/>
           </a>
@@ -123,7 +123,7 @@
             target="_blank"
             rel="noopener noreferrer"
             title="View on FAIRsharing"
-            aria-label="View {{ service.service_name }} on FAIRsharing"
+            aria-label="View {{ service.service_name|legacy_decoded }} on FAIRsharing"
           >
             <img src="{% static 'img/icons/fairsharing.svg' %}" alt="FAIRsharing" width="32" height="16" aria-hidden="true"/>
           </a>
@@ -135,7 +135,7 @@
             rel="noopener noreferrer"
             class="text-secondary catalogue-icon-link"
             title="View in other registry"
-            aria-label="View {{ service.service_name }} in another registry"
+            aria-label="View {{ service.service_name|legacy_decoded }} in another registry"
           >
             <img src="{% static 'img/icons/link.svg' %}" alt="Other registry" width="20" height="20" aria-hidden="true"/>
           </a>

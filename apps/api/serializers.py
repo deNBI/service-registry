@@ -27,7 +27,10 @@ from apps.registry.models import PrincipalInvestigator, ServiceCategory, Service
 from apps.submissions.models import (
     DESCRIPTION_MAX_LENGTH,
     DESCRIPTION_MIN_LENGTH,
+    LEGACY_ESCAPED_FIELDS,
     ServiceSubmission,
+    _sanitise_text,
+    keep_stored_text,
 )
 from apps.submissions.markdown_render import render_submission_description
 
@@ -361,6 +364,16 @@ class SubmissionDetailSerializer(serializers.ModelSerializer):
         except ObjectDoesNotExist:
             pass
         return links
+
+    def update(self, instance, validated_data):
+        # A legacy value sent back with its entities decoded reads the same, so
+        # it keeps the stored text and is not a change.
+        for name in LEGACY_ESCAPED_FIELDS:
+            if name in validated_data:
+                validated_data[name] = keep_stored_text(
+                    getattr(instance, name), _sanitise_text(validated_data[name])
+                )
+        return super().update(instance, validated_data)
 
     def validate_year_established(self, value):
         """Mirror model.clean(): year must be between 1900 and the current year."""

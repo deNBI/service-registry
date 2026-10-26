@@ -509,7 +509,7 @@ class EditView(View):
         #   Scalar fields — prospective diff (before_scalar vs snapshot of the
         #   in-memory instance after form.save(commit=False)).  Using the
         #   in-memory snapshot rather than form.changed_data avoids false
-        #   positives from form sanitization (bleach, NFC normalization,
+        #   positives from form sanitization (NFC normalization,
         #   whitespace stripping): a field whose raw POST value differed slightly
         #   from the stored value but resolves to the same string after clean()
         #   would appear in form.changed_data but produces an identical
@@ -562,7 +562,7 @@ class EditView(View):
         changes = build_diff(
             {**before_scalar, **before_m2m}, {**after_scalar, **after_m2m}
         )
-        # Strip false positives caused by form sanitization (bleach, NFC
+        # Strip false positives caused by form sanitization (NFC
         # normalisation, whitespace stripping) running on fields the user
         # never actually changed.  form.changed_data is Django's authoritative
         # signal for what the submitter explicitly modified.

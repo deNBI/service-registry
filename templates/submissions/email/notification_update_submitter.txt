@@ -1,11 +1,11 @@
-de.NBI Service Registration Platform — Registration Updated
+{% load submission_text %}de.NBI Service Registration Platform — Registration Updated
 ================================================
 
-Dear {{ submission.submitter_first_name }} {{ submission.submitter_last_name }},
+Dear {{ submission.submitter_first_name|legacy_decoded }} {{ submission.submitter_last_name|legacy_decoded }},
 
 Your service registration has been updated.
 
-Service:      {{ submission.service_name }}
+Service:      {{ submission.service_name|legacy_decoded }}
 Submission ID: {{ submission.id }}
 Updated:      {{ submission.updated_at|date:"Y-m-d H:i" }} UTC
 

@@ -231,7 +231,7 @@ def filter_sanitization_artifacts(
     Remove false-positive diff entries caused by form sanitization.
 
     When a submitter saves without touching a field, the form's ``clean_*``
-    methods (bleach, NFC normalisation, whitespace stripping) may produce a
+    methods (NFC normalisation, whitespace stripping) may produce a
     slightly different string than what is stored in the database.  The raw
     snapshot comparison then reports a change that the user never made.
 
