@@ -970,6 +970,7 @@ class TestSvgCssScaling:
         small, large = best_times(
             self._clean(make(50_000), stylesheet),
             self._clean(make(200_000), stylesheet),
+            small_repeats=4,
         )
         assert large < 10 * max(small, 1e-4)
 
@@ -1037,9 +1038,13 @@ class TestSvgPruningScaling:
 
     @staticmethod
     def _process(svg: str):
-        return lambda: validate_and_process_logo(
-            _make_upload(svg.encode(), "logo.svg", "image/svg+xml")
-        )
+        upload = _make_upload(svg.encode(), "logo.svg", "image/svg+xml")
+
+        def call():
+            upload.seek(0)
+            validate_and_process_logo(upload)
+
+        return call
 
     @pytest.mark.parametrize(
         "body",
@@ -1059,7 +1064,9 @@ class TestSvgPruningScaling:
         def svg(n):
             return f'<svg xmlns="{self.SVG_NS}" xmlns:x="urn:x"><g>{body(n)}</g></svg>'
 
-        small, large = best_times(self._process(svg(5_000)), self._process(svg(20_000)))
+        small, large = best_times(
+            self._process(svg(5_000)), self._process(svg(20_000)), small_repeats=4
+        )
         assert large < 10 * max(small, 1e-4)
 
 
