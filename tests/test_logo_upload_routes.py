@@ -243,6 +243,7 @@ class TestEveryUploadRoute:
         ok, sub = route(env, _upload("logo.svg", DESIGN_TOOL_SVG, "image/svg+xml"))
         assert ok
         resp = env.client.get(sub.logo.url)
+        resp.close()  # a file response keeps its file open until closed
         assert resp.status_code == 200
         assert resp["Content-Type"] == "image/svg+xml"
         policy = resp["Content-Security-Policy"]
