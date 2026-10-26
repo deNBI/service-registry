@@ -22,6 +22,25 @@ Tests use SQLite in-memory and local-memory cache. No PostgreSQL, Redis, or exte
 
 ---
 
+## Browser tests
+
+The tests in `tests/e2e/` open the public pages in headless Chromium against Django's live server, using [pytest-playwright](https://playwright.dev/python/docs/test-runners). They are marked `browser`, which the default run leaves out.
+
+```bash
+# once per machine: the browser binary
+python -m playwright install chromium
+
+make test-browser
+```
+
+`pytest tests/e2e/` on its own selects nothing (the default options leave `browser` tests out); add `-m browser`, as `make test-browser` does. `make test-browser` runs them on their own, as CI does. `make pre-commit` does not include them, so run `make test-browser` as well when a change touches templates, static files or views.
+
+If Chromium does not start because a system library such as `libnss3.so` is missing, install the browser's system packages with `python -m playwright install-deps chromium` (needs root). CI runs them in the job "Browser tests".
+
+They check, on the home, catalogue, registration and update pages: the page loads without console errors, nothing overflows the viewport at 1280 px and 390 px, images have an `alt` attribute, there is one `h1`, and every same-origin link resolves. Functional checks cover the catalogue's live search, card layout and Markdown descriptions, and the EDAM pickers on the registration form. Fixtures in `tests/e2e/conftest.py` build the data with the factories (including a service logo), and one test loads the registration page with the CAPTCHA widget switched on. Static files are served unhashed by the live server, so a missing file in the production static manifest would not show up here. In CI, screenshots and traces of failed tests are kept as the artifact `browser-test-results`.
+
+---
+
 ## Test configuration
 
 **`pytest.ini`** — points to `config.settings_test` and enables coverage by default:
@@ -29,7 +48,9 @@ Tests use SQLite in-memory and local-memory cache. No PostgreSQL, Redis, or exte
 ```ini
 [pytest]
 DJANGO_SETTINGS_MODULE = config.settings_test
-addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
+markers =
+    browser: runs in headless Chromium against the live server; left out of the default run, run with make test-browser
+addopts = -v --tb=short -m "not browser" --cov=apps --cov-report=term-missing --cov-fail-under=80
 ```
 
 **`config/settings_test.py`** — key overrides:
@@ -78,6 +99,7 @@ addopts = -v --tb=short --cov=apps --cov-report=term-missing --cov-fail-under=80
 | `test_query_counts.py` | List endpoints (API list, admin changelist) issue the same number of queries for 3 and 12 rows: no per-row (N+1) queries |
 | `test_api_patch_reset.py` | API `PATCH` on an approved submission resets it only on a real non-exempt change (re-sent, re-padded or NFD values keep approval), content + reset in one transaction, no-change notification contract |
 | `test_http_utils.py` | `get_client_ip()` returns only valid IPs (malformed `X-Real-IP`/`X-Forwarded-For` fall through), `get_ratelimit_ip()` always gives django-ratelimit a parseable IP |
+| `e2e/test_pages.py` | Browser tests (see [Browser tests](#browser-tests)): console errors, overflow at 1280 px and 390 px, image `alt`, one `h1`, same-origin links, API docs, CAPTCHA widget, live search, category pills, card links, EDAM and licence pickers, Markdown descriptions with the flag on and off |
 
 Run `pytest --collect-only -q` for the current test count; a coverage threshold of ≥ 80% is enforced.
 
