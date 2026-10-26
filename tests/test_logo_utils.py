@@ -18,6 +18,7 @@ from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import InMemoryUploadedFile, SimpleUploadedFile
 
 from apps.submissions.logo_utils import validate_and_process_logo
+from tests.scaling import best_times
 
 
 # ---------------------------------------------------------------------------
@@ -928,27 +929,16 @@ class TestSvgCssScaling:
     input may cost at most ~10x the time (quadratic would be 16x)."""
 
     @staticmethod
-    def _cost(css: str, stylesheet: bool) -> float:
-        """Best of 5 runs, with garbage collection paused while timing."""
-        import gc
-        import time
-
+    def _clean(css: str, stylesheet: bool):
         from apps.submissions.logo_utils import _clean_css
 
-        best = float("inf")
-        for _ in range(5):
-            gc.collect()
-            gc.disable()
+        def call():
             try:
-                start = time.perf_counter()
-                try:
-                    _clean_css(css, stylesheet=stylesheet)
-                except ValidationError:
-                    pass
-                best = min(best, time.perf_counter() - start)
-            finally:
-                gc.enable()
-        return best
+                _clean_css(css, stylesheet=stylesheet)
+            except ValidationError:
+                pass
+
+        return call
 
     @pytest.mark.parametrize(
         "make",
@@ -977,8 +967,11 @@ class TestSvgCssScaling:
     )
     @pytest.mark.parametrize("stylesheet", [False, True], ids=["attribute", "style"])
     def test_scales_linearly(self, make, stylesheet):
-        small = self._cost(make(50_000), stylesheet)
-        large = self._cost(make(200_000), stylesheet)
+        small, large = best_times(
+            self._clean(make(50_000), stylesheet),
+            self._clean(make(200_000), stylesheet),
+            small_repeats=4,
+        )
         assert large < 10 * max(small, 1e-4)
 
 
@@ -1044,23 +1037,14 @@ class TestSvgPruningScaling:
     SVG_NS = "http://www.w3.org/2000/svg"
 
     @staticmethod
-    def _cost(svg: str) -> float:
-        """Best of 3 runs, with garbage collection paused while timing."""
-        import gc
-        import time
+    def _process(svg: str):
+        upload = _make_upload(svg.encode(), "logo.svg", "image/svg+xml")
 
-        best = float("inf")
-        for _ in range(3):
-            f = _make_upload(svg.encode(), "logo.svg", "image/svg+xml")
-            gc.collect()
-            gc.disable()
-            try:
-                start = time.perf_counter()
-                validate_and_process_logo(f)
-                best = min(best, time.perf_counter() - start)
-            finally:
-                gc.enable()
-        return best
+        def call():
+            upload.seek(0)
+            validate_and_process_logo(upload)
+
+        return call
 
     @pytest.mark.parametrize(
         "body",
@@ -1080,7 +1064,9 @@ class TestSvgPruningScaling:
         def svg(n):
             return f'<svg xmlns="{self.SVG_NS}" xmlns:x="urn:x"><g>{body(n)}</g></svg>'
 
-        small, large = self._cost(svg(5_000)), self._cost(svg(20_000))
+        small, large = best_times(
+            self._process(svg(5_000)), self._process(svg(20_000)), small_repeats=4
+        )
         assert large < 10 * max(small, 1e-4)
 
 

@@ -22,29 +22,25 @@ from apps.submissions.markdown_render import (
     render_with_notice,
 )
 from apps.submissions.models import DESCRIPTION_MAX_LENGTH
+from tests.scaling import best_times
 
 MAX = DESCRIPTION_MAX_LENGTH
 
-# Absolute wall-clock times depend on the machine, its load and coverage
-# instrumentation (several-fold slower), so the complexity check compares
-# SCALING instead: rendering 4x more input must cost about 4x (linear), never
-# ~16x (quadratic) or ~64x (cubic, the old engine on backticks). Measured
-# ratios are 1-6 with and without coverage; MAX_SCALING leaves headroom for
-# timer noise. HANG_CAP_S only catches outright hangs (the old engine took
-# minutes) on any machine.
-MAX_SCALING = 10.0
+# Absolute times depend on the machine, its load and coverage instrumentation
+# (several-fold slower), so the complexity check compares SCALING instead
+# (tests/scaling.py): rendering the full description (8x the smaller input)
+# must cost about 8x (linear), never ~64x (quadratic) or ~512x (cubic, the old
+# engine on backticks). Both sizes stay within the description limit, the
+# inputs users can send. Measured ratios: 1.0-10.0 (median per case) and 13.6
+# at most, idle and under load on every core; MAX_SCALING leaves room above
+# that and stays far below quadratic. HANG_CAP_S only catches outright hangs
+# (the old engine took minutes) on any machine.
+MAX_SCALING = 20.0
 HANG_CAP_S = 20.0
 
 
-def _render_cost(text: str) -> float:
-    """Best of two wall-clock timings (the minimum filters load spikes)."""
-    best = float("inf")
-    for _ in range(2):
-        start = time.perf_counter()
-        render_with_notice(text)
-        markdown_to_text(text)
-        best = min(best, time.perf_counter() - start)
-    return best
+def _render(text: str):
+    return lambda: (render_with_notice(text), markdown_to_text(text))
 
 
 def _fill(unit: str) -> str:
@@ -77,16 +73,12 @@ PATHOLOGICAL = {
 @pytest.mark.parametrize("text", PATHOLOGICAL.values(), ids=PATHOLOGICAL.keys())
 def test_max_length_pathological_input_scales_linearly(text):
     assert len(text) == MAX
-    # Scaling on a 4x step kept below full length to bound the test's cost.
-    small = _render_cost(text[: MAX // 8])
-    large = _render_cost(text[: MAX // 2])
-    # Tiny timings are all noise: only judge scaling above 10 ms.
-    if large > 0.01:
-        ratio = large / max(small, 1e-4)
-        assert ratio < MAX_SCALING, (
-            f"4x input cost {ratio:.1f}x ({small * 1000:.1f} ms -> "
-            f"{large * 1000:.1f} ms): superlinear rendering"
-        )
+    small, large = best_times(_render(text[: MAX // 8]), _render(text), small_repeats=8)
+    ratio = large / max(small, 1e-6)
+    assert ratio < MAX_SCALING, (
+        f"8x input cost {ratio:.1f}x ({small * 1000:.2f} ms -> "
+        f"{large * 1000:.1f} ms): superlinear rendering"
+    )
     # The full-length description still renders, well inside the hang cap.
     start = time.perf_counter()
     html, _ = render_with_notice(text)
