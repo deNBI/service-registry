@@ -12,20 +12,34 @@ Features:
 import csv
 import json
 import logging
+import uuid
 from datetime import datetime
 
 from django import forms
 from django.contrib import admin, messages
 from django.forms.widgets import CheckboxSelectMultiple
+from django.contrib.admin import helpers
 from django.contrib.admin.models import CHANGE, LogEntry
 from django.db import transaction
-from django.http import HttpResponse, JsonResponse
+from django.db.models import OuterRef, Subquery
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.template import loader
+from django.template.response import TemplateResponse
 from django.utils import timezone
 from django.utils.html import escape, format_html, format_html_join, mark_safe
 
+from apps.catalogue.public_fields import PUBLIC_M2M_FIELDS
+from apps.catalogue.publishing import (
+    build_content,
+    content_hash,
+    existing_references,
+    republish,
+    restorable_content,
+)
+
 from .csv_utils import csv_safe
 from .diff_utils import build_diff, snapshot, snapshot_m2m
+from .lifecycle import set_status
 from .markdown_render import markdown_enabled, render_submission_description
 from .models import (
     CHANGELOG_ACTOR_ADMIN_PREFIX,
@@ -34,10 +48,12 @@ from .models import (
     PRIMARY_MATURITY_TAG_CHOICES,
     SECONDARY_MATURITY_TAG_CHOICES,
     ServiceSubmission,
+    StatusChangedError,
     SubmissionAPIKey,
     SubmissionChangeLog,
     SubmissionDeletionAudit,
     SubmissionStatus,
+    SubmissionStatusEvent,
 )
 from .tasks import send_submission_notification
 from .widgets import MarkdownTextareaWidget
@@ -137,6 +153,77 @@ class ServiceSubmissionAdminForm(forms.ModelForm):
                 "if no standard license applies."
             )
         return cleaned
+
+
+class SubmissionStatusEventInline(admin.TabularInline):
+    model = SubmissionStatusEvent
+    extra = 0
+    can_delete = False
+    ordering = ("-changed_at", "-id")
+    fields = readonly_fields = (
+        "changed_at",
+        "from_status",
+        "to_status",
+        "changed_by",
+        "source",
+        "is_synthetic",
+    )
+    verbose_name_plural = "Status history"
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+RESTORE_CHECK_NAME = "restore_check"
+
+
+def _canonical_id(value):
+    """A posted service id in its canonical form, so that case or dashes do
+    not make the same service look like a different one."""
+    try:
+        return str(uuid.UUID(str(value)))
+    except ValueError:
+        return str(value)
+
+
+def _posted_checks(request):
+    """The fingerprints posted by the restore confirmation: canonical service
+    id -> fingerprint.
+
+    The page posts them in one field, as white-space separated
+    ``<id>:<fingerprint>`` entries, so a long list adds one request field
+    instead of one per service. A fingerprint holds no colon, so an entry is
+    split at its last one (an id may be written ``urn:uuid:<id>``). An entry
+    without a colon names no service, so it is never matched and the services
+    without a fingerprint are left alone.
+    """
+    checks = {}
+    for value in request.POST.getlist(RESTORE_CHECK_NAME):
+        for entry in value.split():
+            key, _, check = entry.rpartition(":")
+            checks[_canonical_id(key)] = check
+    return checks
+
+
+def restore_state(sub, revision, existing=None):
+    """(fingerprint, already_matches) of one service for the restore action.
+
+    The fingerprint covers what the confirmation page shows and the restore
+    would replace: the public content of the working copy, its status and the
+    number of the latest published version. ``already_matches`` is True when
+    restoring that version would leave the working copy as it is, so there is
+    nothing to discard. ``existing`` is ``existing_references`` for the
+    versions of many services, when the caller has looked them up together.
+    """
+    digest = content_hash(build_content(sub))
+    number = revision.number if revision else 0
+    matches = revision is not None and digest == content_hash(
+        restorable_content(sub, revision.content, existing)
+    )
+    return f"{digest}.{sub.status}.{number}", matches
 
 
 @admin.register(ServiceSubmission)
@@ -308,7 +395,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             "admin/js/submissions_filter_sidebar.js",
         )
 
-    inlines = [SubmissionAPIKeyInline]
+    inlines = [SubmissionAPIKeyInline, SubmissionStatusEventInline]
 
     readonly_fields = (
         "id",
@@ -540,6 +627,15 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             f'<div style="font-size:.85rem">{"".join(parts)}{footer}</div>'
         )
 
+    def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        try:
+            return super().changeform_view(request, object_id, form_url, extra_context)
+        except StatusChangedError:
+            # The status changed after this form loaded the service; the
+            # whole save was rolled back.
+            self.message_user(request, StatusChangedError.message, messages.ERROR)
+            return HttpResponseRedirect(request.get_full_path())
+
     # ── Diff capture — save_model / save_related / response_change ─────────────
 
     def save_model(self, request, obj, form, change):
@@ -574,6 +670,16 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         if not change:
             request._diff_changes = []
             return
+
+        # Admin edits of an approved service go live without review: publish
+        # once the related rows are stored (no-op when nothing public changed
+        # or the service is not approved).
+        username = getattr(request.user, "username", "admin")
+        republish(
+            form.instance,
+            reason="admin_edit",
+            actor=f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}",
+        )
 
         # After super() the new M2M values are in the DB — snapshot them now.
         after_scalar = snapshot(form.instance)
@@ -987,9 +1093,14 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
             with transaction.atomic():
                 # Re-filter inside the transaction so any race-condition status
                 # change between the outer filter and this update is excluded.
-                approved_subs = queryset.filter(
-                    status=SubmissionStatus.APPROVED
-                ).select_for_update()
+                # Rows are locked in primary-key order, like every other place
+                # that locks several services, so two such requests cannot
+                # deadlock whatever sort the changelist uses.
+                approved_subs = (
+                    queryset.filter(status=SubmissionStatus.APPROVED)
+                    .select_for_update()
+                    .order_by("pk")
+                )
                 primary_choices_dict = dict(PRIMARY_MATURITY_TAG_CHOICES)
                 secondary_choices_dict = dict(SECONDARY_MATURITY_TAG_CHOICES)
 
@@ -1039,6 +1150,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
                             "secondary_maturity_tags",
                         ]
                     )
+                    republish(sub, reason="tag_change", actor=changed_by)
 
                     if changes:
                         sub.last_change_summary = {
@@ -1102,6 +1214,7 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         "action_deprecate",
         "action_undeprecate",
         "action_assign_maturity_tags",
+        "action_restore_published",
         "action_export_csv",
         "action_export_json",
     ]
@@ -1297,86 +1410,112 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
     def _change_status(self, request, queryset, new_status, label):
         updated = 0
         tags_cleared = 0
-        for sub in queryset:
-            if sub.status == new_status:
-                continue
-            old = sub.status
-            # Capture display values before mutation so the diff shows human labels.
-            old_status_display = sub.get_status_display() or old
-            old_primary_tag = sub.primary_maturity_tag
-            old_secondary_tags = list(sub.secondary_maturity_tags or [])
+        username = getattr(request.user, "username", "admin")
+        changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
+        for loaded in queryset:
+            # Each service is changed in one transaction. The row is read again
+            # under its lock: the changelist may have loaded it before another
+            # request changed it, and everything recorded below must describe
+            # the status and tags the service really had.
+            with transaction.atomic():
+                sub = (
+                    ServiceSubmission.objects.select_for_update()
+                    .filter(pk=loaded.pk)
+                    .first()
+                )
+                if sub is None:
+                    continue
+                old = sub.status
+                if old == new_status:
+                    # Nothing changes, but the status history may not show
+                    # this status (an earlier release set it): set_status then
+                    # records it and applies it to the published copy, which
+                    # counts as marked. Otherwise the row is skipped.
+                    if set_status(sub, new_status, actor=changed_by):
+                        self._log(
+                            request,
+                            sub,
+                            f"Status {new_status} confirmed; "
+                            "earlier status changes recorded",
+                        )
+                        updated += 1
+                    continue
+                # Capture display values before mutation so the diff shows human labels.
+                old_status_display = sub.get_status_display() or old
+                old_primary_tag = sub.primary_maturity_tag
+                old_secondary_tags = list(sub.secondary_maturity_tags or [])
 
-            sub.status = new_status
-            update_fields = ["status"]
-            log_parts = [f"Status changed {old} → {new_status}"]
-            # Auto-clear maturity tags when moving away from approved — tags are
-            # only valid on approved services and should not persist after de-approval.
-            if new_status != SubmissionStatus.APPROVED and (
-                sub.primary_maturity_tag or sub.secondary_maturity_tags
-            ):
-                sub.primary_maturity_tag = None
-                sub.secondary_maturity_tags = []
-                update_fields += ["primary_maturity_tag", "secondary_maturity_tags"]
-                log_parts.append("maturity tags cleared")
-                tags_cleared += 1
+                log_parts = [f"Status changed {old} → {new_status}"]
+                # set_status clears maturity tags when moving away from approved;
+                # tags are only valid on approved services.
+                cleared_tags = new_status != SubmissionStatus.APPROVED and bool(
+                    old_primary_tag or old_secondary_tags
+                )
+                if cleared_tags:
+                    log_parts.append("maturity tags cleared")
 
-            # Build field-level diff for the audit log (mirrors build_diff format).
-            # Done before save() so last_change_summary is written atomically with
-            # the status mutation in a single round-trip.
-            new_status_display = sub.get_status_display() or new_status
-            changes = [
-                {
-                    "field": "status",
-                    "label": "Status",
-                    "old": old_status_display,
-                    "new": new_status_display,
-                }
-            ]
-            if old_primary_tag:
-                old_primary_display = str(
-                    dict(PRIMARY_MATURITY_TAG_CHOICES).get(
-                        old_primary_tag, old_primary_tag
+                # Build field-level diff for the audit log (mirrors build_diff format).
+                new_status_display = str(
+                    dict(SubmissionStatus.choices).get(new_status) or new_status
+                )
+                changes = [
+                    {
+                        "field": "status",
+                        "label": "Status",
+                        "old": old_status_display,
+                        "new": new_status_display,
+                    }
+                ]
+                if cleared_tags and old_primary_tag:
+                    old_primary_display = str(
+                        dict(PRIMARY_MATURITY_TAG_CHOICES).get(
+                            old_primary_tag, old_primary_tag
+                        )
                     )
+                    changes.append(
+                        {
+                            "field": "primary_maturity_tag",
+                            "label": "Primary Maturity Tag",
+                            "old": old_primary_display,
+                            "new": "—",
+                        }
+                    )
+                if cleared_tags and old_secondary_tags:
+                    old_secondary_display = ", ".join(
+                        str(dict(SECONDARY_MATURITY_TAG_CHOICES).get(t, t))
+                        for t in old_secondary_tags
+                    )
+                    changes.append(
+                        {
+                            "field": "secondary_maturity_tags",
+                            "label": "Secondary Maturity Tags",
+                            "old": old_secondary_display,
+                            "new": "—",
+                        }
+                    )
+
+                now = timezone.now()
+                sub.last_change_summary = {
+                    "changed_by": changed_by,
+                    "changed_at": now.isoformat(),
+                    "changes": changes,
+                }
+                # Status, cleared tags, summary, status event and change-log
+                # entry are stored together.
+                set_status(
+                    sub,
+                    new_status,
+                    actor=changed_by,
+                    extra_fields=["last_change_summary"],
                 )
-                changes.append(
-                    {
-                        "field": "primary_maturity_tag",
-                        "label": "Primary Maturity Tag",
-                        "old": old_primary_display,
-                        "new": "—",
-                    }
-                )
-            if old_secondary_tags:
-                old_secondary_display = ", ".join(
-                    str(dict(SECONDARY_MATURITY_TAG_CHOICES).get(t, t))
-                    for t in old_secondary_tags
-                )
-                changes.append(
-                    {
-                        "field": "secondary_maturity_tags",
-                        "label": "Secondary Maturity Tags",
-                        "old": old_secondary_display,
-                        "new": "—",
-                    }
+                SubmissionChangeLog.objects.create(
+                    submission=sub,
+                    changed_by=changed_by,
+                    changed_at=now,
+                    changes=changes,
                 )
 
-            username = getattr(request.user, "username", "admin")
-            changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
-            now = timezone.now()
-            sub.last_change_summary = {
-                "changed_by": changed_by,
-                "changed_at": now.isoformat(),
-                "changes": changes,
-            }
-            update_fields.append("last_change_summary")
-            sub.save(update_fields=update_fields)
-            SubmissionChangeLog.objects.create(
-                submission=sub,
-                changed_by=changed_by,
-                changed_at=now,
-                changes=changes,
-            )
-
+            tags_cleared += cleared_tags
             send_submission_notification.delay(str(sub.id), event="status_changed")
             self._log(request, sub, "; ".join(log_parts))
             updated += 1
@@ -1448,6 +1587,180 @@ class ServiceSubmissionAdmin(admin.ModelAdmin):
         ):
             return
         self._change_status(request, queryset, "submitted", "Submitted (undeprecated)")
+
+    @admin.action(
+        description="↩ Restore published version",
+        permissions=["change"],
+    )
+    def action_restore_published(self, request, queryset):
+        """Copy the last published version back into the working copy.
+
+        Used to discard an edit (for example after rejecting it). The status
+        and the published copy are not changed; approve afterwards if the
+        service should be reviewed again. Pending edits are lost, so the
+        first request only shows a confirmation page; the restore runs when
+        that page is submitted. The page posts back a fingerprint per service
+        (see ``restore_state``); a service that no longer matches it, or that
+        is no longer in the selection, is left alone and reported.
+        """
+        from apps.catalogue.models import PublishedRevision
+        from apps.catalogue.publishing import apply_content_to_working_copy
+
+        if not self._require_perm(
+            request, "change_servicesubmission", "restore published versions"
+        ):
+            return
+        if request.POST.get("post") != "yes":
+            if not queryset.exists():
+                self.message_user(
+                    request, self._nothing_to_restore_message(request), messages.WARNING
+                )
+                return
+            return self._restore_confirmation(request, queryset)
+        username = getattr(request.user, "username", "admin")
+        changed_by = f"{CHANGELOG_ACTOR_ADMIN_PREFIX}{username}"
+        # What the confirmation page showed for each service.
+        shown = _posted_checks(request)
+        selected = {
+            _canonical_id(pk)
+            for pk in request.POST.getlist(helpers.ACTION_CHECKBOX_NAME)
+        }
+        if not selected and not queryset.exists():
+            self.message_user(
+                request, self._nothing_to_restore_message(request), messages.WARNING
+            )
+            return
+        restored = skipped = unchanged = 0
+        listed, handled = set(), set()
+        for loaded in queryset:
+            listed.add(str(loaded.pk))
+            with transaction.atomic():
+                # Read the service and its latest revision again under the
+                # row lock (publishing takes the same lock): it may have
+                # changed since the page was shown.
+                sub = (
+                    ServiceSubmission.objects.select_for_update()
+                    .filter(pk=loaded.pk)
+                    .first()
+                )
+                if sub is None:
+                    continue
+                revision = (
+                    PublishedRevision.objects.filter(submission=sub)
+                    .order_by("-number")
+                    .first()
+                )
+                fingerprint, matches = restore_state(sub, revision)
+                if shown.get(str(sub.pk)) != fingerprint and not matches:
+                    continue
+                handled.add(str(sub.pk))
+                if revision is None:
+                    skipped += 1
+                    continue
+                if matches:
+                    unchanged += 1
+                    continue
+                before = {**snapshot(sub), **snapshot_m2m(sub)}
+                apply_content_to_working_copy(sub, revision.content)
+                # The diff compares display names, so it can be empty for a
+                # restore that did change data (two PIs with the same name).
+                changes = build_diff(before, {**snapshot(sub), **snapshot_m2m(sub)})
+                if changes:
+                    now = timezone.now()
+                    sub.last_change_summary = {
+                        "changed_by": changed_by,
+                        "changed_at": now.isoformat(),
+                        "changes": changes,
+                    }
+                    sub.save(update_fields=["last_change_summary"])
+                    SubmissionChangeLog.objects.create(
+                        submission=sub,
+                        changed_by=changed_by,
+                        changed_at=now,
+                        changes=changes,
+                    )
+            self._log(request, sub, f"Restored published revision {revision.number}")
+            restored += 1
+        if restored or skipped or unchanged:
+            self.message_user(
+                request,
+                f"Restored the published version of {restored} submission(s); "
+                f"{skipped} had no published version; {unchanged} already "
+                "matched it.",
+                messages.SUCCESS,
+            )
+        # Services that changed, were deleted or left the list since the page.
+        not_restored = len((selected | listed) - handled)
+        if not_restored:
+            self.message_user(
+                request,
+                f"{not_restored} submission(s) not restored: they changed or left "
+                "the list after the confirmation page was shown. Reload the list "
+                "and try again.",
+                messages.WARNING,
+            )
+
+    @staticmethod
+    def _nothing_to_restore_message(request):
+        """Why the restore action has no services to work on. A selection
+        made by ticking rows that have all been deleted since says so; an
+        empty list or select-all is just an empty selection."""
+        select_across = request.POST.get("select_across", "").lower() not in (
+            "",
+            "0",
+            "false",
+        )
+        if request.POST.getlist(helpers.ACTION_CHECKBOX_NAME) and not select_across:
+            return "The selected submissions no longer exist."
+        return "No submissions selected."
+
+    def _restore_confirmation(self, request, queryset):
+        """Page listing what the restore action will replace."""
+        from apps.catalogue.models import PublishedRevision
+
+        newest_number = (
+            PublishedRevision.objects.filter(submission=OuterRef("submission"))
+            .order_by("-number")
+            .values("number")[:1]
+        )
+        latest = {
+            revision.submission_id: revision
+            for revision in PublishedRevision.objects.filter(
+                submission__in=queryset, number=Subquery(newest_number)
+            ).only("submission_id", "number", "created_at", "content")
+        }
+        # Read every relation of all rows in one query each, and look up the
+        # reference rows the versions name together, so the page runs the same
+        # number of queries whatever the number of rows.
+        existing = existing_references(rev.content for rev in latest.values())
+        rows = []
+        for sub in queryset.prefetch_related(*PUBLIC_M2M_FIELDS):
+            revision = latest.get(sub.pk)
+            fingerprint, matches = restore_state(sub, revision, existing)
+            rows.append((sub, revision, fingerprint, matches))
+        context = {
+            **self.admin_site.each_context(request),
+            "title": "Restore published version",
+            "opts": self.model._meta,
+            "rows": rows,
+            # False when every row already matches its version or has none.
+            "discards": any(
+                revision and not matches for _, revision, _, matches in rows
+            ),
+            "action_checkbox_name": helpers.ACTION_CHECKBOX_NAME,
+            "restore_check_name": RESTORE_CHECK_NAME,
+            "restore_checks": " ".join(
+                f"{sub.pk}:{fingerprint}" for sub, _, fingerprint, _ in rows
+            ),
+            "cancel_url": request.get_full_path(),
+            "media": self.media,
+        }
+        request.current_app = self.admin_site.name
+        return TemplateResponse(
+            request,
+            "admin/submissions/servicesubmission/restore_published_confirmation.html",
+            context,
+        )
 
     def _export_queryset(self, queryset):
         """Return a fully prefetched queryset suitable for both export actions."""

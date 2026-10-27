@@ -66,6 +66,7 @@ _VIEWER: list[tuple[str, str]] = [
     # Submissions
     ("submissions", "view_servicesubmission"),
     ("submissions", "view_submissionchangelog"),
+    ("submissions", "view_submissionstatusevent"),
     ("submissions", "view_submissionapikey"),
     # Reference data
     ("registry", "view_servicecategory"),

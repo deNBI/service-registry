@@ -91,6 +91,12 @@ collectstatic:
 test:
 	pytest tests/
 
+# The whole suite on a real PostgreSQL server, including the row-lock and
+# concurrency tests that `test` skips. Needs a server and TEST_DB_PASSWORD; see
+# config/settings_test_postgres.py. Only the lock tests: add PYTEST_ARGS="-m postgres".
+test-postgres:
+	REQUIRE_POSTGRES=1 DJANGO_SETTINGS_MODULE=config.settings_test_postgres pytest tests/ --no-cov $(PYTEST_ARGS)
+
 test-cov:
 	pytest tests/ --cov=apps --cov-report=term-missing --cov-report=html
 	@echo "Open htmlcov/index.html to view coverage report."

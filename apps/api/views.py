@@ -19,20 +19,24 @@ import logging
 
 from django.db import transaction
 from django.utils.timezone import now
-from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 from rest_framework import filters, mixins, status, viewsets
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+from apps.catalogue.publishing import republish
 from apps.registry.models import PrincipalInvestigator, ServiceCategory, ServiceCenter
 from apps.submissions.diff_utils import build_diff, snapshot, snapshot_m2m
 from apps.submissions.http_utils import get_client_ip, hash_user_agent
+from apps.submissions.lifecycle import set_status
 from apps.submissions.models import (
     CHANGELOG_ACTOR_API_PREFIX,
     ServiceSubmission,
+    StatusChangedError,
     SubmissionAPIKey,
     SubmissionChangeLog,
+    SubmissionStatus,
 )
 from apps.submissions.tasks import (
     send_submission_notification,
@@ -40,6 +44,7 @@ from apps.submissions.tasks import (
 )
 
 from .authentication import AdminAPIKeyAuthentication, SubmissionAPIKeyAuthentication
+from .exceptions import StatusConflict
 from .permissions import IsAdminOrOwner, IsAdminTokenUser
 from .serializers import (
     PrincipalInvestigatorAdminSerializer,
@@ -257,8 +262,9 @@ class SubmissionViewSet(
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        # The status is the model default ("submitted"); the creation receiver
+        # records it in the status history.
         submission = serializer.save(
-            status="submitted",
             submission_ip=get_client_ip(request) or None,
             user_agent_hash=hash_user_agent(request),
         )
@@ -350,7 +356,16 @@ class SubmissionViewSet(
             "for re-review, unless every changed field is listed in "
             "`SUBMISSION_NO_RESET_FIELDS` (configured in `site.toml`)."
         ),
-        responses=SubmissionUpdateResponseSerializer,
+        responses={
+            200: SubmissionUpdateResponseSerializer,
+            409: OpenApiResponse(
+                description=(
+                    "The status of the submission changed (for example it was "
+                    "reviewed) after the request was received. Nothing was "
+                    "stored; fetch the submission again and repeat the change."
+                )
+            ),
+        },
     )
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
@@ -385,7 +400,11 @@ class SubmissionViewSet(
         # One transaction: the content change, the status reset it may require
         # and the audit entry are stored together or not at all.
         with transaction.atomic():
-            serializer.save()
+            try:
+                serializer.save()
+            except StatusChangedError:
+                # Reviewed by someone else meanwhile: store nothing.
+                raise StatusConflict
             # Field-level diff of what the save ACTUALLY changed. snapshot()
             # reads the saved (sanitised: stripped, NFC, LF) values, so
             # re-sending a stored value in another byte form is not a change.
@@ -405,22 +424,27 @@ class SubmissionViewSet(
                 if (changed - exempt) or not exempt:
                     # Clear maturity tags too: they are only valid on approved
                     # services (model invariant).
-                    instance.status = "submitted"
                     instance.primary_maturity_tag = None
                     instance.secondary_maturity_tags = []
-                    instance.save(
-                        update_fields=[
-                            "status",
+                    set_status(
+                        instance,
+                        SubmissionStatus.SUBMITTED,
+                        actor=self._api_actor(request),
+                        extra_fields=[
                             "primary_maturity_tag",
                             "secondary_maturity_tags",
                             "updated_at",
-                        ]
+                        ],
                     )
                     status_reset = True
                     # Include the reset (status, tags) in the recorded diff.
                     changes = build_diff(
                         before, {**snapshot(instance), **snapshot_m2m(instance)}
                     )
+
+            # No-op unless the service is still approved (a reset above leaves
+            # it submitted): an edit that keeps it approved goes live at once.
+            republish(instance, reason="live_edit", actor=self._api_actor(request))
 
             if changes:
                 self._record_api_change(request, instance, changes)
@@ -446,12 +470,16 @@ class SubmissionViewSet(
         return Response(data)
 
     @staticmethod
+    def _api_actor(request) -> str:
+        """Changelog actor for API writes: "api:<key label>"."""
+        return f"{CHANGELOG_ACTOR_API_PREFIX}{getattr(request.auth, 'label', 'api')}"
+
+    @staticmethod
     def _record_api_change(request, instance, changes) -> None:
         """Persist the diff on the submission and in the append-only change log."""
         # Identify who made the change via the API key label (request.auth
         # is the SubmissionAPIKey instance set by SubmissionAPIKeyAuthentication).
-        key_label = getattr(request.auth, "label", "api")
-        changed_by = f"{CHANGELOG_ACTOR_API_PREFIX}{key_label}"
+        changed_by = SubmissionViewSet._api_actor(request)
         changed_at = now()
         instance.last_change_summary = {
             "changed_by": changed_by,
@@ -738,6 +766,20 @@ class BioToolsRecordViewSet(
     from apps.api.serializers import BioToolsRecordSerializer
 
     serializer_class = BioToolsRecordSerializer
+
+    def get_serializer_class(self):
+        """Admins see the full record; everyone else gets it without the
+        internal sync error text."""
+        from apps.api.serializers import (
+            BioToolsRecordPublicSerializer,
+            BioToolsRecordSerializer,
+        )
+
+        if getattr(self, "action", None) == "retrieve":
+            request = getattr(self, "request", None)
+            if request is None or not IsAdminTokenUser().has_permission(request, self):
+                return BioToolsRecordPublicSerializer
+        return BioToolsRecordSerializer
 
     def get_queryset(self):
         from apps.biotools.models import BioToolsRecord
